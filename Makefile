@@ -15,7 +15,7 @@ SHARED_OBJS := $(SHARED_C_OBJS)
 
 PROTOSCOPE ?= protoscope
 
-.PHONY: all clean test regen_test unit FORCE
+.PHONY: all clean format unit test regen_test FORCE
 
 all: build/libppb.a build/libppb.so build/picoscope
 
@@ -23,6 +23,9 @@ include frama-c.mk
 
 clean:
 	rm -rf build/ wp.csv eva.csv
+
+format:
+	clang-format-20 -i include/ppb/ppb.h src/*.[ch] examples/picoscope.c tests/*.c
 
 unit: build/test_ppb
 	build/test_ppb
