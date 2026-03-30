@@ -13,11 +13,15 @@ STATIC_OBJS := $(STATIC_C_OBJS)
 SHARED_C_OBJS := $(patsubst src/%.c,$(SHARED_DIR)/%.o,$(C_SRCS))
 SHARED_OBJS := $(SHARED_C_OBJS)
 
-.PHONY: all clean FORCE
+.PHONY: all clean unit FORCE
 
-all: build/libppb.a build/libppb.so
+all: build/libppb.a build/libppb.so build/picoscope
 
 include frama-c.mk
+
+unit: build/test_ppb
+	build/test_ppb
+
 clean:
 	rm -rf build/ wp.csv eva.csv
 
@@ -27,6 +31,10 @@ build/libppb.a: $(patsubst %,%.hash,$(STATIC_OBJS)) | $(STATIC_OBJS)
 
 build/libppb.so: $(patsubst %,%.hash,$(SHARED_OBJS)) | $(SHARED_OBJS)
 	$(CC) -shared -Wl,-soname,libppb.so -Wl,--no-undefined -o $@ $(SHARED_OBJS)
+
+build/test_ppb: tests/test_ppb.c src/ppb.c include/ppb/ppb.h $(wildcard src/*.h)
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -I. -o $@ tests/test_ppb.c src/ppb.c
 
 $(STATIC_DIR)/%.o: src/%.c FORCE
 	@mkdir -p $(dir $@)

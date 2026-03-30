@@ -21,3 +21,6 @@
 !/stubs-for-frama-c/*.h
 !/.docker/
 !/.docker/Dockerfile
+
+!/tests/
+!/tests/*.c
