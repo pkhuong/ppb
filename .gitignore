@@ -17,6 +17,9 @@
 !/src/*.c
 !/src/*.h
 
+!/examples/
+!/examples/*.c
+
 !/stubs-for-frama-c/
 !/stubs-for-frama-c/*.h
 !/.docker/
