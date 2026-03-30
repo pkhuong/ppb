@@ -13,17 +13,26 @@ STATIC_OBJS := $(STATIC_C_OBJS)
 SHARED_C_OBJS := $(patsubst src/%.c,$(SHARED_DIR)/%.o,$(C_SRCS))
 SHARED_OBJS := $(SHARED_C_OBJS)
 
-.PHONY: all clean unit FORCE
+PROTOSCOPE ?= protoscope
+
+.PHONY: all clean test regen_test unit FORCE
 
 all: build/libppb.a build/libppb.so build/picoscope
 
 include frama-c.mk
 
+clean:
+	rm -rf build/ wp.csv eva.csv
+
 unit: build/test_ppb
 	build/test_ppb
 
-clean:
-	rm -rf build/ wp.csv eva.csv
+test: build/picoscope build/test_ppb
+	build/test_ppb
+	sh test_picoscope.sh build/picoscope
+
+regen_test: build/picoscope
+	sh test_picoscope.sh -g $(PROTOSCOPE) build/picoscope
 
 build/libppb.a: $(patsubst %,%.hash,$(STATIC_OBJS)) | $(STATIC_OBJS)
 	@rm -f $@

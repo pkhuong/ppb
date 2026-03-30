@@ -2,12 +2,13 @@
 *
 
 # Opt specific extension back into version control.
-!.gitignore
-!/*.md
-!/Makefile
-!/*.mk
 !.clang-format
+!.gitignore
 !LICENSE
+!/Makefile
+!/*.md
+!/*.mk
+!/*.sh
 
 !/include/
 !/include/ppb/
@@ -27,3 +28,10 @@
 
 !/tests/
 !/tests/*.c
+
+!/testdata/
+!/testdata/*.hex
+!/testdata/*.expected
+!/testdata/invalid/
+!/testdata/invalid/*.hex
+!/testdata/invalid/*.expected-error
