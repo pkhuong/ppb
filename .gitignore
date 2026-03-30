@@ -1,0 +1,23 @@
+# Ignore everything by default
+*
+
+# Opt specific extension back into version control.
+!.gitignore
+!/*.md
+!/Makefile
+!/*.mk
+!.clang-format
+!LICENSE
+
+!/include/
+!/include/ppb/
+!/include/ppb/*.h
+
+!/src/
+!/src/*.c
+!/src/*.h
+
+!/stubs-for-frama-c/
+!/stubs-for-frama-c/*.h
+!/.docker/
+!/.docker/Dockerfile

@@ -1,0 +1,265 @@
+#pragma once
+#include <stddef.h>
+#include <stdint.h>
+
+/*
+ * PPB (Pico protobuf) is an allocation-free lexer for modern (v2 or
+ * v3, without groups) protobuf-encoded bytes.
+ *
+ * An initial `ppb_prescan` validates the input message and gathers
+ * statistics about all the toplevel fields in the message.  With the
+ * number of occurrences for each field, as well as the total, min and
+ * max number of payload bytes for length-prefixed fields (bytes,
+ * strings, nested messages, or packed repeated fields), a caller can
+ * easily pre-allocate storage for a message before `ppb_lexn`.
+ *
+ * The runtime complexity of `ppb_prescan` is `\Theta(n log m)`, where
+ * `n` is the number of toplevel fields and `m` the number of
+ * `ppb_fields`, regardless of the actual size of the encoded bytes;
+ * that's what makes it reasonble to "lex" toplevel fields only, and
+ * recursively handle nested messages separately.
+ *
+ * The `ppb_lexn` function gives the caller access to every single
+ * field in the message... but, in the common case of a message with
+ * at most once occurrence of every field, and fields emitted in
+ * strictly ascending order, `ppb_lexn` does that in a single call:
+ * `ppb_lexn` returns a range of indices in an array of `ppb_field`s,
+ * where the indices bracket all fields that were decoded and matched
+ * to a `ppb_field`.  That range is encoded as the index in that array
+ * of the first lexed (and not skipped) field, and the width of that
+ * range (or UINT32_MAX if unknown).
+ *
+ * The runtime complexity of `ppb_field` is also `\Theta(n log m)`, where
+ * `n` is the number of toplevel fields decoded in the call and `m` the
+ * number of `ppb_field`s.
+ *
+ * The complexity of both `ppb_prescan` and `ppb_lexn`, linear in the number
+ * of *toplevel fields* but otherwise independent of the input buffer size,
+ * is key to the simplistic zero-copy lexing approach: it's reasonable for the
+ * caller to recursively lex nested submessages.  The prescan before lexing
+ * structure was designed for arena allocation: the statistics should suffice
+ * to preallocate the current message, including its variable-length members,
+ * before lexing the message and recursively decoding submessages in the arena.
+ */
+
+/*
+ * All PPB public functions use the same error enum.  Error codes are
+ * always strictly negative.
+ */
+enum ppb_error
+{
+    PPB_OK = 0,
+    PPB_ERROR_UNSORTED_FIELD_ARR = -1,
+    PPB_ERROR_SENTINEL_FIELD_ARR = -2,
+    PPB_ERROR_TRUNCATED_DATA = -3,
+    PPB_ERROR_CORRUPT_VARINT = -4,
+    PPB_ERROR_CORRUPT_TAG = -5,
+};
+
+/*
+ * PPB never takes ownership of storage, but we have to pass slices of
+ * encoded bytes.  `ppb_buf` is that slice type; PPB never writes
+ * through such slices.
+ */
+struct ppb_buf
+{
+    const void *buf;
+    size_t size; /* in bytes */
+};
+
+/*
+ * Protobuf wire encoding types.
+ */
+enum ppb_wire_type
+{
+    PPB_WIRE_VARINT = 0,  /* Value is a varint */
+    PPB_WIRE_I64 = 1,  /* value is a fixed 64-bit field */
+    PPB_WIRE_LEN = 2,  /* value is a length-prefix record (message, bytes, packed) */
+    PPB_WIRE_I32 = 5,  /* value is a fixed 32-bit field */
+};
+
+/*
+ * Encodes a varint in little-endian byte order, in a uint64_t.
+ * `VARINT` must not have side effects.
+ */
+#define PPB_ENCODE_VARINT(VARINT)                                                                \
+    (PPB_VB_((VARINT), 0) | PPB_VB_((VARINT), 1) | PPB_VB_((VARINT), 2) | PPB_VB_((VARINT), 3) | \
+        PPB_VB_((VARINT), 4) | PPB_VB_((VARINT), 5) | PPB_VB_((VARINT), 6) | PPB_VB_((VARINT), 7))
+
+#define PPB_VB_(VARINT, SHIFT)                                                                       \
+    ((uint64_t)((((VARINT) >> ((SHIFT) * 7)) & 0x7F) | (((VARINT) >> ((SHIFT) * 7 + 7)) ? 0x80 : 0)) \
+        << ((SHIFT) * 8))
+
+/*
+ * Encodes a (field_number, wire_type) pair into the encoded_tag
+ * format expected by ppb_field.  For positive field numbers, the
+ * result is the varint-encoded tag in little endian (matching the
+ * internal representation used by ppb_lexn).
+ *
+ * Field number 0 is forbidden by the protobuf spec.
+ * Field number -1 (UINT64_MAX when unsigned) is reserved for
+ * catch-all entries: a catch-all field matches any unknown tag
+ * of the given wire type.
+ */
+#define PPB_TAG_BITS(FIELD_NUMBER, WIRE_TYPE)             \
+    ((uint64_t)(FIELD_NUMBER) == (uint64_t)-1 ?           \
+            ((UINT64_MAX << 3) | (uint64_t)(WIRE_TYPE)) : \
+            PPB_ENCODE_VARINT(((uint64_t)(FIELD_NUMBER) << 3) | (uint64_t)(WIRE_TYPE)))
+
+#ifdef __cplusplus
+#define PPB_TAG(FIELD_NUMBER, WIRE_TYPE) (ppb_encoded_tag { .bits = PPB_TAG_BITS(FIELD_NUMBER, WIRE_TYPE) })
+#else
+#define PPB_TAG(FIELD_NUMBER, WIRE_TYPE) \
+    ((struct ppb_encoded_tag) { .bits = PPB_TAG_BITS(FIELD_NUMBER, WIRE_TYPE) })
+#endif
+
+/*
+ * PPB works with pre-varint encoded tags (no need to fully decode
+ * when we can just compare after masking).
+ */
+struct ppb_encoded_tag
+{
+    uint64_t bits;
+};
+
+/*
+ * For each field, we always count the total number of hits for the
+ * field id, and, for length-prefixed values, the total/min/max number
+ * of bytes for the payload.
+ */
+struct ppb_field_meta
+{
+    size_t num_occurrences;
+    size_t total_bytes;
+    size_t min_nonzero_bytes;
+    size_t max_bytes;
+};
+
+/*
+ * For each field, we track the latest value we've decoded, if any.
+ *
+ * When PPB doesn't encounter the field, its value is left untouched;
+ * usually, that means 0-initialized, or at its previous value.
+ *
+ * This means we can save the `ppb_buf::buf` pointer and compare it
+ * with `ptr`: a field value has `ptr >= old_buf` iff it was decoded
+ * in the most recent call to `ppb_prescan` / `ppb_lexn`.
+ */
+struct ppb_field_value
+{
+    /* Pointer to the field's tag, populated only by `ppb_lexn`. */
+    const void *ptr;
+    /* Varint or i64/f64/i32/f32 field */
+
+    /*
+     * Contents as little-endian u64, or raw bytes of fixed 64
+     * encoding.
+     */
+    union
+    {
+        uint64_t u64;
+#ifndef __FRAMAC__
+        uint8_t b[8];
+        double d;
+        /* XXX: assumes little endian here. */
+        uint32_t u32;
+        float f;
+#endif
+    };
+
+    /*
+     * Variable-length payload (points at the payload, after the
+     * length header).
+     */
+    struct ppb_buf payload;
+};
+
+struct ppb_field
+{
+    struct ppb_encoded_tag tag;
+    struct ppb_field_meta m;
+    struct ppb_field_value v;
+};
+
+#ifdef __cplusplus
+extern "C"
+{
+#endif
+
+/*
+ * Decodes zigzag-encoded sint32 and sint64 values.
+ *
+ * A 32-bit unsigned int value will decode to a int32_t.
+ */
+static inline int64_t
+ppb_zag(uint64_t x)
+{
+    return (int64_t)((x >> 1) ^ -(x & 1));
+}
+
+/*
+ * Attempts to consume one varint from `buf`.
+ *
+ * Returns the decoded varint, or 0 on error.
+ *
+ * Confirm whether there was an error by looking at `error` (initially
+ * zero): it will be strictly negative on error, and zero on success.
+ */
+uint64_t ppb_decode_varint(struct ppb_buf *__restrict buf, enum ppb_error *__restrict error);
+
+/*
+ * Traverses `buf` until it's lexed up to `max_lexed_fields` toplevel
+ * fields.  This traversal is relatively cheap, and can be useful to
+ * preallocate storage.
+ *
+ * Returns the number of bytes traversed, until the end of `buf`, or
+ * just before the first byte of the `max_lexed_fields`th field.
+ *
+ * Updates `fields[].m` with aggregate metadata for all the fields
+ * seen, and populates `fields[].v` with the last value seen for each
+ * field, if any.
+ *
+ * A non-negative value is the total number of bytes summarized (equals
+ * buf.size on success).
+ *
+ * A negative value is a ppb_error.
+ */
+ptrdiff_t ppb_prescan(struct ppb_buf buf, size_t num_fields, struct ppb_field fields[__restrict num_fields],
+    size_t max_lexed_fields);
+
+struct ppb_lexn_ret
+{
+    size_t first_field;  /* index of the first field found in `fields`. */
+    uint32_t field_range;  /* saturates at UINT32_MAX, if you have this many fields. */
+    enum ppb_error status;
+};
+
+/*
+ * Consumes from `buf` until it's lexed up to `max_lexed_fields`
+ * toplevel fields.  May stop early, but only after at least 1 field,
+ * or on error/end-of-buf.
+ *
+ * This function may decode multiple fields at a time, but only in
+ * strictly ascending order, and always stops after an unknown field.
+ * This guarantees that we can always recover the order of the fields
+ * on the wire, and that we always see every field value.
+ *
+ * Updates `fields[].v` in place, and sets `ptr` to the decoded
+ * field's first byte in `buf` (i.e., where the tag varint begins);
+ * check if we have just decoded the field by comparing its `ptr` with
+ * the initial value of `buf.buf`.
+ *
+ * Assumes the fields are sorted and valid (no zero field);
+ * ppb_prescan checks for that.
+ *
+ * Returns:
+ *   - `first_field`, the index in `fields` of the first lexed field
+ *   - `field_range = last_field + 1 - first_field`, where last_field is
+ *     the index in `fields` of the last lexed field
+ */
+struct ppb_lexn_ret ppb_lexn(struct ppb_buf *__restrict buf, size_t num_fields,
+    struct ppb_field fields[__restrict num_fields], size_t max_lexed_fields);
+
+#ifdef __cplusplus
+}  // extern "C"
+#endif
