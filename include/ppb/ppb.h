@@ -242,7 +242,9 @@ struct ppb_lexn_ret
  * This function may decode multiple fields at a time, but only in
  * strictly ascending order, and always stops after an unknown field.
  * This guarantees that we can always recover the order of the fields
- * on the wire, and that we always see every field value.
+ * on the wire, and that we always see every field value.  Call
+ * `ppb_lexn` in a loop to process all fields in a message, in batches
+ * of strictly monotonically increasing fields.
  *
  * Updates `fields[].v` in place, and sets `ptr` to the decoded
  * field's first byte in `buf` (i.e., where the tag varint begins);
