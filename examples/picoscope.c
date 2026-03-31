@@ -119,12 +119,12 @@ looks_like_string(const struct ppb_buf payload)
         return false;
     }
 
-    const char *p = payload.buf;
+    const uint8_t *p = payload.buf;
     size_t i = 0;
 
     while (i < payload.size)
     {
-        unsigned char c = p[i];
+        uint8_t c = p[i];
 
         if (c == '\t' || c == '\r' || c == '\n')
         {
@@ -220,10 +220,10 @@ looks_like_string(const struct ppb_buf payload)
 static void
 print_escaped_string(const struct ppb_buf payload)
 {
-    const char *p = payload.buf;
+    const uint8_t *p = payload.buf;
     for (size_t i = 0; i < payload.size; i++)
     {
-        unsigned char c = p[i];
+        uint8_t c = p[i];
         if (c == '"')
         {
             printf("\\\"");
@@ -254,7 +254,7 @@ print_escaped_string(const struct ppb_buf payload)
 static void
 print_hex(const struct ppb_buf payload)
 {
-    const char *p = payload.buf;
+    const uint8_t *p = payload.buf;
     for (size_t i = 0; i < payload.size; i++)
     {
         printf("%02x", p[i]);
