@@ -200,6 +200,7 @@ handle_field(uint64_t tag, struct ppb_field *restrict dst, struct ppb_buf *restr
 
         dst->v.payload.buf = src->buf;
         dst->v.payload.size = num_bytes;
+        /*@ assert buf_valid_range(dst->v.payload); */
         buf_advance(src, num_bytes);
         break;
     }
