@@ -384,9 +384,11 @@ ppb_lexn(struct ppb_buf *restrict buf, size_t num_fields, struct ppb_field field
 
         {
             int num_tag_bytes = peek_tag(src, &tag);
+            /*@ assert num_tag_bytes ≤ 0 ==> tag ≡ 0; */
+            /*@ assert tag ≡ 0 ==> tag / 8 ≡ 0 ≤ prev_tag_id; */
 
             /* TODO: bulk-skip ignored fields more efficiently. */
-            if (unlikely((num_tag_bytes < 0) | (tag / 8 <= prev_tag_id)))
+            if (unlikely(tag / 8 <= prev_tag_id))
             {
                 if (unlikely(num_tag_bytes < 0))
                 {
@@ -400,6 +402,9 @@ ppb_lexn(struct ppb_buf *restrict buf, size_t num_fields, struct ppb_field field
                 break;
             }
 
+            /* any error (num_tag_bytes < 0) would have set `tag = 0`. */
+            /*@ assert num_tag_bytes > 0; */
+
             field_idx = find_tag(num_fields, fields, tag);
             if (unlikely(field_idx >= num_fields))
             {
@@ -407,9 +412,15 @@ ppb_lexn(struct ppb_buf *restrict buf, size_t num_fields, struct ppb_field field
                 {
                     /* See if want to dump this in a catch-all field. */
                     tag |= UINT64_MAX << 3;  /* preserve the type, but otherwise all 1s. */
-                    if (UINT64_MAX / 8 <= prev_tag_id)
+                    if (unlikely(UINT64_MAX / 8 <= prev_tag_id))
                     {
-                        /* nonmonotonic -> stop here. */
+                        /*
+                         * nonmonotonic -> stop here.
+                         *
+                         * Currently unreachable, because the check between the
+                         * real tag and prev_tag_id would have already triggered
+                         * the nonmonotonicity check.
+                         */
                         break;
                     }
 
