@@ -475,6 +475,21 @@ test_lexn_one_per_call(void)
     CHECK(ret.field_range == 0);
 }
 
+/* Make sure we correctly no-op when we want 0 field/ */
+static void
+test_lexn_no_field(void)
+{
+    printf("test_lexn_no_field\n");
+
+    struct ppb_buf buf = make_buf(four_field_wire, sizeof(four_field_wire));
+    struct ppb_lexn_ret ret = ppb_lexn(&buf, 0, NULL, 4);
+
+    CHECK(ret.status == PPB_OK);
+    CHECK(ret.first_field == 0);
+    CHECK(ret.field_range == 0);
+    CHECK(buf.size == 0);
+}
+
 /* catch-all fields are always one at a time. */
 static void
 test_lexn_catchall_fields_in_order(void)
@@ -601,6 +616,60 @@ test_lexn_unknown_field_skipped(void)
         0x08, 0x01,        /* field 1 varint 1 */
         0x98, 0x06, 0x02,  /* field 99 varint 2 (unknown) */
         0x18, 0x03,        /* field 3 varint 3 */
+    };
+
+    struct ppb_field fields[2];
+    zero_fields(2, fields);
+    fields[0].tag = PPB_TAG(1, PPB_WIRE_VARINT);
+    fields[1].tag = PPB_TAG(3, PPB_WIRE_VARINT);
+
+    struct ppb_buf buf = make_buf(wire, sizeof(wire));
+    struct ppb_lexn_ret ret = ppb_lexn(&buf, 2, fields, 4);
+
+    CHECK(ret.status == PPB_OK);
+    CHECK(ret.first_field == 0);
+    CHECK(ret.field_range == 2);
+    CHECK(fields[0].v.u64 == 1);
+    CHECK(fields[1].v.u64 == 3);
+    CHECK(buf.size == 0);
+}
+
+static void
+test_lexn_unknown_field_in_order_skipped(void)
+{
+    printf("test_lexn_unknown_field_in_order_skipped\n");
+
+    static const uint8_t wire[] = {
+        0x08, 0x01,        /* field 1 varint 1 */
+        0x10, 0x02,        /* field 2 varint 2 (unknown) */
+        0x18, 0x03,        /* field 3 varint 3 */
+    };
+
+    struct ppb_field fields[2];
+    zero_fields(2, fields);
+    fields[0].tag = PPB_TAG(1, PPB_WIRE_VARINT);
+    fields[1].tag = PPB_TAG(3, PPB_WIRE_VARINT);
+
+    struct ppb_buf buf = make_buf(wire, sizeof(wire));
+    struct ppb_lexn_ret ret = ppb_lexn(&buf, 2, fields, 4);
+
+    CHECK(ret.status == PPB_OK);
+    CHECK(ret.first_field == 0);
+    CHECK(ret.field_range == 2);
+    CHECK(fields[0].v.u64 == 1);
+    CHECK(fields[1].v.u64 == 3);
+    CHECK(buf.size == 0);
+}
+
+static void
+test_lexn_unknown_field_in_order_skipped_at_end(void)
+{
+    printf("test_lexn_unknown_field_in_order_skipped_at_end\n");
+
+    static const uint8_t wire[] = {
+        0x08, 0x01,        /* field 1 varint 1 */
+        0x18, 0x03,        /* field 3 varint 3 */
+        0x98, 0x06, 0x02,  /* field 99 varint 2 (unknown) */
     };
 
     struct ppb_field fields[2];
@@ -937,9 +1006,12 @@ main(void)
 
     test_lexn_known_fields_in_order();
     test_lexn_one_per_call();
+    test_lexn_no_field();
     test_lexn_catchall_fields_in_order();
     test_lexn_out_of_order();
     test_lexn_unknown_field_skipped();
+    test_lexn_unknown_field_in_order_skipped();
+    test_lexn_unknown_field_in_order_skipped_at_end();
     test_lexn_two_sorted_runs();
     test_lexn_catchall_always_stops();
     test_lexn_empty();
