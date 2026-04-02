@@ -3,7 +3,7 @@
 #include <stdint.h>
 
 /*
- * PPB (Pico protobuf) is an allocation-free lexer for modern (v2 or
+ * PPB (Pico Protobuf) is an allocation-free lexer for modern (v2 or
  * v3, without groups) protobuf-encoded bytes.
  *
  * An initial `ppb_prescan` validates the input message and gathers
@@ -53,7 +53,7 @@ enum ppb_error
     PPB_ERROR_SENTINEL_FIELD_ARR = -2,  /* fields[].tag.bits includes 0 (invalid in protobuf) */
     PPB_ERROR_TRUNCATED_DATA = -3,  /* message cut short at the end of the `ppb_buf` */
     PPB_ERROR_CORRUPT_VARINT = -4,  /* invalid varint encoding (overlong) */
-    PPB_ERROR_CORRUPT_TAG = -5,  /* invalid tag encoding (zero, overlong, or unsupported eire type) */
+    PPB_ERROR_CORRUPT_TAG = -5,  /* invalid tag encoding (zero, overlong, or unsupported wire type) */
 };
 
 /*
@@ -189,7 +189,7 @@ extern "C"
 /*
  * Decodes zigzag-encoded sint32 and sint64 values.
  *
- * A 32-bit unsigned int value will decode to a int32_t.
+ * A 32-bit unsigned int value will decode to an `int32_t`.
  */
 static inline int64_t
 ppb_zag(uint64_t x)
@@ -227,10 +227,21 @@ uint64_t ppb_decode_varint(struct ppb_buf *__restrict buf, enum ppb_error *__res
 ptrdiff_t ppb_prescan(struct ppb_buf buf, size_t num_fields, struct ppb_field fields[__restrict num_fields],
     size_t max_lexed_fields);
 
+/*
+ * A `ppb_lexn_ret` describes a range of indices in `fields` that
+ * contain all fields decoded in that call to `ppb_lexn` (but may
+ * include indices for irrelevant fields), and an error code or
+ * `PPB_OK`.
+ *
+ * The range is `fields[first_field .. first_field + field_range)`
+ * with `first_field + field_range <= num_fields`, and `field_range`
+ * saturating at `UINT32_MAX`: when `field_range == UINT32_MAX`, the
+ * range is instead `fields[first_field .. num_fields)`.
+ */
 struct ppb_lexn_ret
 {
-    size_t first_field;  /* index of the first field found in `fields`. */
-    uint32_t field_range;  /* saturates at UINT32_MAX, if you have this many fields. */
+    size_t first_field;
+    uint32_t field_range;
     enum ppb_error status;
 };
 
@@ -240,9 +251,10 @@ struct ppb_lexn_ret
  * or on error/end-of-buf.
  *
  * This function may decode multiple fields at a time, but only in
- * strictly ascending order, and always stops after an unknown field.
- * This guarantees that we can always recover the order of the fields
- * on the wire, and that we always see every field value.  Call
+ * strictly ascending order, and always stops before a non-monotonic
+ * (repeated or decreasing) tag or after an unknown field.  This
+ * guarantees that we can always recover the order of the fields on
+ * the wire, and that we always see every field value.  Call
  * `ppb_lexn` in a loop to process all fields in a message, in batches
  * of strictly monotonically increasing fields.
  *
@@ -253,11 +265,6 @@ struct ppb_lexn_ret
  *
  * Assumes the fields are sorted and valid (no zero field);
  * ppb_prescan checks for that.
- *
- * Returns:
- *   - `first_field`, the index in `fields` of the first lexed field
- *   - `field_range = last_field + 1 - first_field`, where last_field is
- *     the index in `fields` of the last lexed field
  */
 struct ppb_lexn_ret ppb_lexn(struct ppb_buf *__restrict buf, size_t num_fields,
     struct ppb_field fields[__restrict num_fields], size_t max_lexed_fields);
