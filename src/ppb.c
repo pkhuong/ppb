@@ -486,6 +486,7 @@ ppb_lexn(struct ppb_buf *restrict buf, size_t num_fields, struct ppb_field field
     }
     else
     {
+        /*@ assert no_truncation: 1 + last_field - first_field ≤ UINT32_MAX; */
         field_range = 1 + last_field - first_field;
     }
 
