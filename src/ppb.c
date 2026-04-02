@@ -272,7 +272,7 @@ ppb_prescan(const struct ppb_buf buf, const size_t num_fields, struct ppb_field 
         }
     }
 
-    struct ppb_field dummy = {};
+    struct ppb_field dummy = { .tag.bits = 0 };
 
     /*@ loop assigns i, fields[0..num_fields - 1].m, fields[0..num_fields - 1].v, src, error, dummy;
       @ loop invariant 0 ≤ i ≤ max_lexed_fields;
@@ -358,7 +358,7 @@ ppb_lexn(struct ppb_buf *restrict buf, size_t num_fields, struct ppb_field field
     struct ppb_buf src = *buf;
     /*@ assert buf_valid(src); */
 
-    struct ppb_field dummy = {};
+    struct ppb_field dummy = { .tag.bits = 0 };
     uint64_t prev_tag_id = 0;  /* without the 3 type bits */
     size_t first_field = SIZE_MAX;
     size_t last_field = 0;
