@@ -49,11 +49,11 @@
 enum ppb_error
 {
     PPB_OK = 0,
-    PPB_ERROR_UNSORTED_FIELD_ARR = -1,
-    PPB_ERROR_SENTINEL_FIELD_ARR = -2,
-    PPB_ERROR_TRUNCATED_DATA = -3,
-    PPB_ERROR_CORRUPT_VARINT = -4,
-    PPB_ERROR_CORRUPT_TAG = -5,
+    PPB_ERROR_UNSORTED_FIELD_ARR = -1,  /* fields[].tag.bits not strictly ascending */
+    PPB_ERROR_SENTINEL_FIELD_ARR = -2,  /* fields[].tag.bits includes 0 (invalid in protobuf) */
+    PPB_ERROR_TRUNCATED_DATA = -3,  /* message cut short at the end of the `ppb_buf` */
+    PPB_ERROR_CORRUPT_VARINT = -4,  /* invalid varint encoding (overlong) */
+    PPB_ERROR_CORRUPT_TAG = -5,  /* invalid tag encoding (zero, overlong, or unsupported eire type) */
 };
 
 /*
