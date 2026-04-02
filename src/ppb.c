@@ -12,36 +12,42 @@
 /* Validate PPB_ENCODE_VARINT against known varint encodings. */
 
 /* Single-byte tags (field 1-15). */
-static_assert(PPB_TAG_BITS(1, PPB_WIRE_VARINT) == 0x08);     /* field 1, varint */
-static_assert(PPB_TAG_BITS(1, PPB_WIRE_I64) == 0x09);        /* field 1, I64 */
-static_assert(PPB_TAG_BITS(1, PPB_WIRE_LEN) == 0x0A);        /* field 1, LEN */
-static_assert(PPB_TAG_BITS(2, PPB_WIRE_VARINT) == 0x10);     /* field 2, varint */
-static_assert(PPB_TAG_BITS(2, PPB_WIRE_I32) == 0x15);        /* field 2, I32 */
-static_assert(PPB_TAG_BITS(15, PPB_WIRE_VARINT) == 0x78);    /* field 15, varint */
+static_assert(PPB_TAG_BITS(1, PPB_WIRE_VARINT) == 0x08, "field 1, varint");
+static_assert(PPB_TAG_BITS(1, PPB_WIRE_I64) == 0x09, "field 1, I64");
+static_assert(PPB_TAG_BITS(1, PPB_WIRE_LEN) == 0x0A, "field 1, LEN");
+static_assert(PPB_TAG_BITS(2, PPB_WIRE_VARINT) == 0x10, "field 2, varint");
+static_assert(PPB_TAG_BITS(2, PPB_WIRE_I32) == 0x15, "field 2, I32");
+static_assert(PPB_TAG_BITS(15, PPB_WIRE_VARINT) == 0x78, "field 15, varint");
 
 /* Two-byte tags (field 16+). */
-static_assert(PPB_TAG_BITS(16, PPB_WIRE_VARINT) == 0x0180);  /* [0x80, 0x01] */
-static_assert(PPB_TAG_BITS(100, PPB_WIRE_VARINT) == 0x06A0); /* [0xA0, 0x06] */
-static_assert(PPB_TAG_BITS(100, PPB_WIRE_I64) == 0x06A1);    /* field 100, I64 */
+static_assert(PPB_TAG_BITS(16, PPB_WIRE_VARINT) == 0x0180, "field 16, varint: [0x80, 0x01]");
+static_assert(PPB_TAG_BITS(100, PPB_WIRE_VARINT) == 0x06A0, "field 100, varint: [0xA0, 0x06]");
+static_assert(PPB_TAG_BITS(100, PPB_WIRE_I64) == 0x06A1, "field 100, I64: [0xA1, 0x06]");
 
 /* Three-byte tag. */
-static_assert(PPB_TAG_BITS(2048, PPB_WIRE_VARINT) == 0x018080); /* [0x80, 0x80, 0x01] */
+static_assert(PPB_TAG_BITS(2048, PPB_WIRE_VARINT) == 0x018080, "field 2048, varint: [0x80, 0x80, 0x01]");
 
 /* Four-byte tag (field >= 262144). */
-static_assert(PPB_TAG_BITS(262144, PPB_WIRE_VARINT) == 0x01808080UL);
-static_assert(PPB_TAG_BITS(262144, PPB_WIRE_I64) == 0x01808081UL);
+static_assert(PPB_TAG_BITS(262144, PPB_WIRE_VARINT) == 0x01808080UL,
+    "field 262144, varint: [0x80, 0x80, 0x80, 0x01]");
+static_assert(PPB_TAG_BITS(262144, PPB_WIRE_I64) == 0x01808081UL,
+    "field 262144, I64: [0x81, 0x80, 0x80, 0x01]");
 
 /* Five-byte tag (field >= 33554432). */
-static_assert(PPB_TAG_BITS(33554432UL, PPB_WIRE_VARINT) == 0x0180808080UL);
-static_assert(PPB_ENCODE_VARINT((uint64_t)UINT32_MAX) == 0x0FFFFFFFFFUL);
+static_assert(PPB_TAG_BITS(33554432UL, PPB_WIRE_VARINT) == 0x0180808080UL,
+    "field 33554432, varint: [0x80, 0x80, 0x80, 0x80, 0x01]");
+static_assert(PPB_ENCODE_VARINT((uint64_t)UINT32_MAX) == 0x0FFFFFFFFFUL,
+    "UINT32_MAX: [0xFF, 0xFF, 0xFF, 0xFF, 0x0F]");
 
 /* Eight-byte encoding. */
-static_assert(PPB_ENCODE_VARINT(1UL << 49) == 0x0180808080808080UL);
-static_assert(PPB_ENCODE_VARINT((1UL << 56) - 1) == 0x7FFFFFFFFFFFFFFFUL);
+static_assert(PPB_ENCODE_VARINT(1UL << 49) == 0x0180808080808080UL,
+    "1<<49: [0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x01]");
+static_assert(PPB_ENCODE_VARINT((1UL << 56) - 1) == 0x7FFFFFFFFFFFFFFFUL,
+    "(1<<56)-1: [0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x7F]");
 
 /* Catch-all. */
-static_assert(PPB_TAG_BITS(-1, PPB_WIRE_VARINT) == ((UINT64_MAX << 3) | 0));
-static_assert(PPB_TAG_BITS(-1, PPB_WIRE_I32) == ((UINT64_MAX << 3) | 5));
+static_assert(PPB_TAG_BITS(-1, PPB_WIRE_VARINT) == ((UINT64_MAX << 3) | 0), "catch-all, varint");
+static_assert(PPB_TAG_BITS(-1, PPB_WIRE_I32) == ((UINT64_MAX << 3) | 5), "catch-all, I32");
 
 /*@ terminates \true;
   @ assigns \result \from x;
