@@ -289,6 +289,9 @@ ppb_prescan(const struct ppb_buf buf, const size_t num_fields, struct ppb_field 
       @*/
     for (size_t i = 0; i < max_lexed_fields; i++)
     {
+        /*@ assert error ≡ PPB_OK; */
+        assert(error == PPB_OK && "loop invariant");
+
         if (unlikely(src.size == 0))
         {
             break;
@@ -379,6 +382,9 @@ ppb_lexn(struct ppb_buf *restrict const buf, const size_t num_fields, struct ppb
       @*/
     for (size_t i = 0; i < max_lexed_fields; i++)
     {
+        /*@ assert error ≡ PPB_OK; */
+        assert(error == PPB_OK && "loop invariant");
+
         if (unlikely(src.size == 0))
         {
             break;
