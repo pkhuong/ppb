@@ -4,7 +4,7 @@ PPB: Pico Protobuf
 PPB is an allocation-free non-recursive lexer for protobuf binary
 encoding (v2/v3, no groups).  It requires the entire serialized
 message to be in a contiguous read-only buffer, and decodes values to
-64-bit atomic values, or as subslices in that buffer.
+64-bit values, or as subslices in that buffer.
 
 The core pattern is: call `ppb_prescan` once to validate the input and
 collect field statistics for preallocation, then call `ppb_lexn` in a
