@@ -1,5 +1,6 @@
 #include "ppb/ppb.h"
 
+#include <assert.h>
 #include <errno.h>
 #include <inttypes.h>
 #include <stdbool.h>
@@ -57,6 +58,7 @@ submessage_field_count(const struct ppb_buf payload)
     ptrdiff_t scanned = ppb_prescan(payload, NUM_FIELDS, fields, SIZE_MAX);
     if (scanned < 0 || (size_t)scanned != payload.size)
     {
+        assert(scanned < 0 && "successful prescan should read whole message");
         return 0;
     }
 
@@ -570,6 +572,7 @@ main(int argc, char **argv)
         else
         {
             fprintf(stderr, "picoscope: trailing garbage at byte %td\n", scanned);
+            assert(0 && "successful prescan should read whole message");
         }
 
         free(data);
