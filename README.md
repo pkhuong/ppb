@@ -268,6 +268,34 @@ The test suite runs unit tests and comparisons against
     make test           # run unit tests + golden tests
     make regen_test     # regenerate golden files (requires protoscope in PATH)
 
+To add a valid test case, encode a protoscope source file to binary and
+convert to hex:
+
+    echo '1: 42  2: {"hello"}' | protoscope -s | xxd -p | tr -d '\n' \
+        > testdata/my-test.hex
+    make regen_test   # writes testdata/my-test.expected
+
+The test suite also automatically truncates every valid message by 1–32
+bytes and checks that picoscope either errors out or produces a prefix of
+the expected output.
+
+To add an invalid test case, place the `.hex` file in `testdata/invalid/`
+and run `make regen_test`; it captures the expected error message into a
+`.expected-error` file.
+
+If protoscope is not in PATH, pass it explicitly:
+
+    make regen_test PROTOSCOPE=/path/to/protoscope
+
+The unit tests cover `ppb_zag`, varint decoding, `ppb_prescan` and
+`ppb_lexn` directly: field-array validation, metadata accumulation,
+`max_lexed_fields` early-exit, monotonic-run batching, unknown-field
+skipping, and error detection for malformed input.  The golden tests
+exercise `picoscope` end-to-end across all wire types, multi-byte
+varint and tag encodings, repeated and nested fields.  The
+invalid-input suite checks that corrupt or truncated data is rejected
+with the correct error.
+
 Formal verification, mostly for memory safety, is done with Frama-C,
 with `make wp`. Source formatting with `make format` uses
 `clang-format-20`.
