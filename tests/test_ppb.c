@@ -246,6 +246,17 @@ test_prescan_validation(void)
         CHECK(ret == PPB_ERROR_UNSORTED_FIELD_ARR);
     }
 
+    /* Repeated field. */
+    {
+        struct ppb_field fields[2];
+        zero_fields(2, fields);
+        fields[0].tag = PPB_TAG(1, PPB_WIRE_VARINT);
+        fields[1].tag = PPB_TAG(1, PPB_WIRE_VARINT);
+
+        ptrdiff_t ret = ppb_prescan(buf, 2, fields, SIZE_MAX);
+        CHECK(ret == PPB_ERROR_UNSORTED_FIELD_ARR);
+    }
+
     /* Sentinel (tag.bits == 0). */
     {
         struct ppb_field fields[1];
