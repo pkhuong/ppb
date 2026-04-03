@@ -408,6 +408,25 @@ disassemble(struct ppb_buf buf, size_t indent)
         { .tag = PPB_TAG(-1, PPB_WIRE_I32) },
     };
 
+    /*
+     * Prescan to validate and collect expected metadata before lexing.
+     * disassemble is only called after the message has already been
+     * validated (toplevel: explicit prescan in main; recursive:
+     * submessage_field_count prescans before calling us), so this must
+     * succeed.
+     */
+    ptrdiff_t scanned = ppb_prescan(buf, NUM_FIELDS, fields, SIZE_MAX);
+    assert((size_t)scanned == buf.size && "redundant prescan must succeed");
+
+    struct ppb_field_meta prescan_m[NUM_FIELDS] = { 0 };
+    for (size_t i = 0; i < NUM_FIELDS; i++)
+    {
+        prescan_m[i] = fields[i].m;
+    }
+
+    /* Accumulate per-field counts observed by ppb_lexn for comparison. */
+    struct ppb_field_meta lexn_m[NUM_FIELDS] = { 0 };
+
     while (buf.size > 0)
     {
         struct ppb_lexn_ret ret = ppb_lexn(&buf, NUM_FIELDS, fields, 1);
@@ -423,8 +442,25 @@ disassemble(struct ppb_buf buf, size_t indent)
             break;
         }
 
+        assert(ret.field_range == 1);
+
         size_t idx = ret.first_field;
         struct ppb_field_value *v = &fields[idx].v;
+
+        lexn_m[idx].num_occurrences++;
+        if (idx == FIELD_LEN)
+        {
+            size_t sz = v->payload.size;
+            lexn_m[idx].total_bytes += sz;
+            if (sz > 0 && (lexn_m[idx].min_nonzero_bytes == 0 || sz < lexn_m[idx].min_nonzero_bytes))
+            {
+                lexn_m[idx].min_nonzero_bytes = sz;
+            }
+            if (sz > lexn_m[idx].max_bytes)
+            {
+                lexn_m[idx].max_bytes = sz;
+            }
+        }
 
         /* Recover field number by re-decoding the tag varint at v->ptr. */
         struct ppb_buf tag_buf = {
@@ -446,6 +482,51 @@ disassemble(struct ppb_buf buf, size_t indent)
         if (format_field(idx, field_num, v, indent, /*newline=*/true) != 0)
         {
             return 1;
+        }
+    }
+
+    /*
+     * Verify that ppb_lexn observed exactly what ppb_prescan predicted.
+     */
+    for (size_t i = 0; i < NUM_FIELDS; i++)
+    {
+        if (prescan_m[i].num_occurrences != lexn_m[i].num_occurrences)
+        {
+            fprintf(stderr,
+                "picoscope: prescan/lexn mismatch: wire type %zu "
+                "num_occurrences prescan=%zu lexn=%zu\n",
+                i, prescan_m[i].num_occurrences, lexn_m[i].num_occurrences);
+            return 1;
+        }
+
+        if (i == FIELD_LEN)
+        {
+            if (prescan_m[i].total_bytes != lexn_m[i].total_bytes)
+            {
+                fprintf(stderr,
+                    "picoscope: prescan/lexn mismatch: LEN "
+                    "total_bytes prescan=%zu lexn=%zu\n",
+                    prescan_m[i].total_bytes, lexn_m[i].total_bytes);
+                return 1;
+            }
+
+            if (prescan_m[i].min_nonzero_bytes != lexn_m[i].min_nonzero_bytes)
+            {
+                fprintf(stderr,
+                    "picoscope: prescan/lexn mismatch: LEN "
+                    "min_nonzero_bytes prescan=%zu lexn=%zu\n",
+                    prescan_m[i].min_nonzero_bytes, lexn_m[i].min_nonzero_bytes);
+                return 1;
+            }
+
+            if (prescan_m[i].max_bytes != lexn_m[i].max_bytes)
+            {
+                fprintf(stderr,
+                    "picoscope: prescan/lexn mismatch: LEN "
+                    "max_bytes prescan=%zu lexn=%zu\n",
+                    prescan_m[i].max_bytes, lexn_m[i].max_bytes);
+                return 1;
+            }
         }
     }
 
