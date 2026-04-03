@@ -224,7 +224,7 @@ uint64_t ppb_decode_varint(struct ppb_buf *__restrict buf, enum ppb_error *__res
  *
  * A negative value is a ppb_error.
  */
-ptrdiff_t ppb_prescan(struct ppb_buf buf, size_t num_fields, struct ppb_field fields[__restrict num_fields],
+ptrdiff_t ppb_prescan(struct ppb_buf buf, size_t num_fields, struct ppb_field *__restrict fields,
     size_t max_lexed_fields);
 
 /*
@@ -267,7 +267,7 @@ struct ppb_lexn_ret
  * ppb_prescan checks for that.
  */
 struct ppb_lexn_ret ppb_lexn(struct ppb_buf *__restrict buf, size_t num_fields,
-    struct ppb_field fields[__restrict num_fields], size_t max_lexed_fields);
+    struct ppb_field *__restrict fields, size_t max_lexed_fields);
 
 #ifdef __cplusplus
 }  // extern "C"

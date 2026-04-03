@@ -93,7 +93,7 @@ ppb_decode_varint(struct ppb_buf *restrict buf, enum ppb_error *restrict error)
   @ ensures \result < num_fields ==> fields[\result].tag.bits ≡ tag;
   @*/
 static inline size_t
-find_tag(const size_t num_fields, const struct ppb_field fields[num_fields], uint64_t tag)
+find_tag(const size_t num_fields, const struct ppb_field *__restrict fields, uint64_t tag)
 {
     size_t lo = 0;
     size_t len = num_fields;
@@ -253,7 +253,7 @@ handle_field(uint64_t tag, struct ppb_field *restrict dst, struct ppb_buf *restr
   @ ensures \result ≥ 0 ==> (num_fields ≡ 0 ∨ fields[0].tag.bits ≢ 0);
   @*/
 ptrdiff_t
-ppb_prescan(const struct ppb_buf buf, const size_t num_fields, struct ppb_field fields[restrict num_fields],
+ppb_prescan(const struct ppb_buf buf, const size_t num_fields, struct ppb_field *const restrict fields,
     const size_t max_lexed_fields)
 {
     enum ppb_error error = PPB_OK;
@@ -356,8 +356,8 @@ ppb_prescan(const struct ppb_buf buf, const size_t num_fields, struct ppb_field 
   @ ensures \forall integer j; 0 ≤ j < num_fields ==> fields[j].m ≡ \old(fields[j].m);
   @*/
 struct ppb_lexn_ret
-ppb_lexn(struct ppb_buf *restrict buf, size_t num_fields, struct ppb_field fields[restrict num_fields],
-    size_t max_lexed_fields)
+ppb_lexn(struct ppb_buf *restrict const buf, const size_t num_fields, struct ppb_field *restrict const fields,
+    const size_t max_lexed_fields)
 {
     enum ppb_error error = PPB_OK;
     /*@ ghost g_initial_buf = *buf; */
