@@ -196,7 +196,7 @@ handle_field(uint64_t tag, struct ppb_field *restrict dst, struct ppb_buf *restr
     case PPB_WIRE_LEN:
     {
         num_bytes = decode_varint(src, error);
-        if (unlikely((buf_check(*src, num_bytes, error) != 0) | (num_bytes == 0)))
+        if (unlikely(buf_check(*src, num_bytes, error) | (num_bytes == 0)))
         {
             if (likely(*error))
             {
