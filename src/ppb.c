@@ -196,7 +196,7 @@ handle_field(uint64_t tag, struct ppb_field *restrict dst, struct ppb_buf *restr
     case PPB_WIRE_LEN:
     {
         num_bytes = decode_varint(src, error);
-        if (unlikely(buf_check(*src, num_bytes, error) | (num_bytes == 0)))
+        if (unlikely(buf_check(*src, num_bytes, error) | (num_bytes == 0))) /* mutant-ok: 'if:force_true' */
         {
             if (likely(*error))
             {
@@ -224,8 +224,8 @@ handle_field(uint64_t tag, struct ppb_field *restrict dst, struct ppb_buf *restr
         break;
     }
 
-    case 3: /* group start */
-    case 4: /* group end */
+    case 3: /* mutant-skip: explicit group start instead of default */
+    case 4: /* mutant-skip: explicit group end instead of default */
     default:
         /*@ assert *error ≡ 0; */
         return error_set(error, PPB_ERROR_CORRUPT_TAG);
@@ -307,19 +307,19 @@ ppb_prescan(const struct ppb_buf buf, const size_t num_fields, struct ppb_field 
          */
         /*@ admit field_idx < num_fields ==> fields[field_idx].tag.bits ≢ 0; */
 
-        if (unlikely(field_idx >= num_fields))
+        if (unlikely(field_idx >= num_fields)) /* -1UL for missing, so mutant-ok: '>=' -> '>' */
         {
             /* tag == 0 is invalid. */
             if (unlikely(tag == 0))
             {
                 error_set(&error, PPB_ERROR_CORRUPT_TAG);
-                return (ptrdiff_t)error;
+                return (ptrdiff_t)error; /* handle_field detects old error for varint; mutant-ok: 'delete' */
             }
 
-            /* See if want to dump this in the a catch-all field. */
-            if (num_fields > 0 && (int64_t)fields[num_fields - 1].tag.bits >> 3 < 0)
+            /* See if want to dump this in a catch-all field (branch is an optimization). */
+            if (num_fields > 0 && (int64_t)fields[num_fields - 1].tag.bits >> 3 < 0) /* mutant-skip */
             {
-                tag |= UINT64_MAX << 3;  /* preserve the type, but otherwise all 1s. */
+                tag |= UINT64_MAX << 3; /* preserve the type, but otherwise all 1s. */
                 field_idx = find_tag(num_fields, fields, tag);
             }
         }
@@ -368,7 +368,7 @@ ppb_lexn(struct ppb_buf *restrict const buf, const size_t num_fields, struct ppb
     /*@ assert buf_valid(src); */
 
     struct ppb_field dummy = { .tag.bits = 0 };
-    uint64_t prev_tag_id = 0;  /* without the 3 type bits */
+    uint64_t prev_tag_id = 0; /* without the 3 type bits */
     size_t first_field = SIZE_MAX;
     size_t last_field = 0;
 
@@ -418,13 +418,14 @@ ppb_lexn(struct ppb_buf *restrict const buf, const size_t num_fields, struct ppb
             /*@ assert num_tag_bytes > 0; */
 
             field_idx = find_tag(num_fields, fields, tag);
-            if (unlikely(field_idx >= num_fields))
+            if (unlikely(field_idx >= num_fields)) /* -1UL for missing, so mutant-ok: '>=' -> '>' */
             {
-                if (num_fields > 0 && (int64_t)fields[num_fields - 1].tag.bits < 0)
+                /* See if want to dump this in a catch-all field (branch is an optimization). */
+                if (num_fields > 0 && (int64_t)fields[num_fields - 1].tag.bits < 0) /* mutant-skip */
                 {
                     /* See if want to dump this in a catch-all field. */
-                    tag |= UINT64_MAX << 3;  /* preserve the type, but otherwise all 1s. */
-                    if (unlikely(UINT64_MAX / 8 <= prev_tag_id))
+                    tag |= UINT64_MAX << 3; /* preserve the type, but otherwise all 1s. */
+                    if (unlikely(UINT64_MAX / 8 <= prev_tag_id)) /* mutant-triaged: condition always false */
                     {
                         /*
                          * nonmonotonic -> stop here.
@@ -433,7 +434,7 @@ ppb_lexn(struct ppb_buf *restrict const buf, const size_t num_fields, struct ppb
                          * real tag and prev_tag_id would have already triggered
                          * the nonmonotonicity check.
                          */
-                        break;
+                        break; /* unreachable, mutant-skip */
                     }
 
                     field_idx = find_tag(num_fields, fields, tag);
@@ -486,9 +487,9 @@ ppb_lexn(struct ppb_buf *restrict const buf, const size_t num_fields, struct ppb
         first_field = 0;
         field_range = 0;
     }
-    else if (unlikely(last_field - first_field >= UINT32_MAX))
+    else if (unlikely(last_field - first_field >= UINT32_MAX)) /* mutant-triaged: needs large fields array */
     {
-        field_range = UINT32_MAX;
+        field_range = UINT32_MAX; /* mutant-triaged: currently unreachable */
     }
     else
     {

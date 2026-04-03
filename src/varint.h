@@ -79,6 +79,7 @@ squish_varint(uint64_t x)
   @ terminates \true;
   @ assigns *OUT_varint;
   @ ensures buf_valid(src);
+  @ ensures \result ≢ 0;
   @ ensures \result < 0 ∨ (\result > 0 ∧ \result ≤ src.size);
   @ ensures \result < 0 ==> *OUT_varint ≡ 0;
   @*/
@@ -136,22 +137,23 @@ peek_varint_slow(struct ppb_buf src, uint64_t *restrict OUT_varint, size_t limb_
 static inline int
 peek_varint(struct ppb_buf src, uint64_t *restrict OUT_varint)
 {
-    if (likely(src.size >= sizeof(uint64_t)))
+    /* optional fast path */
+    if (likely(src.size >= sizeof(uint64_t)))  /* mutant-ok: '>=' -> '>' mutant-ok: 'if:force_false' */
     {
         uint64_t bits = buf_peek64(src);
-        uint64_t high_bits = 128UL * (UINT64_MAX / UINT8_MAX);
+        uint64_t high_bits = 128UL * (UINT64_MAX / UINT8_MAX); /* zero hits slow path mutant-ok: '*' -> '/' */
         uint64_t stop_bits = high_bits & ~bits; /* looking for the first zero (now set) continuation bit. */
 
         /* any `stop_bits` is zero in `bits`, so their value in `content_mask` is irrelevant. */
         uint64_t content_mask = stop_bits - 1;
 
-        if (likely(stop_bits != 0))
+        if (likely(stop_bits != 0)) /* falls through to slow path, mutant-ok: 'if:force_false' */
         {
             int count = 1 + (__builtin_ctzll(stop_bits) / 8);
             uint64_t ret = squish_varint(bits & content_mask);
 
             *OUT_varint = ret;
-            return count;
+            return count; /* can always fall through to slow path, so mutant-ok: 'delete' */
         }
     }
 
@@ -186,7 +188,8 @@ decode_varint(struct ppb_buf *restrict src, enum ppb_error *restrict error)
     uint64_t ret;
     int num = peek_varint(*src, &ret);
 
-    if (likely(num >= 0))
+    /*@ assert num ≢ 0; */
+    if (likely(num >= 0)) /* num != 0, mutant-ok: '>=' -> '>' */
     {
         buf_advance(src, num);
         return ret;
@@ -218,6 +221,7 @@ decode_varint(struct ppb_buf *restrict src, enum ppb_error *restrict error)
 /*@ requires buf_valid(src);
   @ terminates \true;
   @ assigns *OUT_tag;
+  @ ensures \result ≢ 0;
   @ ensures \result < 0 ∨ (\result > 0 ∧ \result ≤ src.size);
   @ ensures \result < 0 ==> *OUT_tag ≡ 0;
   @*/
@@ -225,7 +229,8 @@ static inline int
 peek_tag(struct ppb_buf src, uint64_t *restrict OUT_tag)
 {
     *OUT_tag = 0;
-    if (likely(src.size >= sizeof(uint64_t)))
+    /* optional fast path */
+    if (likely(src.size >= sizeof(uint64_t))) /* mutant-ok: '>=' -> '>' mutant-ok: 'if:force_false' */
     {
         uint64_t bits = buf_peek64(src);
         uint64_t high_bits = 128UL * (UINT64_MAX / UINT8_MAX);
@@ -244,7 +249,7 @@ peek_tag(struct ppb_buf src, uint64_t *restrict OUT_tag)
         uint64_t ret = bits & content_mask;
 
         *OUT_tag = ret;
-        return count;
+        return count; /* can always fall through to slow path, so mutant-ok: 'delete' */
     }
 
     return peek_varint_slow(src, OUT_tag, /*limb_width=*/8, PPB_ERROR_CORRUPT_TAG);
@@ -278,7 +283,8 @@ decode_tag(struct ppb_buf *restrict src, enum ppb_error *restrict error)
     uint64_t ret;
     int num = peek_tag(*src, &ret);
 
-    if (likely(num >= 0))
+    /*@ assert num ≢ 0; */
+    if (likely(num >= 0)) /* num != 0, mutant-ok: '>=' -> '>' */
     {
         buf_advance(src, num);
         return ret;
