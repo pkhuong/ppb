@@ -56,6 +56,33 @@ for hex in "$TESTDATA"/*.hex; do
         printf "FAIL: %s\n" "$base"
         printf '%s\n' "$actual" | diff -u "$expected" -
     fi
+
+    # Truncation tests: trim 1..32 bytes from the end, picoscope should
+    # detect a broken message, or decode a prefix of the full message.
+    binary_size=$(xxd -r -p "$hex" | wc -c | tr -d ' \t')
+
+    t=1
+    while [ "$t" -le 32 ] && [ "$t" -le "$binary_size" ]; do
+        trunc_size=$((binary_size - t))
+        trunc_exit=0
+        trunc_actual=$(xxd -r -p "$hex" | head -c "$trunc_size" | "$PICOSCOPE" -p 2>/dev/null) \
+            || trunc_exit=$?
+        if [ "$trunc_exit" -ne 0 ]; then
+            PASS=$((PASS + 1))
+        else
+            actual_len=$(printf '%s' "$trunc_actual" | wc -c | tr -d ' \t')
+            expected_prefix=$(printf '%s' "$expected_text" | head -c "$actual_len")
+            if [ "$trunc_actual" = "$expected_prefix" ]; then
+                PASS=$((PASS + 1))
+            else
+                FAIL=$((FAIL + 1))
+                printf "FAIL: %s (truncated -%d)\n" "$base" "$t"
+                printf "  actual:   [%s]\n" "$trunc_actual"
+                printf "  expected: [%s]\n" "$expected_prefix"
+            fi
+        fi
+        t=$((t + 1))
+    done
 done
 
 # Invalid input tests: verify picoscope rejects with correct error message.
