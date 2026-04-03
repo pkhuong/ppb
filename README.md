@@ -6,14 +6,20 @@ encoding (v2/v3, no groups).  It requires the entire serialized
 message to be in a contiguous read-only buffer, and decodes values to
 64-bit atomic values, or as subslices in that buffer.
 
-The core pattern is: optionally call `ppb_prescan` once to validate
-the input and collect field statistics for preallocation, then call
-`ppb_lexn` in a loop to walk the fields.  The `ppb_lexn` function is
-always safe to call, even without `ppb_prescan`: `ppb_lexn` performs
-its own redundant validation *of message bytes* on the fly
-(`ppb_prescan` also validates the structure of the `fields[]` array).
-Both functions operate only on top-level fields; call them recursively
-on nested submessages.
+The core pattern is: call `ppb_prescan` once to validate the input and
+collect field statistics for preallocation, then call `ppb_lexn` in a
+loop to walk the fields.  While validating, `ppb_prescan` also saves
+the last value associated with each tag, which implements exactly the
+last-write-wins semantics needed for non-repeated fields.  We thus
+only need `ppb_lexn` for repeated fields, and only when `ppb_prescan`
+reports multiple occurrences of such a field (packed repeated fields,
+for example, usually appear at most once).
+
+The `ppb_lexn` function is always safe to call, even without
+`ppb_prescan`: `ppb_lexn` performs its own redundant validation *of
+message bytes* on the fly (`ppb_prescan` also validates the structure
+of the `fields[]` array).  Both functions operate only on toplevel
+fields; call them recursively on nested submessages.
 
 This usage pattern lets the calling program choose how to handle
 nesting and variable-length values.  Both `ppb_prescan` and
@@ -33,8 +39,9 @@ Concepts
 --------
 
 **`struct ppb_buf`**: a read-only byte slice `{ const void *buf; size_t size; }`.
-PPB never writes through them, but does update them in place and
-construct subslices, for length-prefixed payloads (variable-length values).
+PPB never writes through the `buf` pointer, but does update the struct
+in place and construct subslices for length-prefixed payloads
+(variable-length values).
 
 **`struct ppb_field`**: one entry in a caller-owned array that
 describes a field that should be decoded.  Set `field.tag` with
@@ -42,8 +49,8 @@ describes a field that should be decoded.  Set `field.tag` with
 PPB.  After a call to `ppb_prescan`, `field.m` holds aggregate
 metadata (occurrence count, total/min/max payload bytes for
 length-prefixed fields) and `field.v` holds the last decoded value.
-Observe every field with `ppb_lexn`, which updates each `field.v`
-struct at most once per call.
+Use `ppb_lexn` to observe every field occurrence: it updates each
+`field.v` at most once per call.
 
 The field array *must be sorted* by `tag.bits` in ascending order.  Field
 number `-1` (i.e., `UINT64_MAX` cast to the field-number argument) is a
@@ -54,7 +61,7 @@ API (include/ppb/ppb.h)
 
 **Complexity**: Helper functions `ppb_zag` and `ppb_decode_varint`
 have a bounded runtime (asymptotically constant).  Both `ppb_prescan`
-and `ppb_lexn` run in Θ(n log m) where n is the number of top-level
+and `ppb_lexn` run in Θ(n log m) where n is the number of toplevel
 fields consumed and m is `num_fields`.  Runtime does *not* scale with
 payload sizes of length-prefixed fields -- that's what makes recursive
 descent on nested submessages practical.
