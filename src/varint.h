@@ -143,8 +143,8 @@ peek_varint(struct ppb_buf src, uint64_t *restrict OUT_varint)
         uint64_t high_bits = 128UL * (UINT64_MAX / UINT8_MAX);
         uint64_t stop_bits = high_bits & ~bits; /* looking for the first zero (now set) continuation bit. */
 
-       /* set the bits below the first 1 in `stop_bits`, and that first 1. */
-        uint64_t content_mask = (stop_bits - 1) ^ stop_bits;
+        /* any `stop_bits` is zero in `bits`, so their value in `content_mask` is irrelevant. */
+        uint64_t content_mask = stop_bits - 1;
 
         if (likely(stop_bits != 0))
         {
@@ -232,7 +232,8 @@ peek_tag(struct ppb_buf src, uint64_t *restrict OUT_tag)
         uint64_t high_bits = 128UL * (UINT64_MAX / UINT8_MAX);
         uint64_t stop_bits = high_bits & ~bits; /* looking for the first zero (now set) continuation bit. */
 
-        uint64_t content_mask = (stop_bits - 1) ^ stop_bits;
+        /* any `stop_bits` is zero in `bits`, so their value in `content_mask` is irrelevant. */
+        uint64_t content_mask = stop_bits - 1;
 
         if (unlikely(stop_bits == 0))
         {
