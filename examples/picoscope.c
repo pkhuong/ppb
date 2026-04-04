@@ -41,15 +41,8 @@ print_indent(size_t indent)
  * valid protobuf submessage (prescan consumes all bytes), 0 otherwise.
  */
 static size_t
-submessage_field_count(const struct ppb_buf payload)
+submessage_field_count(const struct ppb_buf payload, struct ppb_field fields[static NUM_FIELDS])
 {
-    struct ppb_field fields[NUM_FIELDS] = {
-        { .tag = PPB_TAG(-1, PPB_WIRE_VARINT) },
-        { .tag = PPB_TAG(-1, PPB_WIRE_I64) },
-        { .tag = PPB_TAG(-1, PPB_WIRE_LEN) },
-        { .tag = PPB_TAG(-1, PPB_WIRE_I32) },
-    };
-
     if (payload.size == 0)
     {
         return 0;
@@ -277,31 +270,32 @@ format_len_field(uint64_t field_num, const struct ppb_field_value *v, size_t ind
     }
 
     /* 1. Try submessage. */
-    size_t nfields = submessage_field_count(payload);
+    struct ppb_field fields[NUM_FIELDS] = {
+        { .tag = PPB_TAG(-1, PPB_WIRE_VARINT) },
+        { .tag = PPB_TAG(-1, PPB_WIRE_I64) },
+        { .tag = PPB_TAG(-1, PPB_WIRE_LEN) },
+        { .tag = PPB_TAG(-1, PPB_WIRE_I32) },
+    };
+
+    size_t nfields = submessage_field_count(payload, fields);
     if (nfields > 0)
     {
         /*
-         * In compat mode, inline single-field submessages
-         * to match protoscope (e.g., "2: {1: 7}").
+         * In compat mode, inline single-field submessages to match
+         * protoscope (e.g., "2: {1: 7}").  We use the prescanned
+         * value directly because there's no ambiguity.
          */
         if (g_compat_mode && nfields == 1)
         {
-            struct ppb_field inner[NUM_FIELDS] = {
-                { .tag = PPB_TAG(-1, PPB_WIRE_VARINT) },
-                { .tag = PPB_TAG(-1, PPB_WIRE_I64) },
-                { .tag = PPB_TAG(-1, PPB_WIRE_LEN) },
-                { .tag = PPB_TAG(-1, PPB_WIRE_I32) },
-            };
-            struct ppb_buf copy = payload;
-            struct ppb_lexn_ret ret = ppb_lexn(&copy, NUM_FIELDS, inner, 1);
-
-            if (ret.status == PPB_OK && ret.field_range > 0)
+            for (size_t i = 0; i < NUM_FIELDS; i++)
             {
-                size_t iidx = ret.first_field;
-                struct ppb_field_value *iv = &inner[iidx].v;
+                if (fields[i].v.ptr == NULL)
+                    continue;
+
+                struct ppb_field_value *iv = &fields[i].v;
                 struct ppb_buf tag_buf = {
                     .buf = iv->ptr,
-                    .size = (const char *)copy.buf - (const char *)iv->ptr,
+                    .size = (const char *)payload.buf + payload.size - (const char *)iv->ptr,
                 };
                 enum ppb_error tag_err = PPB_OK;
                 uint64_t inner_num = ppb_decode_varint(&tag_buf, &tag_err) >> 3;
@@ -312,7 +306,7 @@ format_len_field(uint64_t field_num, const struct ppb_field_value *v, size_t ind
                 }
 
                 printf("%" PRIu64 ": {", field_num);
-                if (format_field(iidx, inner_num, iv, 0, /*newline=*/false) != 0)
+                if (format_field(i, inner_num, iv, 0, /*newline=*/false) != 0)
                 {
                     return 1;
                 }
