@@ -184,11 +184,7 @@ _IFDEF_BLANK_IFDEF_RE = re.compile(r"#[ \t]*ifdef[ \t]+(\w+)")
 
 
 def _scan_to_ifdef_blank_endif(source: str, start: int, trigger_id: str) -> int:
-    """Starting just after the newline of '#ifdef <trigger_id>', scan forward
-    to find the matching '#endif'.
-    Returns the position just after that '#endif' line's newline (or
-    len(source) if the file ends without one).
-    Raises ValueError on a nested conditional directive or missing '#endif'."""
+    """Scan from just after '#ifdef <trigger_id>' to its matching '#endif'; return position after it."""
     n = len(source)
     i = start
 
@@ -247,11 +243,7 @@ def _blank_non_code(source: str) -> str:
     def blank(start: int, end: int) -> None:
         result[start:end] = ["\n" if c == "\n" else " " for c in result[start:end]]
 
-    def skip_quoted(start: int, quote: str) -> int:
-        return _skip_quoted(source, n, start, quote)
-
     def find_assertion_length(pos: int) -> int:
-        """If an assert-like keyword begins at pos as a word token, return its length; else 0."""
         for kw in ("static_assert", "assert"):
             klen = len(kw)
             if source[pos : pos + klen] != kw:
@@ -317,7 +309,7 @@ def _blank_non_code(source: str) -> str:
                 continue
 
         if source[i] in ('"', "'"):
-            j = skip_quoted(i, source[i])
+            j = _skip_quoted(source, n, i, source[i])
             blank(i, j)
             i = j
             continue
@@ -334,7 +326,7 @@ def _blank_non_code(source: str) -> str:
                 j += 1
                 while j < n and depth > 0:
                     if source[j] in ('"', "'"):
-                        j = skip_quoted(j, source[j])
+                        j = _skip_quoted(source, n, j, source[j])
                     elif source[j] == "(":
                         depth += 1
                         j += 1
