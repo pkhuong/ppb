@@ -439,15 +439,8 @@ def find_re_mutations(
     mutations: list[Mutation] = []
 
     for info in infos:
-        path, source, code, line_starts = (
-            info.path,
-            info.source,
-            info.code,
-            info.line_starts,
-        )
-
         for pattern, replacement, rule_name in operators:
-            for m in re.finditer(pattern, code):
+            for m in re.finditer(pattern, info.code):
                 # If the pattern has a capture group, group 1 is the actual
                 # token to replace (lookarounds surround it).  Otherwise use
                 # the entire match.
@@ -456,14 +449,12 @@ def find_re_mutations(
                 else:
                     start, end = m.start(0), m.end(0)
 
-                original_text = source[start:end]
-                key = (start, replacement)
-                line_no, col = _offset_to_linecol(start, line_starts)
+                line_no, col = _offset_to_linecol(start, info.line_starts)
                 mutations.append(
                     Mutation(
-                        file=path,
+                        file=info.path,
                         offset=start,
-                        original=original_text,
+                        original=info.source[start:end],
                         replacement=replacement,
                         line_no=line_no,
                         col=col,
@@ -481,18 +472,11 @@ def find_line_deletions(infos: list[SourceInfo]) -> list[Mutation]:
     mutations: list[Mutation] = []
 
     for info in infos:
-        path, source, code, line_starts = (
-            info.path,
-            info.source,
-            info.code,
-            info.line_starts,
-        )
+        for line_idx, line_start in enumerate(info.line_starts):
+            newline_pos = info.source.find("\n", line_start)
+            content_end = newline_pos if newline_pos != -1 else len(info.source)
 
-        for line_idx, line_start in enumerate(line_starts):
-            newline_pos = source.find("\n", line_start)
-            content_end = newline_pos if newline_pos != -1 else len(source)
-
-            code_line = code[line_start:content_end]
+            code_line = info.code[line_start:content_end]
             code_content = code_line.strip()
             if not code_content:
                 continue
@@ -502,16 +486,16 @@ def find_line_deletions(infos: list[SourceInfo]) -> list[Mutation]:
                 continue  # one-indent return, probably unconditional
             if all(c in _STRUCTURAL_CHARS for c in code_content):
                 continue
-            line_text = source[line_start:content_end]
+            line_text = info.source[line_start:content_end]
             lstripped = line_text.lstrip()
             leading_len = len(line_text) - len(lstripped)
             content_start = line_start + leading_len
             content_stop = content_start + len(lstripped.rstrip())
             mutations.append(
                 Mutation(
-                    file=path,
+                    file=info.path,
                     offset=content_start,
-                    original=source[content_start:content_stop],
+                    original=info.source[content_start:content_stop],
                     replacement="",
                     line_no=line_idx + 1,
                     col=leading_len,
@@ -529,22 +513,15 @@ def find_if_force_mutations(infos: list[SourceInfo]) -> list[Mutation]:
     mutations: list[Mutation] = []
 
     for info in infos:
-        path, source, code, line_starts = (
-            info.path,
-            info.source,
-            info.code,
-            info.line_starts,
-        )
-
-        for m in _IF_RE.finditer(code):
+        for m in _IF_RE.finditer(info.code):
             paren_start = m.end() - 1
-            paren_end = _find_matching_paren(code, paren_start)
+            paren_end = _find_matching_paren(info.code, paren_start)
             if paren_end is None:
                 continue
 
-            condition = source[paren_start + 1 : paren_end - 1]
-            original = source[paren_start:paren_end]
-            line_no, col = _offset_to_linecol(paren_start, line_starts)
+            condition = info.source[paren_start + 1 : paren_end - 1]
+            original = info.source[paren_start:paren_end]
+            line_no, col = _offset_to_linecol(paren_start, info.line_starts)
 
             for replacement, gen in (
                 (f"(1 | !!({condition}))", "if:force_true"),
@@ -552,7 +529,7 @@ def find_if_force_mutations(infos: list[SourceInfo]) -> list[Mutation]:
             ):
                 mutations.append(
                     Mutation(
-                        file=path,
+                        file=info.path,
                         offset=paren_start,
                         original=original,
                         replacement=replacement,
@@ -563,12 +540,12 @@ def find_if_force_mutations(infos: list[SourceInfo]) -> list[Mutation]:
                 )
 
             if_start = m.start()
-            if_line_no, if_col = _offset_to_linecol(if_start, line_starts)
+            if_line_no, if_col = _offset_to_linecol(if_start, info.line_starts)
             mutations.append(
                 Mutation(
-                    file=path,
+                    file=info.path,
                     offset=if_start,
-                    original=source[if_start:paren_end],
+                    original=info.source[if_start:paren_end],
                     replacement="",
                     line_no=if_line_no,
                     col=if_col,
@@ -586,28 +563,21 @@ def find_while_mutations(infos: list[SourceInfo]) -> list[Mutation]:
     mutations: list[Mutation] = []
 
     for info in infos:
-        path, source, code, line_starts = (
-            info.path,
-            info.source,
-            info.code,
-            info.line_starts,
-        )
-
-        for m in _WHILE_RE.finditer(code):
+        for m in _WHILE_RE.finditer(info.code):
             while_start = m.start()
             paren_start = m.end() - 1
-            paren_end = _find_matching_paren(code, paren_start)
+            paren_end = _find_matching_paren(info.code, paren_start)
             if paren_end is None:
                 continue
 
-            condition = source[paren_start + 1 : paren_end - 1]
-            line_no, col = _offset_to_linecol(while_start, line_starts)
+            condition = info.source[paren_start + 1 : paren_end - 1]
+            line_no, col = _offset_to_linecol(while_start, info.line_starts)
 
             mutations.append(
                 Mutation(
-                    file=path,
+                    file=info.path,
                     offset=while_start,
-                    original=source[while_start:paren_end],
+                    original=info.source[while_start:paren_end],
                     replacement="",
                     line_no=line_no,
                     col=col,
@@ -617,9 +587,9 @@ def find_while_mutations(infos: list[SourceInfo]) -> list[Mutation]:
 
             mutations.append(
                 Mutation(
-                    file=path,
+                    file=info.path,
                     offset=paren_start,
-                    original=source[paren_start:paren_end],
+                    original=info.source[paren_start:paren_end],
                     replacement=f"(0 & !!({condition}))",
                     line_no=line_no,
                     col=col,
