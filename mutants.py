@@ -700,7 +700,7 @@ def _evaluate_one_mutant(sources: dict[Path, str], mutation: Mutation) -> str:
         return _run_cmd(TEST_CMD)
     finally:
         subprocess.run(
-            ["git", "checkout", "--", mutation.file],
+            ["git", "checkout", "--", str(mutation.file)],
             cwd=REPO_ROOT,
             check=True,
             capture_output=True,
