@@ -35,7 +35,7 @@ FRAMA_C_COMMON := frama-c \
 	-session /workspace/frama-c/frama-c \
 	-lib-entry \
 	-constfold \
-	-cpp-extra-args="-I include -isystem stubs-for-frama-c -std=c2x" -machdep=gcc_x86_64 -std=c23 \
+	-cpp-extra-args="-I include -isystem stubs-for-frama-c -std=c2x -DNDEBUG" -machdep=gcc_x86_64 -std=c23 \
 	-cache-size 8 -memory-footprint 8 \
 	-instantiate \
 	$(FRAMA_C_TARGET)
