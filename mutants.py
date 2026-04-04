@@ -149,7 +149,7 @@ def parse_annotations(sources: dict[Path, str]) -> Annotations:
 
 
 def is_expected_survivor(m: "Mutation", ann: Annotations) -> bool:
-    if m.annotation_key() in ann.expected_survivors:
+    if (m.file, m.line_no, m.original, m.replacement) in ann.expected_survivors:
         return True
     patterns = ann.expected_generators.get((m.file, m.line_no), ())
     return any(pat in gen for pat in patterns for gen in m.generators)
@@ -380,9 +380,6 @@ class Mutation:
             other.line_no,
             other.col,
         )
-
-    def annotation_key(self) -> tuple[Path, int, str, str]:
-        return (self.file, self.line_no, self.original, self.replacement)
 
     def label(self) -> str:
         rel = self.file.relative_to(REPO_ROOT)
