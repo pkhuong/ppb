@@ -217,6 +217,74 @@ test_decode_varint(void)
 }
 
 static void
+test_peek_varint_error(void)
+{
+    printf("test_peek_varint_error\n");
+
+    /* Should zero out `val` on error */
+    {
+        uint8_t data[] = { 0x80 };
+        struct ppb_buf buf = make_buf(data, sizeof(data));
+        uint64_t val = 42;
+        int rc = peek_varint(buf, &val);
+        CHECK(rc == PPB_ERROR_TRUNCATED_DATA);
+        CHECK(val == 0);
+    }
+
+    {
+        uint8_t data[] = { 0x80 };
+        struct ppb_buf buf = make_buf(data, sizeof(data));
+        uint64_t val = 42;
+        int rc = peek_varint_slow(buf, &val, 7, PPB_ERROR_CORRUPT_VARINT);
+        CHECK(rc == PPB_ERROR_TRUNCATED_DATA);
+        CHECK(val == 0);
+    }
+
+    {
+        uint8_t data[] = { 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80 };
+        struct ppb_buf buf = make_buf(data, sizeof(data));
+        uint64_t val = 42;
+        int rc = peek_varint(buf, &val);
+        CHECK(rc == PPB_ERROR_TRUNCATED_DATA);
+        CHECK(val == 0);
+    }
+
+    {
+        uint8_t data[] = { 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80 };
+        struct ppb_buf buf = make_buf(data, sizeof(data));
+        uint64_t val = 42;
+        int rc = peek_varint_slow(buf, &val, 7, PPB_ERROR_CORRUPT_VARINT);
+        CHECK(rc == PPB_ERROR_TRUNCATED_DATA);
+        CHECK(val == 0);
+    }
+}
+
+static void
+test_peek_tag_error(void)
+{
+    printf("test_peek_tag_error\n");
+
+    /* Should zero out `val` on error */
+    {
+        uint8_t data[] = { 0x80 };
+        struct ppb_buf buf = make_buf(data, sizeof(data));
+        uint64_t val = 123;
+        int rc = peek_tag(buf, &val);
+        CHECK(rc == PPB_ERROR_TRUNCATED_DATA);
+        CHECK(val == 0);
+    }
+
+    {
+        uint8_t data[] = { 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80 };
+        struct ppb_buf buf = make_buf(data, sizeof(data));
+        uint64_t val = 123;
+        int rc = peek_tag(buf, &val);
+        CHECK(rc == PPB_ERROR_CORRUPT_TAG);
+        CHECK(val == 0);
+    }
+}
+
+static void
 test_prescan_known_fields(void)
 {
     printf("test_prescan_known_fields\n");
@@ -1054,6 +1122,8 @@ main(void)
     test_zag();
     test_peekn();
     test_decode_varint();
+    test_peek_varint_error();
+    test_peek_tag_error();
 
     test_prescan_known_fields();
     test_prescan_repeated_fields();
