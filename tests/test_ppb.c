@@ -360,6 +360,19 @@ test_prescan_validation(void)
         CHECK(ret == PPB_ERROR_UNSORTED_FIELD_ARR);
     }
 
+    /* Unsorted field after sorted run. */
+    {
+        struct ppb_field fields[4];
+        zero_fields(4, fields);
+        fields[0].tag = PPB_TAG(1, PPB_WIRE_VARINT);
+        fields[1].tag = PPB_TAG(2, PPB_WIRE_VARINT);
+        fields[2].tag = PPB_TAG(4, PPB_WIRE_VARINT);
+        fields[3].tag = PPB_TAG(3, PPB_WIRE_VARINT);
+
+        ptrdiff_t ret = ppb_prescan(buf, 4, fields, SIZE_MAX);
+        CHECK(ret == PPB_ERROR_UNSORTED_FIELD_ARR);
+    }
+
     /* Repeated field. */
     {
         struct ppb_field fields[2];
