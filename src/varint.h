@@ -5,6 +5,10 @@
 
 #ifdef __x86_64__
 #include <immintrin.h>
+
+#ifndef __BMI2__
+#warning "x86-64 build but BMI2 not enabled, this will be slower than it most likely should"
+#endif
 #endif
 
 #include "buf.h"
