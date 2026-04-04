@@ -342,6 +342,32 @@ test_prescan_repeated_fields(void)
 }
 
 static void
+test_prescan_repeated_len(void)
+{
+    printf("test_prescan_repeated_len\n");
+
+    static const uint8_t wire[] = {
+        0x0a, 0x00,        /* field 1 len 0 */
+        0x0a, 0x03, 0x00, 0x01, 0x02,  /* field 1 len 3 */
+        0x0a, 0x02, 0x00, 0x01,  /* field 1 len 2 */
+        0x0a, 0x00,        /* field 1 len 0 */
+    };
+
+    struct ppb_field fields[1];
+    zero_fields(1, fields);
+    fields[0].tag = PPB_TAG(1, PPB_WIRE_LEN);
+
+    struct ppb_buf buf = make_buf(wire, sizeof(wire));
+    ptrdiff_t ret = ppb_prescan(buf, 1, fields, SIZE_MAX);
+
+    CHECK(ret == (ptrdiff_t)sizeof(wire));
+    CHECK(fields[0].m.num_occurrences == 4);
+    CHECK(fields[0].m.total_bytes == 5);
+    CHECK(fields[0].m.min_nonzero_bytes == 2);
+    CHECK(fields[0].m.max_bytes == 3);
+}
+
+static void
 test_prescan_validation(void)
 {
     printf("test_prescan_validation\n");
@@ -1140,6 +1166,7 @@ main(void)
 
     test_prescan_known_fields();
     test_prescan_repeated_fields();
+    test_prescan_repeated_len();
     test_prescan_validation();
     test_prescan_sentinel_early_return();
     test_prescan_unknown_fields();
