@@ -9,6 +9,7 @@
 !/*.md
 !/*.mk
 !/*.sh
+!/*.py
 
 !/include/
 !/include/ppb/
