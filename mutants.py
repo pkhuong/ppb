@@ -664,11 +664,11 @@ def _run_cmd(cmd: list[str]) -> str:
         proc = subprocess.Popen(
             cmd,
             cwd=REPO_ROOT,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
             start_new_session=True,  # XXX: this also means C-c won't propagate :\
         )
-        proc.communicate(timeout=TEST_TIMEOUT)
+        proc.wait(timeout=TEST_TIMEOUT)
     except subprocess.TimeoutExpired:
         try:
             os.killpg(proc.pid, signal.SIGTERM)
@@ -679,7 +679,6 @@ def _run_cmd(cmd: list[str]) -> str:
             os.killpg(proc.pid, signal.SIGKILL)
         except ProcessLookupError:
             pass
-        proc.communicate()
         proc = None
         return "timeout"
     finally:
