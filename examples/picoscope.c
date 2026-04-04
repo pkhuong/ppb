@@ -499,6 +499,9 @@ disassemble(struct ppb_buf buf, size_t indent)
             return 1;
         }
 
+        assert(prescan_m[i].num_occurrences == fields[i].m.num_occurrences &&
+            "fields[i].m.num_occurrences must match prescan after lexn");
+
         if (i == FIELD_LEN)
         {
             if (prescan_m[i].total_bytes != lexn_m[i].total_bytes)
@@ -510,6 +513,9 @@ disassemble(struct ppb_buf buf, size_t indent)
                 return 1;
             }
 
+            assert(prescan_m[i].total_bytes == fields[i].m.total_bytes &&
+                "fields[i].m.total_bytes must match prescan after lexn");
+
             if (prescan_m[i].min_nonzero_bytes != lexn_m[i].min_nonzero_bytes)
             {
                 fprintf(stderr,
@@ -519,6 +525,9 @@ disassemble(struct ppb_buf buf, size_t indent)
                 return 1;
             }
 
+            assert(prescan_m[i].min_nonzero_bytes == fields[i].m.min_nonzero_bytes &&
+                "fields[i].m.min_nonzero_bytes must match prescan after lexn");
+
             if (prescan_m[i].max_bytes != lexn_m[i].max_bytes)
             {
                 fprintf(stderr,
@@ -527,6 +536,9 @@ disassemble(struct ppb_buf buf, size_t indent)
                     prescan_m[i].max_bytes, lexn_m[i].max_bytes);
                 return 1;
             }
+
+            assert(prescan_m[i].max_bytes == fields[i].m.max_bytes &&
+                "fields[i].m.max_bytes must match prescan after lexn");
         }
     }
 
