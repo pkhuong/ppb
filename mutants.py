@@ -100,6 +100,7 @@ painful.  That's not the case for ppb.
 
 import argparse
 import bisect
+from concurrent.futures import ThreadPoolExecutor
 import os
 import re
 import tempfile
@@ -790,6 +791,7 @@ def evaluate_mutants(
     sources: dict[Path, str],
     ann: Annotations,
     maybe_bwrap: str | None = None,
+    nproc: int = 1,
 ) -> EvalResults:
     survived: list[Mutation] = []
     triaged: list[Mutation] = []
@@ -800,27 +802,28 @@ def evaluate_mutants(
         evaluator = lambda m: _evaluate_one_mutant_bwrap(sources, m, maybe_bwrap)
     else:
         evaluator = lambda m: _evaluate_one_mutant(sources, m)
-    for idx, m in enumerate(mutations, 1):
-        outcome = evaluator(m)
-        counts[outcome] += 1
-        if outcome == "passed":
-            if is_expected_survivor(m, ann):
-                tag = "survived(expected)"
-                expected_survived.append(m)
-            elif (m.file, m.line_no) in ann.triaged_lines:
-                tag = "triaged"
-                triaged.append(m)
+    with ThreadPoolExecutor(max_workers=nproc) as executor:
+        outcomes = executor.map(evaluator, mutations)
+        for idx, (m, outcome) in enumerate(zip(mutations, outcomes), 1):
+            counts[outcome] += 1
+            if outcome == "passed":
+                if is_expected_survivor(m, ann):
+                    tag = "survived(expected)"
+                    expected_survived.append(m)
+                elif (m.file, m.line_no) in ann.triaged_lines:
+                    tag = "triaged"
+                    triaged.append(m)
+                else:
+                    tag = "SURVIVED"
+                    survived.append(m)
+            elif outcome == "stillborn":
+                tag = "stillborn"
             else:
-                tag = "SURVIVED"
-                survived.append(m)
-        elif outcome == "stillborn":
-            tag = "stillborn"
-        else:
-            if is_expected_survivor(m, ann):
-                tag = f"detected(UNEXPECTED, {outcome})"
-            else:
-                tag = f"detected({outcome})"
-        print(f"[{idx:4d}/{len(mutations)}] {tag:22s}  {m.label()}", flush=True)
+                if is_expected_survivor(m, ann):
+                    tag = f"detected(UNEXPECTED, {outcome})"
+                else:
+                    tag = f"detected({outcome})"
+            print(f"[{idx:4d}/{len(mutations)}] {tag:22s}  {m.label()}", flush=True)
 
     return EvalResults(
         survived=tuple(survived),
@@ -1031,6 +1034,15 @@ def main() -> None:
         metavar="EXE",
         help="use bwrap to sandbox each mutant; no source files are modified (default exe: bwrap)",
     )
+    parser.add_argument(
+        "-j",
+        nargs="?",
+        type=int,
+        const=None,
+        default=1,
+        metavar="N",
+        help="parallel evaluation workers (default: 1; -j alone uses min(16, cpu_count)); requires --bwrap for N > 1",
+    )
     args = parser.parse_args()
 
     if args.repo_root is not None:
@@ -1041,6 +1053,10 @@ def main() -> None:
         BUILD_CMD = shlex.split(args.build_cmd)
     if args.test_cmd is not None:
         TEST_CMD = shlex.split(args.test_cmd)
+
+    nproc = min(16, len(os.sched_getaffinity(0)) or 1) if args.j is None else args.j
+    if nproc > 1 and args.bwrap is None:
+        sys.exit("ERROR: -j > 1 requires --bwrap")
 
     files = _expand_files(args.files if args.files else DEFAULT_FILES, REPO_ROOT)
     _check_files_exist(files)
@@ -1078,7 +1094,9 @@ def main() -> None:
         sys.exit(f"Smoke test: baseline evaluation FAILED ({outcome})")
     print("─── SMOKE TESTING OK " + "─" * 56 + "\n")
 
-    results = evaluate_mutants(mutations, sources, ann, maybe_bwrap=args.bwrap)
+    results = evaluate_mutants(
+        mutations, sources, ann, maybe_bwrap=args.bwrap, nproc=nproc
+    )
     sys.exit(_print_eval_results(results))
 
 
