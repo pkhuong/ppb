@@ -21,7 +21,7 @@
 static inline uint64_t
 squish_varint(uint64_t x)
 {
-#ifdef __x86_64__
+#ifdef __BMI2__
     return _pext_u64(x, 127UL * (UINT64_MAX / UINT8_MAX));
 #else
     /* generate 4x pairs of 14 bits every 16 */

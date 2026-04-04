@@ -2,6 +2,8 @@
 #include <limits.h>
 #include <stdint.h>
 
+#define __BMI2__
+
 /*@ terminates \true;
   @ assigns \result \from a, mask;
   @ exits \false;
