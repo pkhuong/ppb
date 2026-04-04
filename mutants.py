@@ -693,35 +693,41 @@ def _run_cmd(cmd: list[str], *, inherit_streams: bool = False) -> str:
 
 
 def _evaluate_one_mutant(
-    sources: dict[Path, str], mutation: Mutation, *, inherit_streams: bool = False
+    sources: dict[Path, str],
+    mutation: Mutation | None,
+    *,
+    inherit_streams: bool = False,
 ) -> str:
-    mutant = apply_mutation(sources[mutation.file], mutation)
-    mutation.file.write_text(mutant)
     try:
+        if mutation is not None:
+            mutant = apply_mutation(sources[mutation.file], mutation)
+            mutation.file.write_text(mutant)
         build = _run_cmd(BUILD_CMD, inherit_streams=inherit_streams)
         if build != "passed":
             return "stillborn" if build == "failed" else "timeout"
         return _run_cmd(TEST_CMD, inherit_streams=inherit_streams)
     finally:
-        subprocess.run(
-            ["git", "checkout", "--", str(mutation.file)],
-            cwd=REPO_ROOT,
-            check=True,
-            capture_output=True,
-        )
+        if mutation is not None:
+            subprocess.run(
+                ["git", "checkout", "--", str(mutation.file)],
+                cwd=REPO_ROOT,
+                check=True,
+                capture_output=True,
+            )
 
 
 def _evaluate_one_mutant_bwrap(
     sources: dict[Path, str],
-    mutation: Mutation,
+    mutation: Mutation | None,
     bwrap: str = "bwrap",
     *,
     inherit_streams: bool = False,
 ) -> str:
     with tempfile.NamedTemporaryFile(mode="w") as tmp:
-        mutant = apply_mutation(sources[mutation.file], mutation)
-        tmp.write(mutant)
-        tmp.flush()
+        if mutation is not None:
+            mutant = apply_mutation(sources[mutation.file], mutation)
+            tmp.write(mutant)
+            tmp.flush()
 
         # Build and test in one shell command.
         # Exit codes: 2 = stillborn (build failed), 0 = passed, 1 = failed,
@@ -750,7 +756,8 @@ def _evaluate_one_mutant_bwrap(
             "--setenv", "XDG_RUNTIME_DIR", "/tmp",
             "--overlay-src", str(REPO_ROOT),
             "--tmp-overlay", str(REPO_ROOT),  # writable tmpfs overlay for build artifacts
-            "--bind", tmp.name, str(mutation.file),  # overlay mutated source file
+            # bind mutated source file on top of original
+            *(["--bind", tmp.name, str(mutation.file)] if mutation is not None else []),
             "--",
             "sh", "-c", shell_cmd,
             # fmt: on
@@ -1056,6 +1063,20 @@ def main() -> None:
     if args.dry_run:
         _print_dry_run(mutations, ann)
         return
+
+    print("\n─── SMOKE TESTING " + "─" * 59, flush=True)
+    build_outcome = _run_cmd(BUILD_CMD, inherit_streams=True)
+    if build_outcome != "passed":
+        sys.exit(f"Smoke test: build FAILED ({build_outcome})")
+    if args.bwrap is not None:
+        outcome = _evaluate_one_mutant_bwrap(
+            sources, None, args.bwrap, inherit_streams=True
+        )
+    else:
+        outcome = _evaluate_one_mutant(sources, None, inherit_streams=True)
+    if outcome != "passed":
+        sys.exit(f"Smoke test: baseline evaluation FAILED ({outcome})")
+    print("─── SMOKE TESTING OK " + "─" * 56 + "\n")
 
     results = evaluate_mutants(mutations, sources, ann, maybe_bwrap=args.bwrap)
     sys.exit(_print_eval_results(results))
