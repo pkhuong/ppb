@@ -807,19 +807,6 @@ def _expand_files(patterns: list[str], repo_root: Path) -> list[Path]:
     return result
 
 
-def _check_files_exist(files: list[Path]) -> None:
-    for f in files:
-        if not f.exists():
-            sys.exit(f"ERROR: {f} does not exist")
-
-
-def _dump_code(infos: list[SourceInfo]) -> None:
-    for info in infos:
-        if len(infos) > 1:
-            print(f"=== {info.path.relative_to(REPO_ROOT)} ===")
-        print(info.code, end="")
-
-
 def _check_clean_tree(files: list[Path], warn_only: bool = False) -> None:
     paths = ["--"] + [str(f) for f in files]
     for cmd in (
@@ -838,12 +825,6 @@ def _check_clean_tree(files: list[Path], warn_only: bool = False) -> None:
                 "ERROR: target files have uncommitted or staged changes.\n"
                 "Commit or stash your changes before running mutation testing."
             )
-
-
-def _print_dry_run(mutations: list[Mutation], ann: Annotations) -> None:
-    for m in mutations:
-        known = "(expected)" if is_expected_survivor(m, ann) else ""
-        print(f"  {m.label()}  {known}".rstrip())
 
 
 def _print_eval_results(results: EvalResults) -> int:
@@ -1021,7 +1002,9 @@ def main() -> None:
         sys.exit("ERROR: -j > 1 requires --bwrap")
 
     files = _expand_files(args.files if args.files else DEFAULT_FILES, REPO_ROOT)
-    _check_files_exist(files)
+    for f in files:
+        if not f.exists():
+            sys.exit(f"ERROR: {f} does not exist")
 
     if not args.dry_run and not args.dump_masked_code:
         _check_clean_tree(files, warn_only=args.bwrap is not None)
@@ -1031,7 +1014,10 @@ def main() -> None:
     sources: dict[Path, str] = {f: f.read_text() for f in files}
     infos = prepare_sources(sources)
     if args.dump_masked_code:
-        _dump_code(infos)
+        for info in infos:
+            if len(infos) > 1:
+                print(f"=== {info.path.relative_to(REPO_ROOT)} ===")
+            print(info.code, end="")
         return
 
     mutations = generate_mutations(infos, operators, args.delete)
@@ -1039,7 +1025,9 @@ def main() -> None:
     print(f"Found {len(mutations)} mutation(s) across {len(files)} file(s).")
 
     if args.dry_run:
-        _print_dry_run(mutations, ann)
+        for m in mutations:
+            known = "(expected)" if is_expected_survivor(m, ann) else ""
+            print(f"  {m.label()}  {known}".rstrip())
         return
 
     print("\n─── SMOKE TESTING " + "─" * 59, flush=True)
