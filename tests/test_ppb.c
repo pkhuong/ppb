@@ -383,7 +383,10 @@ test_prescan_corrupt_tag(void)
 {
     printf("test_prescan_corrupt_tag\n");
 
-    static const uint8_t wire[] = { 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff };
+    static const uint8_t wire[] = {
+        0x80, 0xff, 0xff, 0xff, 0x80, 0x80, 0x80, 0x80, /* overlong tag */
+        0x80, 0x80, 0x80, 0x00, /* random varint */
+    };
     struct ppb_buf buf = make_buf(wire, sizeof(wire));
 
     struct ppb_field fields[1];
