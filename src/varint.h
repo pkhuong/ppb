@@ -136,7 +136,6 @@ peek_varint_slow(struct ppb_buf src, uint64_t *restrict OUT_varint, size_t limb_
 static inline int
 peek_varint(struct ppb_buf src, uint64_t *restrict OUT_varint)
 {
-    *OUT_varint = 0;
     if (likely(src.size >= sizeof(uint64_t)))
     {
         uint64_t bits = buf_peek64(src);
