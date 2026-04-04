@@ -73,6 +73,52 @@ test_zag(void)
 }
 
 static void
+test_peekn(void)
+{
+    printf("test_peekn\n");
+
+    {
+        uint8_t data[] = { 0x13 };
+        struct ppb_buf buf = make_buf(data, sizeof(data));
+        CHECK(buf_peek8(buf) == 0x13U);
+    }
+
+    {
+        uint8_t data[] = { 0x80 };
+        struct ppb_buf buf = make_buf(data, sizeof(data));
+        /* shouldn't sign extend */
+        CHECK(buf_peek8(buf) == 0x80U);
+    }
+
+    /* should reassemble in little-endian */
+    {
+        uint8_t data[] = { 0x01, 0x02, 0x03, 0x04 };
+        struct ppb_buf buf = make_buf(data, sizeof(data));
+        CHECK(buf_peek32(buf) == 0x04030201UL);
+    }
+
+    {
+        uint8_t data[] = { 0xf1, 0x02, 0x03, 0xf4 };
+        struct ppb_buf buf = make_buf(data, sizeof(data));
+        /* don't sign-extend */
+        CHECK(buf_peek32(buf) == 0xf40302f1UL);
+    }
+
+    {
+        uint8_t data[] = { 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08 };
+        struct ppb_buf buf = make_buf(data, sizeof(data));
+        CHECK(buf_peek64(buf) == 0x0807060504030201UL);
+    }
+
+    {
+        uint8_t data[] = { 0x01, 0x02, 0xf3, 0x04, 0x05, 0x06, 0xf7, 0x88 };
+        struct ppb_buf buf = make_buf(data, sizeof(data));
+        /* don't sign-extend */
+        CHECK(buf_peek64(buf) == 0x88f7060504f30201UL);
+    }
+}
+
+static void
 test_decode_varint(void)
 {
     printf("test_decode_varint\n");
@@ -1006,6 +1052,7 @@ int
 main(void)
 {
     test_zag();
+    test_peekn();
     test_decode_varint();
 
     test_prescan_known_fields();
