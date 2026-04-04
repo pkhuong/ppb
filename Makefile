@@ -42,13 +42,13 @@ build/libppb.a: $(patsubst %,%.hash,$(STATIC_OBJS)) | $(STATIC_OBJS)
 	ar rcs $@ $(STATIC_OBJS)
 
 build/libppb.so: $(patsubst %,%.hash,$(SHARED_OBJS)) | $(SHARED_OBJS)
-	$(CC) -shared -Wl,-soname,libppb.so -Wl,--no-undefined -o $@ $(SHARED_OBJS)
+	$(CC) $(COMMON_FLAGS) -shared -Wl,-soname,libppb.so -Wl,--no-undefined -o $@ $(SHARED_OBJS)
 
-build/picoscope: examples/picoscope.c build/libppb.a
+build/picoscope: examples/picoscope.c build/libppb.a FORCE
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -o $@ $< build/libppb.a
 
-build/test_ppb: tests/test_ppb.c src/ppb.c include/ppb/ppb.h $(wildcard src/*.h)
+build/test_ppb: tests/test_ppb.c FORCE
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -I. -o $@ tests/test_ppb.c src/ppb.c
 
