@@ -102,6 +102,7 @@ import argparse
 import bisect
 import os
 import re
+import tempfile
 import shlex
 import signal
 import subprocess
@@ -707,18 +708,85 @@ def _evaluate_one_mutant(sources: dict[Path, str], mutation: Mutation) -> str:
         )
 
 
+def _evaluate_one_mutant_bwrap(
+    sources: dict[Path, str], mutation: Mutation, bwrap: str = "bwrap"
+) -> str:
+    with tempfile.NamedTemporaryFile(mode="w") as tmp:
+        mutant = apply_mutation(sources[mutation.file], mutation)
+        tmp.write(mutant)
+        tmp.flush()
+
+        # Build and test in one shell command.
+        # Exit codes: 2 = stillborn (build failed), 0 = passed, 1 = failed,
+        # 124 = timeout (test timed out via the timeout(1) command).
+        # The if/elif/else normalises any other non-zero test exit code to 1.
+        shell_cmd = (
+            shlex.join(BUILD_CMD)
+            + " || exit 2; "
+            + f"timeout --kill-after={TEST_TIMEOUT / 10} {int(TEST_TIMEOUT)} "
+            + shlex.join(TEST_CMD)
+            + '; r=$?; if [ "$r" -eq 0 ]; then exit 0; elif [ "$r" -eq 124 ]; then exit 124; else exit 1; fi'
+        )
+        cmd = [
+            # fmt: off
+            bwrap,
+            "--die-with-parent",  # sandbox dies if the Python process does
+            "--unshare-pid",  # automatically reap children
+            "--new-session",  # sandboxed processes in their own session
+            "--ro-bind", "/", "/",  # entire root read-only
+            "--dev", "/dev",
+            "--proc", "/proc",
+            "--tmpfs", "/tmp",  # writable /tmp for ccache and other tools
+            "--setenv", "TMPDIR", "/tmp",
+            "--setenv", "TMP", "/tmp",
+            "--setenv", "TEMP", "/tmp",
+            "--setenv", "XDG_RUNTIME_DIR", "/tmp",
+            "--overlay-src", str(REPO_ROOT),
+            "--tmp-overlay", str(REPO_ROOT),  # writable tmpfs overlay for build artifacts
+            "--bind", tmp.name, str(mutation.file),  # overlay mutated source file
+            "--",
+            "sh", "-c", shell_cmd,
+            # fmt: on
+        ]
+
+        try:
+            r = subprocess.run(
+                cmd,
+                cwd=REPO_ROOT,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+                timeout=5 + 2 * TEST_TIMEOUT,
+            )
+        except subprocess.TimeoutExpired:
+            return "timeout"
+
+        if r.returncode == 0:
+            return "passed"
+        if r.returncode == 2:
+            return "stillborn"
+        if r.returncode == 124:
+            return "timeout"
+        return "failed"
+
+
 def evaluate_mutants(
     mutations: list[Mutation],
     sources: dict[Path, str],
     ann: Annotations,
+    maybe_bwrap: str | None = None,
 ) -> EvalResults:
     survived: list[Mutation] = []
     triaged: list[Mutation] = []
     expected_survived: list[Mutation] = []
     counts: dict[str, int] = {"passed": 0, "failed": 0, "timeout": 0, "stillborn": 0}
 
+    if maybe_bwrap is not None:
+        evaluator = lambda m: _evaluate_one_mutant_bwrap(sources, m, maybe_bwrap)
+    else:
+        evaluator = lambda m: _evaluate_one_mutant(sources, m)
     for idx, m in enumerate(mutations, 1):
-        outcome = _evaluate_one_mutant(sources, m)
+        outcome = evaluator(m)
         counts[outcome] += 1
         if outcome == "passed":
             if is_expected_survivor(m, ann):
@@ -772,7 +840,7 @@ def _dump_code(infos: list[SourceInfo]) -> None:
         print(info.code, end="")
 
 
-def _check_clean_tree(files: list[Path]) -> None:
+def _check_clean_tree(files: list[Path], warn_only: bool = False) -> None:
     paths = ["--"] + [str(f) for f in files]
     for cmd in (
         ["git", "diff", "--exit-code"],
@@ -780,6 +848,12 @@ def _check_clean_tree(files: list[Path]) -> None:
     ):
         r = subprocess.run(cmd + paths, cwd=REPO_ROOT, capture_output=True)
         if r.returncode != 0:
+            if warn_only:
+                print(
+                    "WARNING: target files have uncommitted or staged changes.",
+                    file=sys.stderr,
+                )
+                return
             sys.exit(
                 "ERROR: target files have uncommitted or staged changes.\n"
                 "Commit or stash your changes before running mutation testing."
@@ -934,6 +1008,14 @@ def main() -> None:
         metavar="CMD",
         help=f"shell command to run the test suite (default: {shlex.join(TEST_CMD)})",
     )
+    parser.add_argument(
+        "--bwrap",
+        nargs="?",
+        const="bwrap",
+        default=None,
+        metavar="EXE",
+        help="use bwrap to sandbox each mutant; no source files are modified (default exe: bwrap)",
+    )
     args = parser.parse_args()
 
     if args.repo_root is not None:
@@ -949,7 +1031,7 @@ def main() -> None:
     _check_files_exist(files)
 
     if not args.dry_run and not args.dump_masked_code:
-        _check_clean_tree(files)
+        _check_clean_tree(files, warn_only=args.bwrap is not None)
 
     operators = RE_REPLACEMENTS + (ARITH_RE_REPLACEMENTS if args.arith else [])
 
@@ -967,7 +1049,7 @@ def main() -> None:
         _print_dry_run(mutations, ann)
         return
 
-    results = evaluate_mutants(mutations, sources, ann)
+    results = evaluate_mutants(mutations, sources, ann, maybe_bwrap=args.bwrap)
     sys.exit(_print_eval_results(results))
 
 
