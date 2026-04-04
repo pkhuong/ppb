@@ -878,12 +878,8 @@ RE_REPLACEMENTS: list[tuple[str, str, str]] = [
     (r"!=", "==", "operator:!= -> =="),
     (r"&&", "||", "operator:&& -> ||"),
     (r"[|][|]", "&&", "operator:|| -> &&"),
-    # Negative lookbehind: not after <, >, =, !, -   (excludes <<, <=, ->, etc.)
-    # Negative lookahead:  not before = or <         (excludes <=, <<)
-    (r"(?<![<>=!-])(<)(?![<=])", ">", "operator:< -> >"),
-    # Negative lookbehind: not after -, <, >, =      (excludes ->, <<, >=, ==)
-    # Negative lookahead:  not before > or =         (excludes >>, >=)
-    (r"(?<![-<>=])(>)(?![>=])", "<", "operator:> -> <"),
+    (r"(?<![<>=!-])(<)(?![<=])", ">", "operator:< -> >"),  # not <<, <=, ->
+    (r"(?<![-<>=])(>)(?![>=])", "<", "operator:> -> <"),  # not >>, >=, ->
 ]
 
 # --arith: arithmetic, bitwise, and shift operators.  C's overloaded syntax
