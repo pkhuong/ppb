@@ -659,14 +659,15 @@ class EvalResults:
     triaged_lines: dict[tuple[Path, int], str]
 
 
-def _run_cmd(cmd: list[str]) -> str:
+def _run_cmd(cmd: list[str], *, inherit_streams: bool = False) -> str:
     proc = None
+    streams = None if inherit_streams else subprocess.DEVNULL
     try:
         proc = subprocess.Popen(
             cmd,
             cwd=REPO_ROOT,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+            stdout=streams,
+            stderr=streams,
             start_new_session=True,  # XXX: this also means C-c won't propagate :\
         )
         proc.wait(timeout=TEST_TIMEOUT)
@@ -691,14 +692,16 @@ def _run_cmd(cmd: list[str]) -> str:
     return "passed" if proc.returncode == 0 else "failed"
 
 
-def _evaluate_one_mutant(sources: dict[Path, str], mutation: Mutation) -> str:
+def _evaluate_one_mutant(
+    sources: dict[Path, str], mutation: Mutation, *, inherit_streams: bool = False
+) -> str:
     mutant = apply_mutation(sources[mutation.file], mutation)
     mutation.file.write_text(mutant)
     try:
-        build = _run_cmd(BUILD_CMD)
+        build = _run_cmd(BUILD_CMD, inherit_streams=inherit_streams)
         if build != "passed":
             return "stillborn" if build == "failed" else "timeout"
-        return _run_cmd(TEST_CMD)
+        return _run_cmd(TEST_CMD, inherit_streams=inherit_streams)
     finally:
         subprocess.run(
             ["git", "checkout", "--", str(mutation.file)],
@@ -709,7 +712,11 @@ def _evaluate_one_mutant(sources: dict[Path, str], mutation: Mutation) -> str:
 
 
 def _evaluate_one_mutant_bwrap(
-    sources: dict[Path, str], mutation: Mutation, bwrap: str = "bwrap"
+    sources: dict[Path, str],
+    mutation: Mutation,
+    bwrap: str = "bwrap",
+    *,
+    inherit_streams: bool = False,
 ) -> str:
     with tempfile.NamedTemporaryFile(mode="w") as tmp:
         mutant = apply_mutation(sources[mutation.file], mutation)
@@ -749,12 +756,13 @@ def _evaluate_one_mutant_bwrap(
             # fmt: on
         ]
 
+        streams = None if inherit_streams else subprocess.DEVNULL
         try:
             r = subprocess.run(
                 cmd,
                 cwd=REPO_ROOT,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
+                stdout=streams,
+                stderr=streams,
                 start_new_session=True,
                 timeout=5 + 2 * TEST_TIMEOUT,
             )
