@@ -344,21 +344,13 @@ def _blank_non_code(source: str) -> str:
     return "".join(result)
 
 
-def _build_line_index(source: str) -> tuple[int, ...]:
-    starts = [0]
-    for idx, ch in enumerate(source):
-        if ch == "\n":
-            starts.append(idx + 1)
-    return tuple(starts)
-
-
 def prepare_sources(sources: dict[Path, str]) -> list[SourceInfo]:
     return [
         SourceInfo(
             path=path,
             source=source,
             code=_blank_non_code(source),
-            line_starts=_build_line_index(source),
+            line_starts=(0,) + tuple(i + 1 for i, c in enumerate(source) if c == "\n"),
         )
         for path, source in sources.items()
     ]
