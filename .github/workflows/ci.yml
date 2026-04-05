@@ -1,0 +1,38 @@
+name:
+on: [push, pull_request]
+jobs:
+  x64-64-bmi:
+    runs-on: ubuntu-slim
+    steps:
+      - name: install deps
+        run: sudo apt-get update && sudo apt-get install -y gcovr
+      - name: checkout
+        uses: actions/checkout@v2
+      - name: build and test
+        run: make CC=gcc EXTRA_FLAGS=-mbmi2 test
+      - name: gather coverage
+        run: export EXTRA_FLAGS=-mbmi2 ; ./coverage.sh
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v5
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: "build/coverage/*"
+          gcov_include: "src/*.[ch]"
+
+  aarch64-vanilla:
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - name: install deps
+        run: sudo apt-get update && sudo apt-get install -y gcovr
+      - name: checkout
+        uses: actions/checkout@v2
+      - name: build and test
+        run: make CC=gcc test
+      - name: gather coverage
+        run: ./coverage.sh
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v5
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: "build/coverage/*"
+          gcov_include: "src/*.[ch]"
