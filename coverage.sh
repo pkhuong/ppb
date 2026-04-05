@@ -5,7 +5,7 @@ COVDIR=build/coverage
 EXTRA_FLAGS="${EXTRA_FLAGS:-}"
 
 rm -rf "$COVDIR"
-mkdir -p "$COVDIR"
+mkdir -p "$COVDIR/report"
 
 # Build picoscope with coverage instrumentation (bypass ccache).
 # Compile objects into COVDIR so .gcno/.gcda land together.
@@ -28,6 +28,6 @@ sh test_picoscope.sh "$COVDIR/picoscope"
 
 # Generate HTML report.
 gcovr --root . --object-directory "$COVDIR" \
-    --html-details "$COVDIR/index.html"
+    --html-details "$COVDIR/report/index.html"
 
-printf "\nCoverage report: %s/index.html\n" "$COVDIR"
+printf "\nCoverage report: %s/report/index.html\n" "$COVDIR"
