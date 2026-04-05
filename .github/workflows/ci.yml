@@ -1,7 +1,7 @@
 name:
 on: [push, pull_request]
 jobs:
-  run:
+  x64-64-bmi:
     runs-on: ubuntu-slim
     steps:
       - name: install deps
@@ -19,7 +19,7 @@ jobs:
           files: "build/coverage/*"
           gcov_include: "src/*.[ch]"
 
-  run:
+  aarch64-vanilla:
     runs-on: ubuntu-24.04-arm
     steps:
       - name: install deps
