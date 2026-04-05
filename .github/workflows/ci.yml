@@ -17,4 +17,5 @@ jobs:
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: build/coverage/*
-          gcov_include: stc/*.[ch]
+          gcov_include: src/*.[ch]
+          gcov_ignore: examples/*
