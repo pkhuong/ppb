@@ -15,19 +15,22 @@
 #include <stdio.h>
 #include <string.h>
 
-static int g_fail_count;
-static int g_check_count;
+static int g_fail_count = 0;
+static int g_check_count = 0;
 
-#define CHECK(cond)                                                           \
-    do                                                                        \
-    {                                                                         \
-        g_check_count++;                                                      \
-        if (!(cond))                                                          \
-        {                                                                     \
-            fprintf(stderr, "  FAIL %s:%d: %s\n", __FILE__, __LINE__, #cond); \
-            g_fail_count++;                                                   \
-        }                                                                     \
-    } while (0)
+static inline void
+check(bool passes, const char *file, int line, const char *cond)
+{
+    g_check_count++;
+    if (passes)
+        return;
+
+    fprintf(stderr, "  FAIL %s:%d: %s\n", file, line, cond);
+    g_fail_count++;
+    return;
+}
+
+#define CHECK(cond) check(!!(cond), __FILE__, __LINE__, #cond)
 
 static struct ppb_buf
 make_buf(const void *data, size_t size)
