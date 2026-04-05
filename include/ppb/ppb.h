@@ -13,8 +13,8 @@
  * strings, nested messages, or packed repeated fields), a caller can
  * easily pre-allocate storage for a message before `ppb_lexn`.
  *
- * The runtime complexity of `ppb_prescan` is `\Theta(n log m)`, where
- * `n` is the number of toplevel fields and `m` the number of
+ * The runtime complexity of `ppb_prescan` is `\Theta(m + n log m)`,
+ * where `n` is the number of toplevel fields and `m` the number of
  * `ppb_fields`, regardless of the actual size of the encoded bytes;
  * that's what makes it reasonble to "lex" toplevel fields only, and
  * recursively handle nested messages separately.
