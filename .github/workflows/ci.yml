@@ -1,4 +1,4 @@
-name: x86-64 BMI
+name:
 on: [push, pull_request]
 jobs:
   run:
@@ -19,9 +19,6 @@ jobs:
           files: "build/coverage/*"
           gcov_include: "src/*.[ch]"
 
-name: aarch64 vanilla
-on: [push, pull_request]
-jobs:
   run:
     runs-on: ubuntu-24.04-arm
     steps:
