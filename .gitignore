@@ -36,3 +36,7 @@
 !/testdata/invalid/
 !/testdata/invalid/*.hex
 !/testdata/invalid/*.expected-error
+
+!/.github
+!/.github/workflows/
+!/.github/workflows/ci.yml
