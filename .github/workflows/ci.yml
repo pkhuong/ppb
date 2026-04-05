@@ -16,7 +16,7 @@ jobs:
         uses: codecov/codecov-action@v5
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
-          files: "build/coverage/*"
+          files: "build/coverage/*.gc*"
           gcov_include: "src/*.[ch]"
 
   aarch64-vanilla:
@@ -34,5 +34,5 @@ jobs:
         uses: codecov/codecov-action@v5
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
-          files: "build/coverage/*"
+          files: "build/coverage/*.gc*"
           gcov_include: "src/*.[ch]"
