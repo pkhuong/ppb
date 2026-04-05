@@ -11,7 +11,7 @@ jobs:
       - name: build and test
         run: make CC=gcc EXTRA_FLAGS=-mbmi2 test
       - name: gather coverage
-        run: ./coverage.sh
+        run: EXTRA_FLAGS=-mbmi2 ./coverage.sh
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v5
         with:
