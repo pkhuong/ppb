@@ -40,3 +40,4 @@
 !/.github
 !/.github/workflows/
 !/.github/workflows/ci.yml
+!/.codecov.yml
