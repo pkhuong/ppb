@@ -282,6 +282,8 @@ ppb_prescan(const struct ppb_buf buf, const size_t num_fields,
     }
 
     struct ppb_field dummy = { 0 };
+    /* this one is hard to test, because it could just be forced to true. */
+    const bool has_catch_all = num_fields > 0 && (int64_t)tags[num_fields - 1].bits >> 3 < 0; /* mutant-skip */
 
     /*@ loop assigns i, fields[0..num_fields - 1], src, error, dummy;
       @ loop invariant 0 ≤ i ≤ max_lexed_fields;
@@ -320,7 +322,7 @@ ppb_prescan(const struct ppb_buf buf, const size_t num_fields,
             }
 
             /* See if we want to dump this in a catch-all field (branch is an optimization). */
-            if (num_fields > 0 && (int64_t)tags[num_fields - 1].bits >> 3 < 0) /* mutant-skip */
+            if (has_catch_all) /* mutant-skip */
             {
                 tag |= UINT64_MAX << 3; /* preserve the type, but otherwise all 1s. */
                 field_idx = find_tag(num_fields, tags, tag);
