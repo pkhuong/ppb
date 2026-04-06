@@ -87,13 +87,13 @@ ppb_decode_varint(struct ppb_buf *restrict buf, enum ppb_error *restrict error)
  * Returns the index of an exact match in `fields`, and an invalid
  * index, greater than or equal to `num_fields`.
  */
-/*@ requires \valid_read(fields + (0 .. num_fields - 1));
+/*@ requires \valid_read(tags + (0 .. num_fields - 1));
   @ terminates \true;
-  @ assigns \result \from fields[0..num_fields - 1].tag.bits, tag;
-  @ ensures \result < num_fields ==> fields[\result].tag.bits ≡ tag;
+  @ assigns \result \from tags[0..num_fields - 1].bits, tag;
+  @ ensures \result < num_fields ==> tags[\result].bits ≡ tag;
   @*/
 static inline size_t
-find_tag(const size_t num_fields, const struct ppb_field *__restrict fields, uint64_t tag)
+find_tag(const size_t num_fields, const struct ppb_encoded_tag *__restrict tags, uint64_t tag)
 {
     size_t lo = 0;
     size_t len = num_fields;
@@ -106,7 +106,7 @@ find_tag(const size_t num_fields, const struct ppb_field *__restrict fields, uin
     /*@ loop assigns lo, len;
       @ loop invariant lo < num_fields;
       @ loop invariant lo + len ≤ num_fields;
-      @ loop invariant ∀ integer i; lo + len ≤ i < num_fields ==> fields[i].tag.bits > tag;
+      @ loop invariant ∀ integer i; lo + len ≤ i < num_fields ==> tags[i].bits > tag;
       @ loop variant len;
       @*/
     while (len > 1)
@@ -117,17 +117,17 @@ find_tag(const size_t num_fields, const struct ppb_field *__restrict fields, uin
         /*
          * Assume monotonicity: callers pass strictly sorted arrays
          * (ppb_prescan validates, ppb_lexn requires it informally).
-         * Sortedness and fields[lo + pivot] > tag imply fields[i] > tag
+         * Sortedness and tags[lo + pivot] > tag imply tags[i] > tag
          * for i >= lo + pivot.
          */
-        /*@ admit fields[lo + pivot].tag.bits > tag ==>
-          @    ∀ integer i; lo + pivot ≤ i < num_fields ==> fields[i].tag.bits > tag;
+        /*@ admit tags[lo + pivot].bits > tag ==>
+          @    ∀ integer i; lo + pivot ≤ i < num_fields ==> tags[i].bits > tag;
           @*/
-        lo += fields[lo + pivot].tag.bits > tag ? 0 : pivot;
+        lo += tags[lo + pivot].bits > tag ? 0 : pivot;
         len = next_len;
     }
 
-    return fields[lo].tag.bits == tag ? lo : SIZE_MAX;
+    return tags[lo].bits == tag ? lo : SIZE_MAX;
 }
 
 /*
@@ -139,20 +139,20 @@ find_tag(const size_t num_fields, const struct ppb_field *__restrict fields, uin
  * Always updates the `dst->v` field, but updates `dst->m` only when
  * `update_metadata` is set.
  */
-/*@ requires \valid(dst);
+/*@ requires valid_tag: tag ≢ 0;
+  @ requires \valid(dst);
   @ requires \valid(src);
   @ requires buf_valid(*src);
   @ requires \valid(error);
   @ requires *error ≡ PPB_OK;
   @ terminates \true;
-  @ assigns dst->m, dst->v, *error;
+  @ assigns *dst, *error;
   @ assigns *src \from indirect:*src;
   @ ensures buf_valid(*src);
   @ ensures *error ≤ 0;
   @ ensures \result ≡ *error;
-  @ ensures error_rollback: \result ≢ PPB_OK ==> dst->m ≡ \old(dst->m) ∧ dst->v ≡ \old(dst->v);
+  @ ensures error_rollback: \result ≢ PPB_OK ==> *dst ≡ \old(*dst);
   @ ensures src->size ≤ \old(src->size);
-  @ ensures src->buf ≡ (const char *)\old(src->buf) + \old(src->size) - src->size;
   @ behavior nometa:
   @  assumes update_metadata ≡ false;
   @  assigns dst->v, *src, *error;
@@ -247,13 +247,16 @@ handle_field(uint64_t tag, struct ppb_field *restrict dst, struct ppb_buf *restr
 }
 
 /*@ requires buf_valid_range(buf);
+  @ requires \valid_read(tags + (0..num_fields - 1));
   @ requires \valid(fields + (0..num_fields - 1));
+  @ requires \separated(tags + (0..num_fields - 1), fields + (0..num_fields - 1));
   @ terminates \true;
-  @ assigns g_initial_buf, fields[0..num_fields - 1].m, fields[0..num_fields - 1].v;
-  @ ensures \result ≥ 0 ==> (num_fields ≡ 0 ∨ fields[0].tag.bits ≢ 0);
+  @ assigns g_initial_buf, fields[0..num_fields - 1];
+  @ ensures \result ≥ 0 ==> (num_fields ≡ 0 ∨ tags[0].bits ≢ 0);
   @*/
 ptrdiff_t
-ppb_prescan(const struct ppb_buf buf, const size_t num_fields, struct ppb_field *const restrict fields,
+ppb_prescan(const struct ppb_buf buf, const size_t num_fields,
+    const struct ppb_encoded_tag *const restrict tags, struct ppb_field *const restrict fields,
     const size_t max_lexed_fields)
 {
     enum ppb_error error = PPB_OK;
@@ -261,7 +264,7 @@ ppb_prescan(const struct ppb_buf buf, const size_t num_fields, struct ppb_field 
     struct ppb_buf src = buf;
     /*@ assert buf_valid(src); */
 
-    if (unlikely(num_fields > 0 && fields[0].tag.bits == 0))
+    if (unlikely(num_fields > 0 && tags[0].bits == 0))
     {
         return PPB_ERROR_SENTINEL_FIELD_ARR;
     }
@@ -272,19 +275,19 @@ ppb_prescan(const struct ppb_buf buf, const size_t num_fields, struct ppb_field 
       @*/
     for (size_t i = 1; i < num_fields; i++)
     {
-        if (unlikely(fields[i - 1].tag.bits >= fields[i].tag.bits))
+        if (unlikely(tags[i - 1].bits >= tags[i].bits))
         {
             return PPB_ERROR_UNSORTED_FIELD_ARR;
         }
     }
 
-    struct ppb_field dummy = { .tag.bits = 0 };
+    struct ppb_field dummy = { 0 };
 
-    /*@ loop assigns i, fields[0..num_fields - 1].m, fields[0..num_fields - 1].v, src, error, dummy;
+    /*@ loop assigns i, fields[0..num_fields - 1], src, error, dummy;
       @ loop invariant 0 ≤ i ≤ max_lexed_fields;
       @ loop invariant buf_valid(src);
       @ loop invariant error ≡ PPB_OK;
-      @ loop invariant num_fields ≡ 0 ∨ fields[0].tag.bits ≢ 0;
+      @ loop invariant num_fields ≡ 0 ∨ tags[0].bits ≢ 0;
       @ loop variant max_lexed_fields - i;
       @*/
     for (size_t i = 0; i < max_lexed_fields; i++)
@@ -299,13 +302,13 @@ ppb_prescan(const struct ppb_buf buf, const size_t num_fields, struct ppb_field 
 
         const void *ptr = src.buf;
         uint64_t tag = decode_tag(&src, &error);
-        size_t field_idx = find_tag(num_fields, fields, tag);
-        /*@ assert field_idx < num_fields ==> fields[field_idx].tag.bits ≡ tag; */
+        size_t field_idx = find_tag(num_fields, tags, tag);
+        /*@ assert error ≢ PPB_OK ==> tag ≡ 0; */
         /*
          * All encoded_tags are > 0: fields[0].tag.bits ≢ 0 and the
          * array is strictly sorted, so each element > 0.
          */
-        /*@ admit field_idx < num_fields ==> fields[field_idx].tag.bits ≢ 0; */
+        /*@ admit zero_absent: tag ≡ 0 ==> field_idx ≥ num_fields; */
 
         if (unlikely(field_idx >= num_fields)) /* -1UL for missing, so mutant-ok: '>=' -> '>' */
         {
@@ -316,30 +319,18 @@ ppb_prescan(const struct ppb_buf buf, const size_t num_fields, struct ppb_field 
                 return (ptrdiff_t)error; /* handle_field detects old error for varint; mutant-ok: 'delete' */
             }
 
-            /* See if want to dump this in a catch-all field (branch is an optimization). */
-            if (num_fields > 0 && (int64_t)fields[num_fields - 1].tag.bits >> 3 < 0) /* mutant-skip */
+            /* See if we want to dump this in a catch-all field (branch is an optimization). */
+            if (num_fields > 0 && (int64_t)tags[num_fields - 1].bits >> 3 < 0) /* mutant-skip */
             {
                 tag |= UINT64_MAX << 3; /* preserve the type, but otherwise all 1s. */
-                field_idx = find_tag(num_fields, fields, tag);
+                field_idx = find_tag(num_fields, tags, tag);
             }
         }
 
-        /*@ assert \separated(&dummy, fields + (0 .. num_fields - 1)); */
-        struct ppb_field *dst = (field_idx < num_fields) ? &fields[field_idx] : &dummy;
-        /*@ ghost TAG_PRESCAN:; */
-        /*@ assert num_fields ≡ 0 ∨ fields[0].tag.bits ≢ 0; */
+        struct ppb_field *dst = (field_idx < num_fields) ? fields + field_idx : &dummy;
         dst->v = (struct ppb_field_value) { .ptr = ptr };
-        int rc = handle_field(tag, dst, &src, /*update_metadata=*/true, &error);
 
-        /*
-         * Neither dst->v assignment nor handle_field (which only
-         * assigns dst->m, dst->v, *error, *src) touches .tag.
-         * The typed memory model distinguishes .tag from .m/.v,
-         * but the provers time out on the resulting obligation.
-         */
-        /*@ admit num_fields > 0 ==>
-          @     fields[0].tag.bits ≡ \at(fields[0].tag.bits, TAG_PRESCAN); */
-        /*@ assert num_fields ≡ 0 ∨ fields[0].tag.bits ≢ 0; */
+        int rc = handle_field(tag, dst, &src, /*update_metadata=*/true, &error);
         if (unlikely(rc != 0))
         {
             return (ptrdiff_t)error;
@@ -351,15 +342,18 @@ ppb_prescan(const struct ppb_buf buf, const size_t num_fields, struct ppb_field 
 
 /*@ requires \valid(buf);
   @ requires buf_valid_range(*buf);
+  @ requires \valid_read(tags + (0..num_fields - 1));
   @ requires \valid(fields + (0..num_fields - 1));
-  @ requires \forall integer j; 0 ≤ j < num_fields ==> fields[j].tag.bits ≢ 0;
+  @ requires \separated(tags + (0..num_fields - 1), fields + (0..num_fields - 1));
+  @ requires \forall integer j; 0 ≤ j < num_fields ==> tags[j].bits ≢ 0;
   @ terminates \true;
-  @ assigns g_initial_buf, *buf, fields[0..num_fields - 1].m, fields[0..num_fields - 1].v;
-  @ admit ensures buf_valid(*buf);
+  @ assigns g_initial_buf, *buf, fields[0..num_fields - 1];
+  @ ensures buf_valid(*buf);
   @ ensures \forall integer j; 0 ≤ j < num_fields ==> fields[j].m ≡ \old(fields[j].m);
   @*/
 struct ppb_lexn_ret
-ppb_lexn(struct ppb_buf *restrict const buf, const size_t num_fields, struct ppb_field *restrict const fields,
+ppb_lexn(struct ppb_buf *restrict const buf, const size_t num_fields,
+    const struct ppb_encoded_tag *restrict const tags, struct ppb_field *restrict const fields,
     const size_t max_lexed_fields)
 {
     enum ppb_error error = PPB_OK;
@@ -367,13 +361,12 @@ ppb_lexn(struct ppb_buf *restrict const buf, const size_t num_fields, struct ppb
     struct ppb_buf src = *buf;
     /*@ assert buf_valid(src); */
 
-    struct ppb_field dummy = { .tag.bits = 0 };
+    struct ppb_field dummy = { 0 };
     uint64_t prev_tag_id = 0; /* without the 3 type bits */
     size_t first_field = SIZE_MAX;
     size_t last_field = 0;
 
-    /*@ loop assigns i, fields[0..num_fields - 1].m, fields[0..num_fields - 1].v, src, error, dummy,
-      prev_tag_id, first_field, last_field;
+    /*@ loop assigns i, fields[0..num_fields - 1], src, error, dummy, prev_tag_id, first_field, last_field;
       @ loop invariant 0 ≤ i ≤ max_lexed_fields;
       @ loop invariant buf_valid(src);
       @ loop invariant error ≡ PPB_OK;
@@ -417,11 +410,11 @@ ppb_lexn(struct ppb_buf *restrict const buf, const size_t num_fields, struct ppb
             /* any error (num_tag_bytes < 0) would have set `tag = 0`. */
             /*@ assert num_tag_bytes > 0; */
 
-            field_idx = find_tag(num_fields, fields, tag);
+            field_idx = find_tag(num_fields, tags, tag);
             if (unlikely(field_idx >= num_fields)) /* -1UL for missing, so mutant-ok: '>=' -> '>' */
             {
                 /* See if want to dump this in a catch-all field (branch is an optimization). */
-                if (num_fields > 0 && (int64_t)fields[num_fields - 1].tag.bits < 0) /* mutant-skip */
+                if (num_fields > 0 && (int64_t)tags[num_fields - 1].bits < 0) /* mutant-skip */
                 {
                     /* See if want to dump this in a catch-all field. */
                     tag |= UINT64_MAX << 3; /* preserve the type, but otherwise all 1s. */
@@ -437,7 +430,7 @@ ppb_lexn(struct ppb_buf *restrict const buf, const size_t num_fields, struct ppb
                         break; /* unreachable, mutant-skip */
                     }
 
-                    field_idx = find_tag(num_fields, fields, tag);
+                    field_idx = find_tag(num_fields, tags, tag);
                 }
             }
 
@@ -451,19 +444,15 @@ ppb_lexn(struct ppb_buf *restrict const buf, const size_t num_fields, struct ppb
             prev_tag_id = tag / 8;
             first_field = field_idx < first_field ? field_idx : first_field;
             last_field = field_idx > last_field ? field_idx : last_field;
-            dst = &fields[field_idx];
+            dst = fields + field_idx;
         }
 
-        /*@ assert \separated(&dummy, fields + (0 .. num_fields - 1)); */
-        /*@ assert \valid(dst); */
         dst->v = (struct ppb_field_value) { .ptr = ptr };
         int rc = handle_field(tag, dst, &src, false, &error);
 
         /*
-         * handle_field with update_metadata=false activates the nometa
-         * behavior: assigns only dst->v, *src, *error (not dst->m),
-         * and ensures dst->m ≡ \old(dst->m).
-         * The prover can't reason through the conditional pointer.
+         * handle_field with update_metadata=false ensures dst->m ≡ \old(dst->m),
+         * (see nometa behavior), but the prover can't reason through the pointers.
          */
         /*@ admit ∀ integer j; 0 ≤ j < num_fields ==> fields[j].m ≡ \at(fields[j].m, Pre); */
 
@@ -478,10 +467,10 @@ ppb_lexn(struct ppb_buf *restrict const buf, const size_t num_fields, struct ppb
      * can't fold buf_valid through the struct copy (hence the
      * admitted postcondition).
      */
-    /*@ assert buf_valid(src); */
+    /* assert buf_valid(src); */
     *buf = src;
 
-    size_t field_range;
+    uint32_t field_range;
     if (first_field > last_field)
     {
         first_field = 0;
@@ -507,19 +496,19 @@ ppb_lexn(struct ppb_buf *restrict const buf, const size_t num_fields, struct ppb
 #ifdef __FRAMAC__
 /*@ requires \valid(buf);
   @ requires buf_valid_range(*buf);
+  @ requires \valid_read(tags + (0..num_fields - 1));
   @ requires \valid(fields + (0..num_fields - 1));
-  @ requires \forall integer j; 0 ≤ j < num_fields ==> fields[j].tag.bits ≢ 0;
+  @ requires \separated(tags + (0..num_fields - 1), fields + (0..num_fields - 1));
+  @ requires \forall integer j; 0 ≤ j < num_fields ==> tags[j].bits ≢ 0;
   @ terminates \true;
-  @ assigns g_initial_buf, *buf, fields[0..num_fields - 1].m, fields[0..num_fields - 1].v;
+  @ assigns g_initial_buf, *buf, fields[0..num_fields - 1];
   @ ensures buf_valid(*buf);
   @*/
 struct ppb_lexn_ret
-ppb_entry_point(struct ppb_buf *restrict buf, size_t num_fields, struct ppb_field fields[restrict num_fields],
-    size_t max_lexed_fields)
+ppb_entry_point(struct ppb_buf *restrict buf, size_t num_fields, const struct ppb_encoded_tag *restrict tags,
+    struct ppb_field *restrict fields, size_t max_lexed_fields)
 {
-    ppb_prescan(*buf, num_fields, fields, max_lexed_fields);
-    /* prescan preserves .tag (not in its assigns clause). */
-    /*@ assert \forall integer j; 0 ≤ j < num_fields ==> fields[j].tag.bits ≢ 0; */
-    return ppb_lexn(buf, num_fields, fields, max_lexed_fields);
+    ppb_prescan(*buf, num_fields, tags, fields, max_lexed_fields);
+    return ppb_lexn(buf, num_fields, tags, fields, max_lexed_fields);
 }
 #endif

@@ -44,18 +44,24 @@ PPB never writes through the `buf` pointer, but does update the struct
 in place and construct subslices for length-prefixed payloads
 (variable-length values).
 
-**`struct ppb_field`**: one entry in a caller-owned array that
-describes a field that should be decoded.  Set `field.tag` with
-`PPB_TAG(uint64_t field_number, enum ppb_wire_type)` before calling
-PPB.  After a call to `ppb_prescan`, `field.m` holds aggregate
-metadata (occurrence count, total/min/max payload bytes for
-length-prefixed fields) and `field.v` holds the last decoded value.
-Use `ppb_lexn` to observe every field occurrence: it updates each
-`field.v` at most once per call.
+**`struct ppb_encoded_tag`**: a tag identity created with
+`PPB_TAG(uint64_t field_number, enum ppb_wire_type)`.  Callers
+assemble a `const struct ppb_encoded_tag[]` array sorted in ascending
+order and pass it to `ppb_prescan` / `ppb_lexn`; PPB never writes
+through this pointer.  Field number `-1` (i.e., `UINT64_MAX` cast to
+the field-number argument) is a catch-all that matches any unknown tag
+of a given wire type.
 
-The field array *must be sorted* by `tag.bits` in ascending order.  Field
-number `-1` (i.e., `UINT64_MAX` cast to the field-number argument) is a
-catch-all that matches any unknown tag of a given wire type.
+The `tags` array *must be sorted* by `.bits` in ascending order.
+
+**`struct ppb_field`**: mutable per-call state for one decoded field.
+After a call to `ppb_prescan`, `field.m` holds aggregate metadata
+(occurrence count, total/min/max payload bytes for length-prefixed
+fields) and `field.v` holds the last decoded value.  Use `ppb_lexn` to
+observe every field occurrence: it updates each `field.v` at most once
+per call.  The caller owns the `struct ppb_field[]` array, which is
+passed alongside (but separately from) the `tags` array (field `i`
+matches tag `i`).
 
 API (include/ppb/ppb.h)
 -----------------------
@@ -76,8 +82,8 @@ nested submessages practical.
 enum ppb_error
 {
     PPB_OK = 0,
-    PPB_ERROR_UNSORTED_FIELD_ARR = -1,  /* fields[].tag.bits not strictly ascending */
-    PPB_ERROR_SENTINEL_FIELD_ARR = -2,  /* fields[].tag.bits includes 0 (invalid in protobuf) */
+    PPB_ERROR_UNSORTED_FIELD_ARR = -1,  /* tags[].bits not strictly ascending */
+    PPB_ERROR_SENTINEL_FIELD_ARR = -2,  /* tags[].bits includes 0 (invalid in protobuf) */
     PPB_ERROR_TRUNCATED_DATA = -3,  /* message cut short at the end of the `ppb_buf` */
     PPB_ERROR_CORRUPT_VARINT = -4,  /* invalid varint encoding (overlong) */
     PPB_ERROR_CORRUPT_TAG = -5,  /* invalid tag encoding (zero, overlong, or unsupported wire type) */
@@ -100,7 +106,8 @@ enum ppb_error
  *
  * A negative value is a ppb_error.
  */
-ptrdiff_t ppb_prescan(struct ppb_buf buf, size_t num_fields, struct ppb_field fields[__restrict num_fields],
+ptrdiff_t ppb_prescan(struct ppb_buf buf, size_t num_fields,
+    const struct ppb_encoded_tag *__restrict tags, struct ppb_field *__restrict fields,
     size_t max_lexed_fields);
 
 /*
@@ -139,11 +146,12 @@ struct ppb_lexn_ret
  * check if we have just decoded the field by comparing its `ptr` with
  * the initial value of `buf.buf`.
  *
- * Assumes the fields are sorted and valid (no zero field);
+ * Assumes the tags are sorted and valid (no zero tag);
  * ppb_prescan checks for that.
  */
 struct ppb_lexn_ret ppb_lexn(struct ppb_buf *__restrict buf, size_t num_fields,
-    struct ppb_field fields[__restrict num_fields], size_t max_lexed_fields);
+    const struct ppb_encoded_tag *__restrict tags, struct ppb_field *__restrict fields,
+    size_t max_lexed_fields);
 
 /*
  * Decodes zigzag-encoded sint32 and sint64 values.
@@ -175,16 +183,19 @@ Usage pattern
 
 enum { F_NAME = 0, F_ID = 1, F_DATA = 2, NUM_FIELDS };
 
-struct ppb_field fields[NUM_FIELDS] = {
-    [F_NAME] = { .tag = PPB_TAG(1, PPB_WIRE_LEN)    },  /* string name = 1 */
-    [F_ID]   = { .tag = PPB_TAG(2, PPB_WIRE_VARINT) },  /* uint64 id   = 2 */
-    [F_DATA] = { .tag = PPB_TAG(5, PPB_WIRE_LEN)    },  /* bytes  data = 5 */
+/* Tags are sorted ascending and never modified after init. */
+static const struct ppb_encoded_tag tags[NUM_FIELDS] = {
+    [F_NAME] = PPB_TAG(1, PPB_WIRE_LEN),    /* string name = 1 */
+    [F_ID]   = PPB_TAG(2, PPB_WIRE_VARINT), /* uint64 id   = 2 */
+    [F_DATA] = PPB_TAG(5, PPB_WIRE_LEN),    /* bytes  data = 5 */
 };
 /* Tags must be sorted: PPB_TAG(1,2) < PPB_TAG(2,0) < PPB_TAG(5,2). */
 
+struct ppb_field fields[NUM_FIELDS] = { 0 };  /* mutable per-call state */
+
 /* 1. Validate and gather stats (for preallocation). */
 struct ppb_buf msg = { .buf = wire_bytes, .size = wire_len };
-ptrdiff_t scanned = ppb_prescan(msg, NUM_FIELDS, fields, SIZE_MAX);
+ptrdiff_t scanned = ppb_prescan(msg, NUM_FIELDS, tags, fields, SIZE_MAX);
 if ((size_t)scanned != msg.size) { /* error */ }
 
 size_t id_count   = fields[F_ID].m.num_occurrences;
@@ -194,7 +205,7 @@ size_t name_bytes = fields[F_NAME].m.total_bytes;  /* for allocation */
 while (msg.size > 0)
 {
     const char *old_buf = msg.buf;
-    struct ppb_lexn_ret r = ppb_lexn(&msg, NUM_FIELDS, fields, SIZE_MAX);
+    struct ppb_lexn_ret r = ppb_lexn(&msg, NUM_FIELDS, tags, fields, SIZE_MAX);
     if (r.status != PPB_OK) { /* error */ }
 
     /* r.field_range <= NUM_FIELDS - r.first_field. */

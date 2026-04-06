@@ -53,13 +53,21 @@ static const uint8_t four_field_wire[] = {
 };
 
 static void
-init_four_fields(struct ppb_field fields[4])
+init_four_tags(struct ppb_encoded_tag tags[static 4])
+{
+    struct ppb_encoded_tag init[4] = {
+        PPB_TAG(1, PPB_WIRE_VARINT),
+        PPB_TAG(2, PPB_WIRE_I64),
+        PPB_TAG(3, PPB_WIRE_LEN),
+        PPB_TAG(4, PPB_WIRE_I32),
+    };
+    memcpy(tags, init, sizeof(init));
+}
+
+static void
+init_four_fields(struct ppb_field fields[static 4])
 {
     zero_fields(4, fields);
-    fields[0].tag = PPB_TAG(1, PPB_WIRE_VARINT);
-    fields[1].tag = PPB_TAG(2, PPB_WIRE_I64);
-    fields[2].tag = PPB_TAG(3, PPB_WIRE_LEN);
-    fields[3].tag = PPB_TAG(4, PPB_WIRE_I32);
 }
 
 static void
@@ -292,11 +300,13 @@ test_prescan_known_fields(void)
 {
     printf("test_prescan_known_fields\n");
 
+    struct ppb_encoded_tag tags[4];
+    init_four_tags(tags);
     struct ppb_field fields[4];
     init_four_fields(fields);
 
     struct ppb_buf buf = make_buf(four_field_wire, sizeof(four_field_wire));
-    ptrdiff_t ret = ppb_prescan(buf, 4, fields, SIZE_MAX);
+    ptrdiff_t ret = ppb_prescan(buf, 4, tags, fields, SIZE_MAX);
 
     CHECK(ret == (ptrdiff_t)sizeof(four_field_wire));
 
@@ -329,12 +339,12 @@ test_prescan_repeated_fields(void)
         0x08, 0x01,        /* field 1 varint 1  (1-byte value) */
     };
 
+    struct ppb_encoded_tag tags[1] = { PPB_TAG(1, PPB_WIRE_VARINT) };
     struct ppb_field fields[1];
     zero_fields(1, fields);
-    fields[0].tag = PPB_TAG(1, PPB_WIRE_VARINT);
 
     struct ppb_buf buf = make_buf(wire, sizeof(wire));
-    ptrdiff_t ret = ppb_prescan(buf, 1, fields, SIZE_MAX);
+    ptrdiff_t ret = ppb_prescan(buf, 1, tags, fields, SIZE_MAX);
 
     CHECK(ret == (ptrdiff_t)sizeof(wire));
     CHECK(fields[0].m.num_occurrences == 3);
@@ -356,12 +366,12 @@ test_prescan_repeated_len(void)
         0x0a, 0x00,        /* field 1 len 0 */
     };
 
+    struct ppb_encoded_tag tags[1] = { PPB_TAG(1, PPB_WIRE_LEN) };
     struct ppb_field fields[1];
     zero_fields(1, fields);
-    fields[0].tag = PPB_TAG(1, PPB_WIRE_LEN);
 
     struct ppb_buf buf = make_buf(wire, sizeof(wire));
-    ptrdiff_t ret = ppb_prescan(buf, 1, fields, SIZE_MAX);
+    ptrdiff_t ret = ppb_prescan(buf, 1, tags, fields, SIZE_MAX);
 
     CHECK(ret == (ptrdiff_t)sizeof(wire));
     CHECK(fields[0].m.num_occurrences == 4);
@@ -380,52 +390,52 @@ test_prescan_validation(void)
 
     /* Unsorted fields. */
     {
+        struct ppb_encoded_tag tags[2] = { PPB_TAG(2, PPB_WIRE_VARINT), PPB_TAG(1, PPB_WIRE_VARINT) };
         struct ppb_field fields[2];
         zero_fields(2, fields);
-        fields[0].tag = PPB_TAG(2, PPB_WIRE_VARINT);
-        fields[1].tag = PPB_TAG(1, PPB_WIRE_VARINT);
 
-        ptrdiff_t ret = ppb_prescan(buf, 2, fields, SIZE_MAX);
+        ptrdiff_t ret = ppb_prescan(buf, 2, tags, fields, SIZE_MAX);
         CHECK(ret == PPB_ERROR_UNSORTED_FIELD_ARR);
     }
 
     /* Unsorted field after sorted run. */
     {
+        struct ppb_encoded_tag tags[4] = {
+            PPB_TAG(1, PPB_WIRE_VARINT),
+            PPB_TAG(2, PPB_WIRE_VARINT),
+            PPB_TAG(4, PPB_WIRE_VARINT),
+            PPB_TAG(3, PPB_WIRE_VARINT),
+        };
         struct ppb_field fields[4];
         zero_fields(4, fields);
-        fields[0].tag = PPB_TAG(1, PPB_WIRE_VARINT);
-        fields[1].tag = PPB_TAG(2, PPB_WIRE_VARINT);
-        fields[2].tag = PPB_TAG(4, PPB_WIRE_VARINT);
-        fields[3].tag = PPB_TAG(3, PPB_WIRE_VARINT);
 
-        ptrdiff_t ret = ppb_prescan(buf, 4, fields, SIZE_MAX);
+        ptrdiff_t ret = ppb_prescan(buf, 4, tags, fields, SIZE_MAX);
         CHECK(ret == PPB_ERROR_UNSORTED_FIELD_ARR);
     }
 
     /* Repeated field. */
     {
+        struct ppb_encoded_tag tags[2] = { PPB_TAG(1, PPB_WIRE_VARINT), PPB_TAG(1, PPB_WIRE_VARINT) };
         struct ppb_field fields[2];
         zero_fields(2, fields);
-        fields[0].tag = PPB_TAG(1, PPB_WIRE_VARINT);
-        fields[1].tag = PPB_TAG(1, PPB_WIRE_VARINT);
 
-        ptrdiff_t ret = ppb_prescan(buf, 2, fields, SIZE_MAX);
+        ptrdiff_t ret = ppb_prescan(buf, 2, tags, fields, SIZE_MAX);
         CHECK(ret == PPB_ERROR_UNSORTED_FIELD_ARR);
     }
 
-    /* Sentinel (tag.bits == 0). */
+    /* Sentinel (tags[0].bits == 0). */
     {
+        struct ppb_encoded_tag tags[1] = { { .bits = 0 } };
         struct ppb_field fields[1];
         zero_fields(1, fields);
-        fields[0].tag.bits = 0;
 
-        ptrdiff_t ret = ppb_prescan(buf, 1, fields, SIZE_MAX);
+        ptrdiff_t ret = ppb_prescan(buf, 1, tags, fields, SIZE_MAX);
         CHECK(ret == PPB_ERROR_SENTINEL_FIELD_ARR);
     }
 
     /* Empty fields array succeeds on valid data. */
     {
-        ptrdiff_t ret = ppb_prescan(buf, 0, NULL, SIZE_MAX);
+        ptrdiff_t ret = ppb_prescan(buf, 0, NULL, NULL, SIZE_MAX);
         CHECK(ret == (ptrdiff_t)sizeof(wire));
     }
 }
@@ -439,13 +449,12 @@ test_prescan_sentinel_early_return(void)
     static const uint8_t wire[] = { 0x08, 0x01 };
     struct ppb_buf buf = make_buf(wire, sizeof(wire));
 
+    struct ppb_encoded_tag tags[2] = { { .bits = 0 }, PPB_TAG(1, PPB_WIRE_VARINT) };
     struct ppb_field fields[2];
     zero_fields(2, fields);
-    fields[0].tag.bits = 0;
-    fields[1].tag = PPB_TAG(1, PPB_WIRE_VARINT);
     fields[1].m.num_occurrences = 42; /* canary */
 
-    ptrdiff_t ret = ppb_prescan(buf, 2, fields, SIZE_MAX);
+    ptrdiff_t ret = ppb_prescan(buf, 2, tags, fields, SIZE_MAX);
     CHECK(ret == PPB_ERROR_SENTINEL_FIELD_ARR);
     CHECK(fields[1].m.num_occurrences == 42);
 }
@@ -463,11 +472,11 @@ test_prescan_unknown_fields(void)
 
     /* Without catch-all: field 99 silently discarded. */
     {
+        struct ppb_encoded_tag tags[1] = { PPB_TAG(1, PPB_WIRE_VARINT) };
         struct ppb_field fields[1];
         zero_fields(1, fields);
-        fields[0].tag = PPB_TAG(1, PPB_WIRE_VARINT);
 
-        ptrdiff_t ret = ppb_prescan(buf, 1, fields, SIZE_MAX);
+        ptrdiff_t ret = ppb_prescan(buf, 1, tags, fields, SIZE_MAX);
         CHECK(ret == (ptrdiff_t)sizeof(wire));
         CHECK(fields[0].m.num_occurrences == 1);
         CHECK(fields[0].v.u64 == 1);
@@ -475,12 +484,11 @@ test_prescan_unknown_fields(void)
 
     /* With catch-all varint: field 99 routed there. */
     {
+        struct ppb_encoded_tag tags[2] = { PPB_TAG(1, PPB_WIRE_VARINT), PPB_TAG(-1, PPB_WIRE_VARINT) };
         struct ppb_field fields[2];
         zero_fields(2, fields);
-        fields[0].tag = PPB_TAG(1, PPB_WIRE_VARINT);
-        fields[1].tag = PPB_TAG(-1, PPB_WIRE_VARINT);
 
-        ptrdiff_t ret = ppb_prescan(buf, 2, fields, SIZE_MAX);
+        ptrdiff_t ret = ppb_prescan(buf, 2, tags, fields, SIZE_MAX);
         CHECK(ret == (ptrdiff_t)sizeof(wire));
         CHECK(fields[0].m.num_occurrences == 1);
         CHECK(fields[0].v.u64 == 1);
@@ -500,14 +508,16 @@ test_prescan_max_fields(void)
         0x18, 0x03,  /* field 3 varint 3 */
     };
 
+    struct ppb_encoded_tag tags[3] = {
+        PPB_TAG(1, PPB_WIRE_VARINT),
+        PPB_TAG(2, PPB_WIRE_VARINT),
+        PPB_TAG(3, PPB_WIRE_VARINT),
+    };
     struct ppb_field fields[3];
     zero_fields(3, fields);
-    fields[0].tag = PPB_TAG(1, PPB_WIRE_VARINT);
-    fields[1].tag = PPB_TAG(2, PPB_WIRE_VARINT);
-    fields[2].tag = PPB_TAG(3, PPB_WIRE_VARINT);
 
     struct ppb_buf buf = make_buf(wire, sizeof(wire));
-    ptrdiff_t ret = ppb_prescan(buf, 3, fields, 1);
+    ptrdiff_t ret = ppb_prescan(buf, 3, tags, fields, 1);
 
     CHECK(ret == 2);
     CHECK(fields[0].m.num_occurrences == 1);
@@ -525,11 +535,11 @@ test_prescan_zero_tag(void)
     static const uint8_t wire[] = { 0x00 };
     struct ppb_buf buf = make_buf(wire, sizeof(wire));
 
+    struct ppb_encoded_tag tags[1] = { PPB_TAG(1, PPB_WIRE_VARINT) };
     struct ppb_field fields[1];
     zero_fields(1, fields);
-    fields[0].tag = PPB_TAG(1, PPB_WIRE_VARINT);
 
-    ptrdiff_t ret = ppb_prescan(buf, 1, fields, SIZE_MAX);
+    ptrdiff_t ret = ppb_prescan(buf, 1, tags, fields, SIZE_MAX);
     CHECK(ret == PPB_ERROR_CORRUPT_TAG);
 }
 
@@ -545,11 +555,11 @@ test_prescan_corrupt_tag(void)
     };
     struct ppb_buf buf = make_buf(wire, sizeof(wire));
 
+    struct ppb_encoded_tag tags[1] = { PPB_TAG(1, PPB_WIRE_VARINT) };
     struct ppb_field fields[1];
     zero_fields(1, fields);
-    fields[0].tag = PPB_TAG(1, PPB_WIRE_VARINT);
 
-    ptrdiff_t ret = ppb_prescan(buf, 1, fields, SIZE_MAX);
+    ptrdiff_t ret = ppb_prescan(buf, 1, tags, fields, SIZE_MAX);
     CHECK(ret == PPB_ERROR_CORRUPT_TAG);
 }
 
@@ -566,11 +576,11 @@ test_prescan_truncated_tag(void)
     static const uint8_t wire[] = { 0x80 };
     struct ppb_buf buf = make_buf(wire, sizeof(wire));
 
+    struct ppb_encoded_tag tags[1] = { PPB_TAG(1, PPB_WIRE_VARINT) };
     struct ppb_field fields[1];
     zero_fields(1, fields);
-    fields[0].tag = PPB_TAG(1, PPB_WIRE_VARINT);
 
-    ptrdiff_t ret = ppb_prescan(buf, 1, fields, SIZE_MAX);
+    ptrdiff_t ret = ppb_prescan(buf, 1, tags, fields, SIZE_MAX);
     CHECK(ret == PPB_ERROR_TRUNCATED_DATA);
 }
 
@@ -580,11 +590,13 @@ test_lexn_known_fields_in_order(void)
 {
     printf("test_lexn_known_fields_in_order\n");
 
+    struct ppb_encoded_tag tags[4];
+    init_four_tags(tags);
     struct ppb_field fields[4];
     init_four_fields(fields);
 
     struct ppb_buf buf = make_buf(four_field_wire, sizeof(four_field_wire));
-    struct ppb_lexn_ret ret = ppb_lexn(&buf, 4, fields, 4);
+    struct ppb_lexn_ret ret = ppb_lexn(&buf, 4, tags, fields, 4);
 
     CHECK(ret.status == PPB_OK);
     CHECK(ret.first_field == 0);
@@ -609,38 +621,40 @@ test_lexn_one_per_call(void)
 {
     printf("test_lexn_one_per_call\n");
 
+    struct ppb_encoded_tag tags[4];
+    init_four_tags(tags);
     struct ppb_field fields[4];
     init_four_fields(fields);
 
     struct ppb_buf buf = make_buf(four_field_wire, sizeof(four_field_wire));
     struct ppb_lexn_ret ret;
 
-    ret = ppb_lexn(&buf, 4, fields, 1);
+    ret = ppb_lexn(&buf, 4, tags, fields, 1);
     CHECK(ret.status == PPB_OK);
     CHECK(ret.first_field == 0);
     CHECK(ret.field_range == 1);
     CHECK(fields[0].v.u64 == 150);
 
-    ret = ppb_lexn(&buf, 4, fields, 1);
+    ret = ppb_lexn(&buf, 4, tags, fields, 1);
     CHECK(ret.status == PPB_OK);
     CHECK(ret.first_field == 1);
     CHECK(ret.field_range == 1);
     CHECK(fields[1].v.u64 == 1);
 
-    ret = ppb_lexn(&buf, 4, fields, 1);
+    ret = ppb_lexn(&buf, 4, tags, fields, 1);
     CHECK(ret.status == PPB_OK);
     CHECK(ret.first_field == 2);
     CHECK(ret.field_range == 1);
     CHECK(fields[2].v.payload.size == 5);
 
-    ret = ppb_lexn(&buf, 4, fields, 1);
+    ret = ppb_lexn(&buf, 4, tags, fields, 1);
     CHECK(ret.status == PPB_OK);
     CHECK(ret.first_field == 3);
     CHECK(ret.field_range == 1);
     CHECK(fields[3].v.u64 == 42);
 
     /* EOF */
-    ret = ppb_lexn(&buf, 4, fields, 1);
+    ret = ppb_lexn(&buf, 4, tags, fields, 1);
     CHECK(ret.status == PPB_OK);
     CHECK(ret.field_range == 0);
 }
@@ -652,7 +666,7 @@ test_lexn_no_field(void)
     printf("test_lexn_no_field\n");
 
     struct ppb_buf buf = make_buf(four_field_wire, sizeof(four_field_wire));
-    struct ppb_lexn_ret ret = ppb_lexn(&buf, 0, NULL, 4);
+    struct ppb_lexn_ret ret = ppb_lexn(&buf, 0, NULL, NULL, 4);
 
     CHECK(ret.status == PPB_OK);
     CHECK(ret.first_field == 0);
@@ -669,17 +683,18 @@ test_lexn_catchall_fields_in_order(void)
     {
         NUM_FIELDS = 4
     };
-    struct ppb_field fields[NUM_FIELDS] = {
-        { .tag = PPB_TAG(-1, PPB_WIRE_VARINT) },
-        { .tag = PPB_TAG(-1, PPB_WIRE_I64) },
-        { .tag = PPB_TAG(-1, PPB_WIRE_LEN) },
-        { .tag = PPB_TAG(-1, PPB_WIRE_I32) },
+    struct ppb_encoded_tag tags[NUM_FIELDS] = {
+        PPB_TAG(-1, PPB_WIRE_VARINT),
+        PPB_TAG(-1, PPB_WIRE_I64),
+        PPB_TAG(-1, PPB_WIRE_LEN),
+        PPB_TAG(-1, PPB_WIRE_I32),
     };
+    struct ppb_field fields[NUM_FIELDS] = { 0 };
 
     struct ppb_buf buf = make_buf(four_field_wire, sizeof(four_field_wire));
 
     {
-        struct ppb_lexn_ret ret = ppb_lexn(&buf, NUM_FIELDS, fields, SIZE_MAX);
+        struct ppb_lexn_ret ret = ppb_lexn(&buf, NUM_FIELDS, tags, fields, SIZE_MAX);
 
         CHECK(ret.status == PPB_OK);
         // varint
@@ -689,7 +704,7 @@ test_lexn_catchall_fields_in_order(void)
     }
 
     {
-        struct ppb_lexn_ret ret = ppb_lexn(&buf, NUM_FIELDS, fields, SIZE_MAX);
+        struct ppb_lexn_ret ret = ppb_lexn(&buf, NUM_FIELDS, tags, fields, SIZE_MAX);
 
         CHECK(ret.status == PPB_OK);
         // i64
@@ -699,7 +714,7 @@ test_lexn_catchall_fields_in_order(void)
     }
 
     {
-        struct ppb_lexn_ret ret = ppb_lexn(&buf, NUM_FIELDS, fields, SIZE_MAX);
+        struct ppb_lexn_ret ret = ppb_lexn(&buf, NUM_FIELDS, tags, fields, SIZE_MAX);
 
         CHECK(ret.status == PPB_OK);
         // len
@@ -710,7 +725,7 @@ test_lexn_catchall_fields_in_order(void)
     }
 
     {
-        struct ppb_lexn_ret ret = ppb_lexn(&buf, NUM_FIELDS, fields, SIZE_MAX);
+        struct ppb_lexn_ret ret = ppb_lexn(&buf, NUM_FIELDS, tags, fields, SIZE_MAX);
 
         CHECK(ret.status == PPB_OK);
         // i32
@@ -721,7 +736,7 @@ test_lexn_catchall_fields_in_order(void)
 
     /* EOF */
     {
-        struct ppb_lexn_ret ret = ppb_lexn(&buf, NUM_FIELDS, fields, SIZE_MAX);
+        struct ppb_lexn_ret ret = ppb_lexn(&buf, NUM_FIELDS, tags, fields, SIZE_MAX);
 
         CHECK(ret.status == PPB_OK);
         CHECK(ret.first_field == 0);
@@ -729,7 +744,7 @@ test_lexn_catchall_fields_in_order(void)
     }
 
     {
-        struct ppb_lexn_ret ret = ppb_lexn(&buf, NUM_FIELDS, fields, SIZE_MAX);
+        struct ppb_lexn_ret ret = ppb_lexn(&buf, NUM_FIELDS, tags, fields, SIZE_MAX);
 
         CHECK(ret.status == PPB_OK);
         CHECK(ret.first_field == 0);
@@ -748,27 +763,26 @@ test_lexn_out_of_order(void)
         0x08, 0x01,  /* field 1 varint 1 */
     };
 
+    struct ppb_encoded_tag tags[2] = { PPB_TAG(1, PPB_WIRE_VARINT), PPB_TAG(2, PPB_WIRE_VARINT) };
     struct ppb_field fields[2];
     zero_fields(2, fields);
-    fields[0].tag = PPB_TAG(1, PPB_WIRE_VARINT);
-    fields[1].tag = PPB_TAG(2, PPB_WIRE_VARINT);
 
     struct ppb_buf buf = make_buf(wire, sizeof(wire));
     struct ppb_lexn_ret ret;
 
-    ret = ppb_lexn(&buf, 2, fields, 4);
+    ret = ppb_lexn(&buf, 2, tags, fields, 4);
     CHECK(ret.status == PPB_OK);
     CHECK(ret.first_field == 1);
     CHECK(ret.field_range == 1);
     CHECK(fields[1].v.u64 == 2);
 
-    ret = ppb_lexn(&buf, 2, fields, 4);
+    ret = ppb_lexn(&buf, 2, tags, fields, 4);
     CHECK(ret.status == PPB_OK);
     CHECK(ret.first_field == 0);
     CHECK(ret.field_range == 1);
     CHECK(fields[0].v.u64 == 1);
 
-    ret = ppb_lexn(&buf, 2, fields, 4);
+    ret = ppb_lexn(&buf, 2, tags, fields, 4);
     CHECK(ret.field_range == 0);
 }
 
@@ -788,13 +802,12 @@ test_lexn_unknown_field_skipped(void)
         0x18, 0x03,        /* field 3 varint 3 */
     };
 
+    struct ppb_encoded_tag tags[2] = { PPB_TAG(1, PPB_WIRE_VARINT), PPB_TAG(3, PPB_WIRE_VARINT) };
     struct ppb_field fields[2];
     zero_fields(2, fields);
-    fields[0].tag = PPB_TAG(1, PPB_WIRE_VARINT);
-    fields[1].tag = PPB_TAG(3, PPB_WIRE_VARINT);
 
     struct ppb_buf buf = make_buf(wire, sizeof(wire));
-    struct ppb_lexn_ret ret = ppb_lexn(&buf, 2, fields, 4);
+    struct ppb_lexn_ret ret = ppb_lexn(&buf, 2, tags, fields, 4);
 
     CHECK(ret.status == PPB_OK);
     CHECK(ret.first_field == 0);
@@ -815,13 +828,12 @@ test_lexn_unknown_field_in_order_skipped(void)
         0x18, 0x03,        /* field 3 varint 3 */
     };
 
+    struct ppb_encoded_tag tags[2] = { PPB_TAG(1, PPB_WIRE_VARINT), PPB_TAG(3, PPB_WIRE_VARINT) };
     struct ppb_field fields[2];
     zero_fields(2, fields);
-    fields[0].tag = PPB_TAG(1, PPB_WIRE_VARINT);
-    fields[1].tag = PPB_TAG(3, PPB_WIRE_VARINT);
 
     struct ppb_buf buf = make_buf(wire, sizeof(wire));
-    struct ppb_lexn_ret ret = ppb_lexn(&buf, 2, fields, 4);
+    struct ppb_lexn_ret ret = ppb_lexn(&buf, 2, tags, fields, 4);
 
     CHECK(ret.status == PPB_OK);
     CHECK(ret.first_field == 0);
@@ -842,13 +854,12 @@ test_lexn_unknown_field_in_order_skipped_at_end(void)
         0x98, 0x06, 0x02,  /* field 99 varint 2 (unknown) */
     };
 
+    struct ppb_encoded_tag tags[2] = { PPB_TAG(1, PPB_WIRE_VARINT), PPB_TAG(3, PPB_WIRE_VARINT) };
     struct ppb_field fields[2];
     zero_fields(2, fields);
-    fields[0].tag = PPB_TAG(1, PPB_WIRE_VARINT);
-    fields[1].tag = PPB_TAG(3, PPB_WIRE_VARINT);
 
     struct ppb_buf buf = make_buf(wire, sizeof(wire));
-    struct ppb_lexn_ret ret = ppb_lexn(&buf, 2, fields, 4);
+    struct ppb_lexn_ret ret = ppb_lexn(&buf, 2, tags, fields, 4);
 
     CHECK(ret.status == PPB_OK);
     CHECK(ret.first_field == 0);
@@ -874,24 +885,26 @@ test_lexn_two_sorted_runs(void)
         0x20, 0x28,  /* field 4 varint 40 */
     };
 
+    struct ppb_encoded_tag tags[4] = {
+        PPB_TAG(1, PPB_WIRE_VARINT),
+        PPB_TAG(2, PPB_WIRE_VARINT),
+        PPB_TAG(3, PPB_WIRE_VARINT),
+        PPB_TAG(4, PPB_WIRE_VARINT),
+    };
     struct ppb_field fields[4];
     zero_fields(4, fields);
-    fields[0].tag = PPB_TAG(1, PPB_WIRE_VARINT);
-    fields[1].tag = PPB_TAG(2, PPB_WIRE_VARINT);
-    fields[2].tag = PPB_TAG(3, PPB_WIRE_VARINT);
-    fields[3].tag = PPB_TAG(4, PPB_WIRE_VARINT);
 
     struct ppb_buf buf = make_buf(wire, sizeof(wire));
     struct ppb_lexn_ret ret;
 
-    ret = ppb_lexn(&buf, 4, fields, 4);
+    ret = ppb_lexn(&buf, 4, tags, fields, 4);
     CHECK(ret.status == PPB_OK);
     CHECK(ret.first_field == 0);
     CHECK(ret.field_range == 3); /* idx 0..2 */
     CHECK(fields[0].v.u64 == 10);
     CHECK(fields[2].v.u64 == 30);
 
-    ret = ppb_lexn(&buf, 4, fields, 4);
+    ret = ppb_lexn(&buf, 4, tags, fields, 4);
     CHECK(ret.status == PPB_OK);
     CHECK(ret.first_field == 1);
     CHECK(ret.field_range == 3); /* idx 1..3 */
@@ -916,29 +929,31 @@ test_lexn_catchall_always_stops(void)
         0xa5, 0x06, 0x01, 0x00, 0x00, 0x00,  /* field 100 i32 1 → catch-all i32 */
     };
 
+    struct ppb_encoded_tag tags[3] = {
+        PPB_TAG(1, PPB_WIRE_VARINT),
+        PPB_TAG(-1, PPB_WIRE_VARINT),
+        PPB_TAG(-1, PPB_WIRE_I32),
+    };
     struct ppb_field fields[3];
     zero_fields(3, fields);
-    fields[0].tag = PPB_TAG(1, PPB_WIRE_VARINT);
-    fields[1].tag = PPB_TAG(-1, PPB_WIRE_VARINT);
-    fields[2].tag = PPB_TAG(-1, PPB_WIRE_I32);
 
     struct ppb_buf buf = make_buf(wire, sizeof(wire));
     struct ppb_lexn_ret ret;
 
-    ret = ppb_lexn(&buf, 3, fields, 4);
+    ret = ppb_lexn(&buf, 3, tags, fields, 4);
     CHECK(ret.status == PPB_OK);
     CHECK(ret.first_field == 0);
     CHECK(ret.field_range == 2);
     CHECK(fields[0].v.u64 == 42);
     CHECK(fields[1].v.u64 == 7);
 
-    ret = ppb_lexn(&buf, 3, fields, 4);
+    ret = ppb_lexn(&buf, 3, tags, fields, 4);
     CHECK(ret.status == PPB_OK);
     CHECK(ret.first_field == 2);
     CHECK(ret.field_range == 1);
     CHECK(fields[2].v.u64 == 1);
 
-    ret = ppb_lexn(&buf, 3, fields, 4);
+    ret = ppb_lexn(&buf, 3, tags, fields, 4);
     CHECK(ret.field_range == 0);
 }
 
@@ -947,12 +962,12 @@ test_lexn_empty(void)
 {
     printf("test_lexn_empty\n");
 
+    struct ppb_encoded_tag tags[1] = { PPB_TAG(1, PPB_WIRE_VARINT) };
     struct ppb_field fields[1];
     zero_fields(1, fields);
-    fields[0].tag = PPB_TAG(1, PPB_WIRE_VARINT);
 
     struct ppb_buf buf = make_buf("", 0);
-    struct ppb_lexn_ret ret = ppb_lexn(&buf, 1, fields, 4);
+    struct ppb_lexn_ret ret = ppb_lexn(&buf, 1, tags, fields, 4);
 
     CHECK(ret.status == PPB_OK);
     CHECK(ret.first_field == 0);
@@ -967,12 +982,12 @@ test_lexn_error(void)
 
     static const uint8_t wire[] = { 0x08 };
 
+    struct ppb_encoded_tag tags[1] = { PPB_TAG(1, PPB_WIRE_VARINT) };
     struct ppb_field fields[1];
     zero_fields(1, fields);
-    fields[0].tag = PPB_TAG(1, PPB_WIRE_VARINT);
 
     struct ppb_buf buf = make_buf(wire, sizeof(wire));
-    struct ppb_lexn_ret ret = ppb_lexn(&buf, 1, fields, 4);
+    struct ppb_lexn_ret ret = ppb_lexn(&buf, 1, tags, fields, 4);
 
     CHECK(ret.status == PPB_ERROR_TRUNCATED_DATA);
 }
@@ -988,11 +1003,11 @@ test_lexn_zero_tag(void)
     static const uint8_t wire[] = { 0x00 };
     struct ppb_buf buf = make_buf(wire, sizeof(wire));
 
+    struct ppb_encoded_tag tags[1] = { PPB_TAG(1, PPB_WIRE_VARINT) };
     struct ppb_field fields[1];
     zero_fields(1, fields);
-    fields[0].tag = PPB_TAG(1, PPB_WIRE_VARINT);
 
-    struct ppb_lexn_ret ret = ppb_lexn(&buf, 1, fields, 4);
+    struct ppb_lexn_ret ret = ppb_lexn(&buf, 1, tags, fields, 4);
     CHECK(ret.status == PPB_ERROR_CORRUPT_TAG);
     CHECK(ret.field_range == 0);
 }
@@ -1006,11 +1021,11 @@ test_lexn_corrupt_tag(void)
     static const uint8_t wire[] = { 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff };
     struct ppb_buf buf = make_buf(wire, sizeof(wire));
 
+    struct ppb_encoded_tag tags[1] = { PPB_TAG(1, PPB_WIRE_VARINT) };
     struct ppb_field fields[1];
     zero_fields(1, fields);
-    fields[0].tag = PPB_TAG(1, PPB_WIRE_VARINT);
 
-    struct ppb_lexn_ret ret = ppb_lexn(&buf, 1, fields, 4);
+    struct ppb_lexn_ret ret = ppb_lexn(&buf, 1, tags, fields, 4);
     CHECK(ret.status == PPB_ERROR_CORRUPT_TAG);
     CHECK(ret.field_range == 0);
 }
@@ -1024,11 +1039,11 @@ test_lexn_truncated_tag(void)
     static const uint8_t wire[] = { 0x80 };
     struct ppb_buf buf = make_buf(wire, sizeof(wire));
 
+    struct ppb_encoded_tag tags[1] = { PPB_TAG(1, PPB_WIRE_VARINT) };
     struct ppb_field fields[1];
     zero_fields(1, fields);
-    fields[0].tag = PPB_TAG(1, PPB_WIRE_VARINT);
 
-    struct ppb_lexn_ret ret = ppb_lexn(&buf, 1, fields, 4);
+    struct ppb_lexn_ret ret = ppb_lexn(&buf, 1, tags, fields, 4);
     CHECK(ret.status == PPB_ERROR_TRUNCATED_DATA);
     CHECK(ret.field_range == 0);
 }
@@ -1048,21 +1063,21 @@ test_lexn_zero_tag_after_valid(void)
         0x00,        /* zero tag */
     };
 
+    struct ppb_encoded_tag tags[1] = { PPB_TAG(1, PPB_WIRE_VARINT) };
     struct ppb_field fields[1];
     zero_fields(1, fields);
-    fields[0].tag = PPB_TAG(1, PPB_WIRE_VARINT);
 
     struct ppb_buf buf = make_buf(wire, sizeof(wire));
     struct ppb_lexn_ret ret;
 
-    ret = ppb_lexn(&buf, 1, fields, 4);
+    ret = ppb_lexn(&buf, 1, tags, fields, 4);
     CHECK(ret.status == PPB_ERROR_CORRUPT_TAG);
     CHECK(ret.first_field == 0);
     CHECK(ret.field_range == 1);
     CHECK(fields[0].v.u64 == 1);
     CHECK(buf.size == 1);
 
-    ret = ppb_lexn(&buf, 1, fields, 4);
+    ret = ppb_lexn(&buf, 1, tags, fields, 4);
     CHECK(ret.status == PPB_ERROR_CORRUPT_TAG);
     CHECK(ret.field_range == 0);
 }
@@ -1072,14 +1087,38 @@ test_tag_macros(void)
 {
     printf("test_tag_macros\n");
 
-    CHECK(PPB_TAG(1, PPB_WIRE_VARINT).bits == 0x08);
-    CHECK(PPB_TAG(1, PPB_WIRE_I64).bits == 0x09);
-    CHECK(PPB_TAG(1, PPB_WIRE_LEN).bits == 0x0A);
-    CHECK(PPB_TAG(2, PPB_WIRE_VARINT).bits == 0x10);
-    CHECK(PPB_TAG(15, PPB_WIRE_VARINT).bits == 0x78);
-    CHECK(PPB_TAG(16, PPB_WIRE_VARINT).bits == 0x0180);
-    CHECK(PPB_TAG(-1, PPB_WIRE_VARINT).bits == ((UINT64_MAX << 3) | 0));
-    CHECK(PPB_TAG(-1, PPB_WIRE_I32).bits == ((UINT64_MAX << 3) | 5));
+    {
+        struct ppb_encoded_tag t = PPB_TAG(1, PPB_WIRE_VARINT);
+        CHECK(t.bits == 0x08);
+    }
+    {
+        struct ppb_encoded_tag t = PPB_TAG(1, PPB_WIRE_I64);
+        CHECK(t.bits == 0x09);
+    }
+    {
+        struct ppb_encoded_tag t = PPB_TAG(1, PPB_WIRE_LEN);
+        CHECK(t.bits == 0x0A);
+    }
+    {
+        struct ppb_encoded_tag t = PPB_TAG(2, PPB_WIRE_VARINT);
+        CHECK(t.bits == 0x10);
+    }
+    {
+        struct ppb_encoded_tag t = PPB_TAG(15, PPB_WIRE_VARINT);
+        CHECK(t.bits == 0x78);
+    }
+    {
+        struct ppb_encoded_tag t = PPB_TAG(16, PPB_WIRE_VARINT);
+        CHECK(t.bits == 0x0180);
+    }
+    {
+        struct ppb_encoded_tag t = PPB_TAG(-1, PPB_WIRE_VARINT);
+        CHECK(t.bits == ((UINT64_MAX << 3) | 0));
+    }
+    {
+        struct ppb_encoded_tag t = PPB_TAG(-1, PPB_WIRE_I32);
+        CHECK(t.bits == ((UINT64_MAX << 3) | 5));
+    }
 }
 
 /*

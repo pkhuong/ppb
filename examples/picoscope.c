@@ -25,6 +25,14 @@ static int disassemble(struct ppb_buf buf, size_t indent);
 static int format_field(size_t idx, uint64_t field_num, struct ppb_field_value *v, size_t indent,
     bool newline);
 
+/* Catch-all tags: one per wire type, sorted ascending by PPB_TAG_BITS(-1, wt). */
+static const struct ppb_encoded_tag catchall_tags[NUM_FIELDS] = {
+    [FIELD_VARINT] = PPB_TAG(-1, PPB_WIRE_VARINT),
+    [FIELD_I64] = PPB_TAG(-1, PPB_WIRE_I64),
+    [FIELD_LEN] = PPB_TAG(-1, PPB_WIRE_LEN),
+    [FIELD_I32] = PPB_TAG(-1, PPB_WIRE_I32),
+};
+
 static bool g_compat_mode = false;  /* -p: protoscope-compatible output */
 
 static void
@@ -48,7 +56,7 @@ submessage_field_count(const struct ppb_buf payload, struct ppb_field fields[sta
         return 0;
     }
 
-    ptrdiff_t scanned = ppb_prescan(payload, NUM_FIELDS, fields, SIZE_MAX);
+    ptrdiff_t scanned = ppb_prescan(payload, NUM_FIELDS, catchall_tags, fields, SIZE_MAX);
     if (scanned < 0 || (size_t)scanned != payload.size)
     {
         assert(scanned < 0 && "successful prescan should read whole message");
@@ -270,12 +278,7 @@ format_len_field(uint64_t field_num, const struct ppb_field_value *v, size_t ind
     }
 
     /* 1. Try submessage. */
-    struct ppb_field fields[NUM_FIELDS] = {
-        { .tag = PPB_TAG(-1, PPB_WIRE_VARINT) },
-        { .tag = PPB_TAG(-1, PPB_WIRE_I64) },
-        { .tag = PPB_TAG(-1, PPB_WIRE_LEN) },
-        { .tag = PPB_TAG(-1, PPB_WIRE_I32) },
-    };
+    struct ppb_field fields[NUM_FIELDS] = { 0 };
 
     size_t nfields = submessage_field_count(payload, fields);
     if (nfields > 0)
@@ -395,12 +398,7 @@ format_field(size_t idx, uint64_t field_num, struct ppb_field_value *v, size_t i
 static int
 disassemble(struct ppb_buf buf, size_t indent)
 {
-    struct ppb_field fields[NUM_FIELDS] = {
-        { .tag = PPB_TAG(-1, PPB_WIRE_VARINT) },
-        { .tag = PPB_TAG(-1, PPB_WIRE_I64) },
-        { .tag = PPB_TAG(-1, PPB_WIRE_LEN) },
-        { .tag = PPB_TAG(-1, PPB_WIRE_I32) },
-    };
+    struct ppb_field fields[NUM_FIELDS] = { 0 };
 
     /*
      * Prescan to validate and collect expected metadata before lexing.
@@ -409,7 +407,7 @@ disassemble(struct ppb_buf buf, size_t indent)
      * submessage_field_count prescans before calling us), so this must
      * succeed.
      */
-    ptrdiff_t scanned = ppb_prescan(buf, NUM_FIELDS, fields, SIZE_MAX);
+    ptrdiff_t scanned = ppb_prescan(buf, NUM_FIELDS, catchall_tags, fields, SIZE_MAX);
     assert((size_t)scanned == buf.size && "redundant prescan must succeed");
 
     struct ppb_field_meta prescan_m[NUM_FIELDS] = { 0 };
@@ -423,7 +421,7 @@ disassemble(struct ppb_buf buf, size_t indent)
 
     while (buf.size > 0)
     {
-        struct ppb_lexn_ret ret = ppb_lexn(&buf, NUM_FIELDS, fields, 1);
+        struct ppb_lexn_ret ret = ppb_lexn(&buf, NUM_FIELDS, catchall_tags, fields, 1);
 
         if (ret.status != PPB_OK)
         {
@@ -632,7 +630,7 @@ main(int argc, char **argv)
     struct ppb_buf buf = { .buf = data, .size = size };
 
     /* Validate top-level message. */
-    ptrdiff_t scanned = ppb_prescan(buf, 0, NULL, SIZE_MAX);
+    ptrdiff_t scanned = ppb_prescan(buf, 0, NULL, NULL, SIZE_MAX);
     if (scanned < 0 || (size_t)scanned != size)
     {
         if (scanned < 0)

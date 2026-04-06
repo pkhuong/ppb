@@ -49,8 +49,8 @@
 enum ppb_error
 {
     PPB_OK = 0,
-    PPB_ERROR_UNSORTED_FIELD_ARR = -1,  /* fields[].tag.bits not strictly ascending */
-    PPB_ERROR_SENTINEL_FIELD_ARR = -2,  /* fields[].tag.bits includes 0 (invalid in protobuf) */
+    PPB_ERROR_UNSORTED_FIELD_ARR = -1,  /* tags[].bits not strictly ascending */
+    PPB_ERROR_SENTINEL_FIELD_ARR = -2,  /* tags[].bits includes 0 (invalid in protobuf) */
     PPB_ERROR_TRUNCATED_DATA = -3,  /* message cut short at the end of the `ppb_buf` */
     PPB_ERROR_CORRUPT_VARINT = -4,  /* invalid varint encoding (overlong) */
     PPB_ERROR_CORRUPT_TAG = -5,  /* invalid tag encoding (zero, overlong, or unsupported wire type) */
@@ -106,12 +106,7 @@ enum ppb_wire_type
             ((UINT64_MAX << 3) | (uint64_t)(WIRE_TYPE)) : \
             PPB_ENCODE_VARINT(((uint64_t)(FIELD_NUMBER) << 3) | (uint64_t)(WIRE_TYPE)))
 
-#ifdef __cplusplus
-#define PPB_TAG(FIELD_NUMBER, WIRE_TYPE) (ppb_encoded_tag { .bits = PPB_TAG_BITS(FIELD_NUMBER, WIRE_TYPE) })
-#else
-#define PPB_TAG(FIELD_NUMBER, WIRE_TYPE) \
-    ((struct ppb_encoded_tag) { .bits = PPB_TAG_BITS(FIELD_NUMBER, WIRE_TYPE) })
-#endif
+#define PPB_TAG(FIELD_NUMBER, WIRE_TYPE) { .bits = PPB_TAG_BITS(FIELD_NUMBER, WIRE_TYPE) }
 
 /*
  * PPB works with pre-varint encoded tags (no need to fully decode
@@ -176,7 +171,6 @@ struct ppb_field_value
 
 struct ppb_field
 {
-    struct ppb_encoded_tag tag;
     struct ppb_field_meta m;
     struct ppb_field_value v;
 };
@@ -215,6 +209,11 @@ uint64_t ppb_decode_varint(struct ppb_buf *__restrict buf, enum ppb_error *__res
  * Returns the number of bytes traversed, until the end of `buf`, or
  * just before the first byte of the `max_lexed_fields`th field.
  *
+ * `tags` is a parallel array of `num_fields` encoded tags (sorted
+ * ascending) that identifies which fields to decode; `fields` is the
+ * mutable output array.  Both must have at least `num_fields` entries
+ * and must not overlap.
+ *
  * Updates `fields[].m` with aggregate metadata for all the fields
  * seen, and populates `fields[].v` with the last value seen for each
  * field, if any.
@@ -224,8 +223,8 @@ uint64_t ppb_decode_varint(struct ppb_buf *__restrict buf, enum ppb_error *__res
  *
  * A negative value is a ppb_error.
  */
-ptrdiff_t ppb_prescan(struct ppb_buf buf, size_t num_fields, struct ppb_field *__restrict fields,
-    size_t max_lexed_fields);
+ptrdiff_t ppb_prescan(struct ppb_buf buf, size_t num_fields, const struct ppb_encoded_tag *__restrict tags,
+    struct ppb_field *__restrict fields, size_t max_lexed_fields);
 
 /*
  * A `ppb_lexn_ret` describes a range of indices in `fields` that
@@ -263,11 +262,12 @@ struct ppb_lexn_ret
  * check if we have just decoded the field by comparing its `ptr` with
  * the initial value of `buf.buf`.
  *
- * Assumes the fields are sorted and valid (no zero field);
+ * Assumes the tags are sorted and valid (no zero tag);
  * ppb_prescan checks for that.
  */
 struct ppb_lexn_ret ppb_lexn(struct ppb_buf *__restrict buf, size_t num_fields,
-    struct ppb_field *__restrict fields, size_t max_lexed_fields);
+    const struct ppb_encoded_tag *__restrict tags, struct ppb_field *__restrict fields,
+    size_t max_lexed_fields);
 
 #ifdef __cplusplus
 }  // extern "C"
