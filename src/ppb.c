@@ -362,6 +362,15 @@ ppb_lexn(struct ppb_buf *restrict const buf, const size_t num_fields,
     /*@ assert buf_valid(src); */
 
     struct ppb_field dummy = { 0 };
+    /*
+     * look for a catch-all field if field_idx > try_catch_all_field_id.
+     *
+     * This is set to num_fields - 1 when we have at least one catch-all
+     * field, and to SIZE_MAX (never look for catchall) otherwise.
+     */
+    const size_t try_catch_all_field_id = (num_fields > 0 && (int64_t)tags[num_fields - 1].bits < 0) ?
+        num_fields - 1 : /* could be any larger value < SIZE_MAX; mutant-skip */
+        SIZE_MAX;
     uint64_t prev_tag_id = 0; /* without the 3 type bits */
     size_t first_field = SIZE_MAX;
     size_t last_field = 0;
@@ -411,27 +420,23 @@ ppb_lexn(struct ppb_buf *restrict const buf, const size_t num_fields,
             /*@ assert num_tag_bytes > 0; */
 
             field_idx = find_tag(num_fields, tags, tag);
-            if (unlikely(field_idx >= num_fields)) /* -1UL for missing, so mutant-ok: '>=' -> '>' */
+            /* See if want to dump this in a catch-all field. */
+            if (unlikely(field_idx > try_catch_all_field_id))
             {
-                /* See if want to dump this in a catch-all field (branch is an optimization). */
-                if (num_fields > 0 && (int64_t)tags[num_fields - 1].bits < 0) /* mutant-skip */
+                tag |= UINT64_MAX << 3; /* preserve the type, but otherwise all 1s. */
+                if (unlikely(UINT64_MAX / 8 <= prev_tag_id)) /* mutant-triaged: condition always false */
                 {
-                    /* See if want to dump this in a catch-all field. */
-                    tag |= UINT64_MAX << 3; /* preserve the type, but otherwise all 1s. */
-                    if (unlikely(UINT64_MAX / 8 <= prev_tag_id)) /* mutant-triaged: condition always false */
-                    {
-                        /*
-                         * nonmonotonic -> stop here.
-                         *
-                         * Currently unreachable, because the check between the
-                         * real tag and prev_tag_id would have already triggered
-                         * the nonmonotonicity check.
-                         */
-                        break; /* unreachable, mutant-skip */
-                    }
-
-                    field_idx = find_tag(num_fields, tags, tag);
+                    /*
+                     * nonmonotonic -> stop here.
+                     *
+                     * Currently unreachable, because the check between the
+                     * real tag and prev_tag_id would have already triggered
+                     * the nonmonotonicity check.
+                     */
+                    break; /* unreachable, mutant-skip */
                 }
+
+                field_idx = find_tag(num_fields, tags, tag);
             }
 
             buf_advance(&src, num_tag_bytes);
