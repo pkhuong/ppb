@@ -18,7 +18,7 @@ PROTOSCOPE ?= protoscope
 
 .PHONY: all clean format unit test regen_test FORCE
 
-all: build/libppb.a build/libppb.so build/picoscope
+all: build/libppb.a build/libppb.so build/picoscope build/ubench
 
 include frama-c.mk
 
@@ -26,7 +26,7 @@ clean:
 	rm -rf build/ wp.csv eva.csv
 
 format:
-	clang-format-20 -i include/ppb/ppb.h src/*.[ch] examples/picoscope.c tests/*.c
+	clang-format-20 -i include/ppb/ppb.h src/*.[ch] examples/*.c tests/*.c
 
 unit: build/test_ppb
 	build/test_ppb
@@ -46,6 +46,10 @@ build/libppb.so: $(patsubst %,%.hash,$(SHARED_OBJS)) | $(SHARED_OBJS)
 	$(CC) $(COMMON_FLAGS) -shared -Wl,-soname,libppb.so -Wl,--no-undefined -o $@ $(SHARED_OBJS)
 
 build/picoscope: examples/picoscope.c build/libppb.a FORCE
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -o $@ $< build/libppb.a
+
+build/ubench: examples/ubench.c build/libppb.a FORCE
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -o $@ $< build/libppb.a
 
