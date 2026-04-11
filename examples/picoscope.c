@@ -419,6 +419,9 @@ disassemble(struct ppb_buf buf, size_t indent)
     /* Accumulate per-field counts observed by ppb_lexn for comparison. */
     struct ppb_field_meta lexn_m[NUM_FIELDS] = { 0 };
 
+    /* Lower bound on total varint value bytes, computed from decoded values. */
+    size_t varint_lower_bound = 0;
+
     while (buf.size > 0)
     {
         struct ppb_lexn_ret ret = ppb_lexn(&buf, NUM_FIELDS, catchall_tags, fields, 1);
@@ -440,6 +443,12 @@ disassemble(struct ppb_buf buf, size_t indent)
         struct ppb_field_value *v = &fields[idx].v;
 
         lexn_m[idx].num_occurrences++;
+        if (idx == FIELD_VARINT)
+        {
+            uint64_t val = v->u64;
+            varint_lower_bound += (val == 0) ? 1 : 1 + __builtin_ctzll(val) / 7;
+        }
+
         if (idx == FIELD_LEN)
         {
             size_t sz = v->payload.size;
@@ -531,6 +540,37 @@ disassemble(struct ppb_buf buf, size_t indent)
 
             assert(prescan_m[i].max_bytes == fields[i].m.max_bytes &&
                 "fields[i].m.max_bytes must match prescan after lexn");
+        }
+
+        if (i == FIELD_I32 && prescan_m[i].total_bytes != 4 * prescan_m[i].num_occurrences)
+        {
+            fprintf(stderr, "picoscope: I32 total_bytes wrong: got %zu, expected %zu\n",
+                prescan_m[i].total_bytes, 4 * prescan_m[i].num_occurrences);
+            return 1;
+        }
+
+        if (i == FIELD_I64 && prescan_m[i].total_bytes != 8 * prescan_m[i].num_occurrences)
+        {
+            fprintf(stderr, "picoscope: I64 total_bytes wrong: got %zu, expected %zu\n",
+                prescan_m[i].total_bytes, 8 * prescan_m[i].num_occurrences);
+            return 1;
+        }
+
+        if (i == FIELD_VARINT)
+        {
+            if (prescan_m[i].total_bytes < varint_lower_bound)
+            {
+                fprintf(stderr, "picoscope: varint total_bytes too small: %zu < lower_bound %zu\n",
+                    prescan_m[i].total_bytes, varint_lower_bound);
+                return 1;
+            }
+
+            if (prescan_m[i].total_bytes > 10 * prescan_m[i].num_occurrences)
+            {
+                fprintf(stderr, "picoscope: varint total_bytes too large: %zu > 10 * %zu\n",
+                    prescan_m[i].total_bytes, prescan_m[i].num_occurrences);
+                return 1;
+            }
         }
     }
 
