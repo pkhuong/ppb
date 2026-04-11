@@ -963,6 +963,12 @@ def main() -> None:
         help="use bwrap to sandbox each mutant; no source files are modified (default exe: bwrap)",
     )
     parser.add_argument(
+        "--extra-flags",
+        default=None,
+        metavar="FLAGS",
+        help="compiler flags passed as EXTRA_FLAGS=FLAGS to both make commands (e.g. '-fsanitize=undefined,address')",
+    )
+    parser.add_argument(
         "-j",
         nargs="?",
         type=int,
@@ -981,6 +987,10 @@ def main() -> None:
         BUILD_CMD = shlex.split(args.build_cmd)
     if args.test_cmd is not None:
         TEST_CMD = shlex.split(args.test_cmd)
+    if args.extra_flags is not None:
+        extra = [f"EXTRA_FLAGS={args.extra_flags}"]
+        BUILD_CMD = BUILD_CMD + extra
+        TEST_CMD = TEST_CMD + extra
 
     nproc = min(16, len(os.sched_getaffinity(0)) or 1) if args.j is None else args.j
     if nproc > 1 and args.bwrap is None:
