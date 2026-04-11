@@ -351,6 +351,10 @@ ppb_prescan(const struct ppb_buf buf, const size_t num_fields,
   @ assigns g_initial_buf, *buf, fields[0..num_fields - 1];
   @ ensures buf_valid(*buf);
   @ ensures \forall integer j; 0 ≤ j < num_fields ==> fields[j].m ≡ \old(fields[j].m);
+  @ behavior progress:
+  @   // either consume at least one byte, or flag an error
+  @   assumes buf->size > 0 ∧ max_lexed_fields > 0;
+  @   ensures \result.status ≢ PPB_OK ∨ buf->size < \old(buf->size);
   @*/
 struct ppb_lexn_ret
 ppb_lexn(struct ppb_buf *restrict const buf, const size_t num_fields,
@@ -375,13 +379,18 @@ ppb_lexn(struct ppb_buf *restrict const buf, const size_t num_fields,
     uint64_t prev_tag = 7; /* 8 = PPB_TAG_BITS(1, PPB_WIRE_VARINT) is the minimum valid tag */
     size_t first_field = SIZE_MAX;
     size_t last_field = 0;
+    /*@ ghost size_t ghost_consumed = 0; */
 
-    /*@ loop assigns i, fields[0..num_fields - 1], src, error, dummy, prev_tag, first_field, last_field;
+    /*@ loop assigns i, fields[0..num_fields - 1], src, error, dummy, prev_tag, first_field, last_field,
+      ghost_consumed;
       @ loop invariant 0 ≤ i ≤ max_lexed_fields;
       @ loop invariant buf_valid(src);
       @ loop invariant error ≡ PPB_OK;
       @ loop invariant prev_tag_monotonic: prev_tag ≥ \at(prev_tag, LoopCurrent) ≥ 7;
       @ loop invariant ∀ integer j; 0 ≤ j < num_fields ==> fields[j].m ≡ \at(fields[j].m, Pre);
+      @ loop invariant consumed_after_first: i ≡ 0 ∨ ghost_consumed > 0;
+      @ loop invariant consumed_link: src.size + ghost_consumed ≤ \at(src.size, LoopEntry);
+      @ loop invariant prev_tag_link: ghost_consumed ≡ 0 ==> prev_tag ≡ 7;
       @ loop variant max_lexed_fields - i;
       @*/
     for (size_t i = 0; i < max_lexed_fields; i++)
@@ -444,6 +453,7 @@ ppb_lexn(struct ppb_buf *restrict const buf, const size_t num_fields,
             }
 
             buf_advance(&src, num_tag_bytes);
+            /*@ ghost ghost_consumed += (size_t)num_tag_bytes; */
         }
 
         struct ppb_field *dst = &dummy;
