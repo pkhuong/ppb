@@ -27,6 +27,10 @@
 !/.docker/
 !/.docker/Dockerfile
 
+!/fuzz/
+!/fuzz/*.c
+!/fuzz/*.py
+
 !/tests/
 !/tests/*.c
 

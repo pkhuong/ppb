@@ -16,7 +16,7 @@ SHARED_OBJS := $(SHARED_C_OBJS)
 
 PROTOSCOPE ?= protoscope
 
-.PHONY: all clean format unit test regen_test FORCE
+.PHONY: all clean format unit test regen_test fuzz fuzz-corpus FORCE
 
 all: build/libppb.a build/libppb.so build/picoscope build/ubench
 
@@ -26,7 +26,7 @@ clean:
 	rm -rf build/ wp.csv eva.csv
 
 format:
-	clang-format-20 -i include/ppb/ppb.h src/*.[ch] examples/*.c tests/*.c
+	clang-format-20 -i include/ppb/ppb.h src/*.[ch] examples/*.c tests/*.c fuzz/*.c
 
 unit: build/test_ppb
 	build/test_ppb
@@ -72,6 +72,19 @@ $(SHARED_DIR)/%.o: src/%.c FORCE
 
 build/%.hash: build/%
 	@h=$$(sha256sum $<) || exit 1; echo "$$h" | cmp -s $@ - || echo "$$h" > $@
+
+FUZZ_CC ?= clang
+FUZZ_CFLAGS := $(CFLAGS) -g -fsanitize=fuzzer,address,undefined
+
+build/fuzz_ppb: fuzz/fuzz_ppb.c src/ppb.c
+	@mkdir -p $(dir $@)
+	$(FUZZ_CC) $(FUZZ_CFLAGS) -o $@ fuzz/fuzz_ppb.c src/ppb.c
+
+fuzz-corpus: fuzz/gen_corpus.py
+	python3 fuzz/gen_corpus.py fuzz/corpus
+
+fuzz: build/fuzz_ppb fuzz-corpus
+	build/fuzz_ppb -max_total_time=60 -max_len=1024 fuzz/corpus
 
 FORCE:
 .SECONDARY:  # don't rm "temporary" (like our .o) output files at the end
