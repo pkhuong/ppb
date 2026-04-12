@@ -380,7 +380,7 @@ ppb_lexn(struct ppb_buf *restrict const buf, const size_t num_fields,
       @ loop invariant 0 ≤ i ≤ max_lexed_fields;
       @ loop invariant buf_valid(src);
       @ loop invariant error ≡ PPB_OK;
-      @ loop invariant prev_tag_monotonic: prev_tag ≥ \at(prev_tag, LoopCurrent) \geq 7;
+      @ loop invariant prev_tag_monotonic: prev_tag ≥ \at(prev_tag, LoopCurrent) ≥ 7;
       @ loop invariant ∀ integer j; 0 ≤ j < num_fields ==> fields[j].m ≡ \at(fields[j].m, Pre);
       @ loop variant max_lexed_fields - i;
       @*/
