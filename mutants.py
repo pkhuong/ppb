@@ -604,6 +604,7 @@ def generate_mutations(
 
 @dataclass
 class EvalResults:
+    unexpected_detected: tuple[Mutation, ...]
     survived: tuple[Mutation, ...]
     triaged: tuple[Mutation, ...]
     expected_survived: tuple[Mutation, ...]
@@ -744,6 +745,7 @@ def evaluate_mutants(
     maybe_bwrap: str | None = None,
     nproc: int = 1,
 ) -> EvalResults:
+    unexpected_detected: list[Mutation] = []
     survived: list[Mutation] = []
     triaged: list[Mutation] = []
     expected_survived: list[Mutation] = []
@@ -757,6 +759,12 @@ def evaluate_mutants(
         outcomes = executor.map(evaluator, mutations)
         for idx, (m, outcome) in enumerate(zip(mutations, outcomes), 1):
             counts[outcome] += 1
+            # report any unexpected success, maybe we can drop some annotations
+            if outcome != "passed" and (
+                is_expected_survivor(m, ann) or (m.file, m.line_no) in ann.triaged_lines
+            ):
+                unexpected_detected.append(m)
+
             if outcome == "passed":
                 if is_expected_survivor(m, ann):
                     tag = "survived(expected)"
@@ -777,6 +785,7 @@ def evaluate_mutants(
             print(f"[{idx:4d}/{len(mutations)}] {tag:22s}  {m.label()}", flush=True)
 
     return EvalResults(
+        unexpected_detected=tuple(unexpected_detected),
         survived=tuple(survived),
         triaged=tuple(triaged),
         expected_survived=tuple(expected_survived),
@@ -824,6 +833,15 @@ def _print_eval_results(results: EvalResults) -> int:
     scoreable = total - stillborn
     pct = 100.0 * detected / scoreable if scoreable else 0.0
 
+    # mutant-triaged is pretty coarse grained; don't report unexpected success
+    # for triaged lines when some other mutant survived.
+    actually_triaged_lines = {(m.file, m.line_no) for m in results.triaged}
+    unexpected_detected = [
+        m
+        for m in results.unexpected_detected
+        if (m.file, m.line_no) not in results.triaged_lines
+    ]
+
     print()
     print(f"Mutations : {total}  ({stillborn} stillborn, {scoreable} scoreable)")
     print(
@@ -833,6 +851,7 @@ def _print_eval_results(results: EvalResults) -> int:
     print(f"Expected  : {len(results.expected_survived)}  (known equivalent/passing)")
     print(f"Triaged   : {len(results.triaged)}  (known gap, hard to test)")
     print(f"Survived  : {len(results.survived)}  (potential test gaps)")
+    print(f"Unexpected detections: {len(unexpected_detected)}  (removable annotation)")
 
     if results.expected_survived:
         print()
@@ -847,6 +866,15 @@ def _print_eval_results(results: EvalResults) -> int:
             expl = results.triaged_lines[(m.file, m.line_no)]
             print(f"  {m.label()}")
             print(f"    # {expl}")
+
+    if unexpected_detected:
+        print()
+        print("─── UNEXPECTED DETECTIONS (improved coverage?) " + "─" * 30)
+        for m in sorted(unexpected_detected):
+            expl = results.triaged_lines.get((m.file, m.line_no), None)
+            print(f"    {m.label()}")
+            if expl is not None:
+                print(f"    # {expl}")
 
     if results.survived:
         print()
