@@ -3,7 +3,7 @@ FRAMA_C_TARGET := src/ppb.c
 FRAMA_C_MAIN := ppb_entry_point
 
 FRAMA_C_WP_MEMORY_MODEL := typed+var+int+float+ref
-FRAMA_C_WP_PAR := $(shell n=$$(nproc 2>/dev/null || echo 8); echo $$(( n < 16 ? n : 16 )))
+FRAMA_C_WP_PAR := $(shell n=$$(nproc 2>/dev/null || echo 8); echo $$(( n < 32 ? n : 32 )))
 FRAMA_C_WP_TIMEOUT := 5
 FRAMA_C_WP_PROVER := alt-ergo,z3,cvc4
 
@@ -18,7 +18,7 @@ FRAMA_C_WP := \
 	-wp-rte -wp-smoke-tests \
 	-wp-model="$(FRAMA_C_WP_MEMORY_MODEL)" \
 	-wp-status $(FRAMA_C_WP_FCT) \
-	-wp-split -wp-cache=update \
+	-wp-split-conj -wp-no-callee-precond -wp-cache=update \
 	-wp-par=$(FRAMA_C_WP_PAR) -wp-timeout=$(FRAMA_C_WP_TIMEOUT) -wp-prover="$(FRAMA_C_WP_PROVER)"
 
 FRAMA_C_DOCKER := docker

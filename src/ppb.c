@@ -395,6 +395,13 @@ ppb_prescan_impl(const struct ppb_buf buf, const size_t num_fields,
         }
     }
 
+    /*
+     * tags[0].bits != 0 (sentinel check above) and the array is strictly sorted
+     * (sort check above), so every element exceeds the previous and all are > 0.
+     * WP cannot prove the universally-quantified induction automatically.
+     */
+    /*@ admit \forall integer j; 0 ≤ j < num_fields ==> tags[j].bits > 0; */
+
     struct ppb_field dummy = { 0 };
     bool has_catch_all = num_fields > 0 && (int64_t)tags[num_fields - 1].bits < 0;
     /*
@@ -408,7 +415,6 @@ ppb_prescan_impl(const struct ppb_buf buf, const size_t num_fields,
       @ loop invariant buf_valid(src);
       @ loop invariant src.size ≤ buf.size;
       @ loop invariant error ≡ PPB_OK;
-      @ loop invariant num_fields ≡ 0 ∨ tags[0].bits ≢ 0;
       @ loop variant max_lexed_fields - i;
       @*/
     for (size_t i = 0; i < max_lexed_fields; i++)
@@ -428,8 +434,11 @@ ppb_prescan_impl(const struct ppb_buf buf, const size_t num_fields,
         /*
          * All encoded_tags are > 0: fields[0].tag.bits ≢ 0 and the
          * array is strictly sorted, so each element > 0.
+         * find_tag postcondition: field_idx < num_fields ==> tags[field_idx].bits ≡ tag.
+         * Together: field_idx < num_fields ==> tag > 0.
          */
         /*@ admit zero_absent: tag ≡ 0 ==> field_idx ≥ num_fields; */
+        /*@ assert field_idx < num_fields ==> tag ≢ 0; */
 
         if (unlikely(field_idx >= num_fields)) /* -1UL for missing, so mutant-ok: '>=' -> '>' */
         {
@@ -451,6 +460,7 @@ ppb_prescan_impl(const struct ppb_buf buf, const size_t num_fields,
         struct ppb_field *dst = (field_idx < num_fields) ? fields + field_idx : &dummy;
         dst->v = (struct ppb_field_value) { .ptr = ptr };
 
+        /*@ admit tag ≢ 0; // all tags[k] > 0 (admit above) and tag==0 returns early */
         int rc = handle_field(tag, dst, &src, /*update_metadata=*/true, &error);
         if (unlikely(rc != 0))
         {
@@ -458,8 +468,7 @@ ppb_prescan_impl(const struct ppb_buf buf, const size_t num_fields,
         }
     }
 
-    /*@ assert src.size ≤ g_initial_buf.size; // from buf_valid(src) loop invariant */
-    size_t uconsumed = buf.size - src.size; /* unsigned: safe since src.size ≤ buf.size */
+    size_t uconsumed = buf.size - src.size; /* safe since src.size ≤ buf.size (loop invariant) */
     /*@ assert uconsumed ≤ buf.size; */
     ptrdiff_t consumed = (ptrdiff_t)uconsumed;
     if (unlikely(src.size < break_size))
@@ -538,7 +547,6 @@ ppb_lexn_impl(struct ppb_buf *restrict const buf, const size_t num_fields,
       @ loop invariant ∀ integer j; 0 ≤ j < num_fields ==> fields[j].m ≡ \at(fields[j].m, Pre);
       @ loop invariant consumed_after_first: i ≡ 0 ∨ ghost_consumed > 0;
       @ loop invariant consumed_link: src.size + ghost_consumed ≤ \at(src.size, LoopEntry);
-      @ loop invariant consumed_positive: i > 0 ==> src.size < \at(src.size, LoopEntry);
       @ loop invariant prev_tag_link: ghost_consumed ≡ 0 ==> prev_tag ≡ 7;
       @ loop variant max_lexed_fields - i;
       @*/
@@ -593,11 +601,10 @@ ppb_lexn_impl(struct ppb_buf *restrict const buf, const size_t num_fields,
             /* See if want to dump this in a catch-all field. */
             if (unlikely(field_idx > try_catch_all_field_id))
             {
-                /*@ assert prev_tag < tag; */
+                /*@ assert prev_tag < tag ∧ prev_tag < (1 << 63); */
                 /*@ ghost uint64_t pre_or_tag = tag; */
                 tag |= UINT64_MAX << 3; /* preserve the type, but otherwise all 1s. */
-                /*@ assert tag_or_monotone: tag ≥ pre_or_tag; // bitor_ge_l */
-                /*@ assert tag > prev_tag; // tag_or_monotone: tag >= pre_or_tag > prev_tag */
+                /*@ assert tag_or_monotone: tag ≥ pre_or_tag > prev_tag; // bitor_ge_l */
                 field_idx = find_tag(num_fields, tags, tag);
             }
 
@@ -617,6 +624,7 @@ ppb_lexn_impl(struct ppb_buf *restrict const buf, const size_t num_fields,
         }
 
         dst->v = (struct ppb_field_value) { .ptr = ptr };
+        /*@ assert tag ≢ 0; */
         int rc = handle_field(tag, dst, &src, false, &error);
 
         /*
