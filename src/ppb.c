@@ -569,14 +569,8 @@ ppb_lexn_impl(struct ppb_buf *restrict const buf, const size_t num_fields,
             /*@ assert tag < 8 ==> tag ≤ prev_tag; */
 
             /*
-             * peek_tag decodes with limb_width=8, keeping continuation
-             * bits in place.  The fast path handles at most 8 bytes and
-             * rejects a tag with no stop bit in 8 bytes; the slow path
-             * only ever reads 1 byte.  Either way the decoded tag is at
-             * most 2^56 - 1, which is less than UINT64_MAX << 3.
-             *
-             * After a catch-all match, prev_tag = UINT64_MAX << 3 | wire,
-             * which exceeds any real tag, so this check always stops.
+             * peek_tag returns < (1 << 63), so we'll always break when
+             * prev_tag was populated for a catch-all field.
              */
             /* TODO: bulk-skip ignored fields more efficiently. */
             if (unlikely(tag <= prev_tag))

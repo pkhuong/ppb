@@ -755,6 +755,46 @@ test_lexn_one_per_call(void)
     CHECK(ret.field_range == 0);
 }
 
+/* multiple instances of the same field, we expect one per lexn call. */
+static void
+test_lexn_repeated_one_per_call(void)
+{
+    printf("test_lexn_repeated_one_per_call\n");
+
+    static const uint8_t wire[] = {
+        0x08, 0x01,        /* field 1 varint 1  (1-byte value) */
+        0x08, 0x96, 0x01,  /* field 1 varint 150 (2-byte value) */
+        0x08, 0x01,        /* field 1 varint 1  (1-byte value) */
+    };
+
+    struct ppb_encoded_tag tags[1] = { PPB_TAG(1, PPB_WIRE_VARINT) };
+    struct ppb_field fields[1];
+    zero_fields(1, fields);
+
+    struct ppb_buf buf = make_buf(wire, sizeof(wire));
+    struct ppb_lexn_ret ret;
+
+    ret = ppb_lexn(&buf, 1, tags, fields, SIZE_MAX);
+    CHECK(ret.status == PPB_OK);
+    CHECK(ret.first_field == 0);
+    CHECK(ret.field_range == 1);
+    CHECK(fields[0].v.u64 == 1);
+
+    ret = ppb_lexn(&buf, 1, tags, fields, SIZE_MAX);
+    CHECK(ret.status == PPB_OK);
+    CHECK(ret.first_field == 0);
+    CHECK(ret.field_range == 1);
+    CHECK(fields[0].v.u64 == 150);
+
+    ret = ppb_lexn(&buf, 1, tags, fields, SIZE_MAX);
+    CHECK(ret.status == PPB_OK);
+    CHECK(ret.first_field == 0);
+    CHECK(ret.field_range == 1);
+    CHECK(fields[0].v.u64 == 1);
+
+    CHECK(buf.size == 0);
+}
+
 /* Make sure we correctly no-op when we want 0 field/ */
 static void
 test_lexn_no_field(void)
@@ -1810,6 +1850,7 @@ main(void)
 
     test_lexn_known_fields_in_order();
     test_lexn_one_per_call();
+    test_lexn_repeated_one_per_call();
     test_lexn_no_field();
     test_lexn_catchall_fields_in_order();
     test_lexn_out_of_order();
