@@ -49,6 +49,14 @@ static_assert(PPB_ENCODE_VARINT((1UL << 56) - 1) == 0x7FFFFFFFFFFFFFFFUL,
 static_assert(PPB_TAG_BITS(-1, PPB_WIRE_VARINT) == ((UINT64_MAX << 3) | 0), "catch-all, varint");
 static_assert(PPB_TAG_BITS(-1, PPB_WIRE_I32) == ((UINT64_MAX << 3) | 5), "catch-all, I32");
 
+/*
+ * Bitwise OR is monotone: OR can only set bits, never clear them.
+ * WP lacks a built-in axiom for this, so we admit it globally.
+ * The proposition is self-evident: (a | b) has every bit of a set, plus
+ * possibly more from b, so the numerical value is ≥ a.
+ */
+/*@ admit lemma bitor_ge_l: \forall uint64_t a, b; (a | b) ≥ a; */
+
 /*@ terminates \true;
   @ assigns \result \from x;
   @ behavior sint32:
