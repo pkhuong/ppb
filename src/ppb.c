@@ -53,6 +53,7 @@ static_assert(PPB_TAG_BITS(-1, PPB_WIRE_I32) == ((UINT64_MAX << 3) | 5), "catch-
   @ assigns \result \from x;
   @ behavior sint32:
   @  assumes 0 ≤ x < (1 << 32);
+  @  // Tested by test_zag() boundary cases in tests/test_ppb.c.
   @  admit ensures  (-1 << 31) ≤ \result < (1 << 31);
   @ behavior sint64:
   @  assumes x ≥ (1 << 32);

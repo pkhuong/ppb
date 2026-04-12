@@ -228,6 +228,12 @@ decode_varint(struct ppb_buf *restrict src, enum ppb_error *restrict error)
   @ ensures \result ≢ 0;
   @ ensures \result < 0 ∨ (\result > 0 ∧ \result ≤ src.size);
   @ ensures \result < 0 ==> *OUT_tag ≡ 0;
+  @ // The fast path reads ≤8 bytes with limb_width=8; the 8th byte has its
+  @ // high (stop) bit clear, contributing at most bits 56-62 (7 bits), so
+  @ // all 8 bytes together yield at most 63 bits of tag value.  The slow
+  @ // path reads 1 byte (≤0x7F).  Either way *OUT_tag < 2^63.
+  @ // Tested by test_peek_tag_range() in tests/test_ppb.c.
+  @ admit ensures \result > 0 ==> *OUT_tag < ((uint64_t)1 << 63);
   @*/
 static inline int
 peek_tag(struct ppb_buf src, uint64_t *restrict OUT_tag)

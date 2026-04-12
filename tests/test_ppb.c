@@ -81,6 +81,14 @@ test_zag(void)
     CHECK(ppb_zag(4) == 2);
     CHECK(ppb_zag(UINT64_MAX) == INT64_MIN);
     CHECK(ppb_zag(UINT64_MAX - 1) == INT64_MAX);
+    /*
+     * Admitted postcondition (ppb.c ppb_zag sint32 behavior): for x < 2^32
+     * the result fits in int32.  Check boundary values:
+     *   UINT32_MAX-1 encodes INT32_MAX (most positive sint32)
+     *   UINT32_MAX   encodes INT32_MIN (most negative sint32)
+     */
+    CHECK(ppb_zag(UINT32_MAX - 1) == INT32_MAX);
+    CHECK(ppb_zag(UINT32_MAX) == (int64_t)INT32_MIN);
 }
 
 static void
@@ -290,6 +298,93 @@ test_peek_tag_error(void)
         struct ppb_buf buf = make_buf(data, sizeof(data));
         uint64_t val = 123;
         int rc = peek_tag(buf, &val);
+        CHECK(rc == PPB_ERROR_CORRUPT_TAG);
+        CHECK(val == 0);
+    }
+}
+
+/*
+ * Admitted postcondition (varint.h peek_tag): a successfully decoded tag is
+ * always < 2^63.  Exercise the maximum value reachable on each code path,
+ * and confirm that the two inputs that would violate the bound — all 0xFF
+ * (no stop bit at all) and 0x80 in byte 7 (continuation bit in the last
+ * fast-path byte) — are correctly rejected as CORRUPT_TAG.
+ *
+ * Fast path (>=8 bytes): 7 bytes with continuation bit set, 8th byte with
+ * high bit clear — all 63 non-high-bit positions set → 0x7FFFFFFFFFFFFFFF.
+ *
+ * Slow path (<8 bytes): reads one byte at a time until a byte with high bit
+ * clear; a single 0x7F byte gives the max single-byte value 127, also < 2^63.
+ *
+ * Error cases use 8 bytes of tail padding so the fast path is unambiguously
+ * exercised (buf.size > 8), and then call peek_varint_slow explicitly to
+ * cover the slow path too.
+ */
+static void
+test_peek_tag_range(void)
+{
+    printf("test_peek_tag_range\n");
+
+    /* Fast path success: stop bit in byte 7 → result = 0x7FFFFFFFFFFFFFFF. */
+    {
+        uint8_t data[] = { 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x7F };
+        struct ppb_buf buf = make_buf(data, sizeof(data));
+        uint64_t val = 0;
+        int rc = peek_tag(buf, &val);
+        CHECK(rc == 8);
+        CHECK(val == (UINT64_MAX >> 1));  /* 2^63 - 1 */
+        CHECK(val < ((uint64_t)1 << 63));
+    }
+
+    /* Slow path success: single byte 0x7F → result = 127. */
+    {
+        uint8_t data[] = { 0x7F };
+        struct ppb_buf buf = make_buf(data, sizeof(data));
+        uint64_t val = 0;
+        int rc = peek_tag(buf, &val);
+        CHECK(rc == 1);
+        CHECK(val == 0x7F);
+        CHECK(val < ((uint64_t)1 << 63));
+    }
+
+    /*
+     * All 8 bytes are 0xFF: no stop bit anywhere in the fast-path window.
+     * 8 bytes of 0x00 tail padding ensure buf.size > 8 so the fast path
+     * is taken; the error is detected purely from the first 8 bytes.
+     */
+    {
+        uint8_t data[16] = { 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00 };
+
+        uint64_t val = 123;
+        int rc = peek_tag(make_buf(data, sizeof(data)), &val);
+        CHECK(rc == PPB_ERROR_CORRUPT_TAG);
+        CHECK(val == 0);
+
+        /* Slow path: 8 bytes with continuation bits, loop exhausted. */
+        val = 123;
+        rc = peek_varint_slow(make_buf(data, 8), &val, /*limb_width=*/8, PPB_ERROR_CORRUPT_TAG);
+        CHECK(rc == PPB_ERROR_CORRUPT_TAG);
+        CHECK(val == 0);
+    }
+
+    /*
+     * 0x80 in byte 7 (the most-significant fast-path byte): 0x80 = 10000000,
+     * the high (continuation) bit is set, so there is still no stop bit in
+     * the 8-byte window.  If accepted, the decoded value would be ≥ 2^63.
+     */
+    {
+        uint8_t data[16] = { 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00 };
+
+        uint64_t val = 123;
+        int rc = peek_tag(make_buf(data, sizeof(data)), &val);
+        CHECK(rc == PPB_ERROR_CORRUPT_TAG);
+        CHECK(val == 0);
+
+        /* Slow path: 0x80 has the continuation bit set, same outcome. */
+        val = 123;
+        rc = peek_varint_slow(make_buf(data, 8), &val, /*limb_width=*/8, PPB_ERROR_CORRUPT_TAG);
         CHECK(rc == PPB_ERROR_CORRUPT_TAG);
         CHECK(val == 0);
     }
