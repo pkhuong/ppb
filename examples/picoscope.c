@@ -21,9 +21,9 @@ enum
     NUM_FIELDS = 4,
 };
 
-static int disassemble(struct ppb_buf buf, size_t indent);
-static int format_field(size_t idx, uint64_t field_num, struct ppb_field_value *v, size_t indent,
-    bool newline);
+static int disassemble(struct ppb_buf buf, const char *end_of_input, size_t indent);
+static int format_field(size_t idx, uint64_t field_num, struct ppb_field_value *v, const char *end_of_input,
+    size_t indent, bool newline);
 
 /* Catch-all tags: one per wire type, sorted ascending by PPB_TAG_BITS(-1, wt). */
 static const struct ppb_encoded_tag catchall_tags[NUM_FIELDS] = {
@@ -47,16 +47,30 @@ print_indent(size_t indent)
 /*
  * Returns the number of top-level fields if payload looks like a
  * valid protobuf submessage (prescan consumes all bytes), 0 otherwise.
+ *
+ * `end_of_input` points one past the last byte of the top-level input
+ * buffer.  The prescan is run over the wider slice [payload.buf,
+ * end_of_input) with a hard limit of payload.size, so that an
+ * over-long submessage is treated as invalid rather than silently
+ * reading past the declared boundary.
  */
 static size_t
-submessage_field_count(const struct ppb_buf payload, struct ppb_field fields[static NUM_FIELDS])
+submessage_field_count(const struct ppb_buf payload, const char *end_of_input,
+    struct ppb_field fields[static NUM_FIELDS])
 {
     if (payload.size == 0)
     {
         return 0;
     }
 
-    ptrdiff_t scanned = ppb_prescan(payload, NUM_FIELDS, catchall_tags, fields, SIZE_MAX);
+    struct ppb_buf wider = {
+        .buf = payload.buf,
+        .size = (size_t)((const char *)end_of_input - (const char *)payload.buf),
+    };
+
+    ptrdiff_t scanned = ppb_prescan_with_hard_limit(wider, payload.size, NUM_FIELDS, catchall_tags, fields,
+        SIZE_MAX);
+
     if (scanned < 0 || (size_t)scanned != payload.size)
     {
         assert(scanned < 0 && "successful prescan should read whole message");
@@ -265,7 +279,8 @@ print_hex(const struct ppb_buf payload)
 }
 
 static int
-format_len_field(uint64_t field_num, const struct ppb_field_value *v, size_t indent, bool newline)
+format_len_field(uint64_t field_num, const struct ppb_field_value *v, const char *end_of_input, size_t indent,
+    bool newline)
 {
     struct ppb_buf payload = v->payload;
     const char *nl = newline ? "\n" : "";
@@ -280,7 +295,7 @@ format_len_field(uint64_t field_num, const struct ppb_field_value *v, size_t ind
     /* 1. Try submessage. */
     struct ppb_field fields[NUM_FIELDS] = { 0 };
 
-    size_t nfields = submessage_field_count(payload, fields);
+    size_t nfields = submessage_field_count(payload, end_of_input, fields);
     if (nfields > 0)
     {
         /*
@@ -309,7 +324,7 @@ format_len_field(uint64_t field_num, const struct ppb_field_value *v, size_t ind
                 }
 
                 printf("%" PRIu64 ": {", field_num);
-                if (format_field(i, inner_num, iv, 0, /*newline=*/false) != 0)
+                if (format_field(i, inner_num, iv, end_of_input, 0, /*newline=*/false) != 0)
                 {
                     return 1;
                 }
@@ -320,7 +335,7 @@ format_len_field(uint64_t field_num, const struct ppb_field_value *v, size_t ind
         }
 
         printf("%" PRIu64 ": {\n", field_num);
-        if (disassemble(payload, indent + 2) != 0)
+        if (disassemble(payload, end_of_input, indent + 2) != 0)
         {
             return 1;
         }
@@ -370,7 +385,8 @@ format_len_field(uint64_t field_num, const struct ppb_field_value *v, size_t ind
 }
 
 static int
-format_field(size_t idx, uint64_t field_num, struct ppb_field_value *v, size_t indent, bool newline)
+format_field(size_t idx, uint64_t field_num, struct ppb_field_value *v, const char *end_of_input,
+    size_t indent, bool newline)
 {
     const char *nl = newline ? "\n" : "";
 
@@ -389,14 +405,14 @@ format_field(size_t idx, uint64_t field_num, struct ppb_field_value *v, size_t i
         break;
 
     case FIELD_LEN:
-        return format_len_field(field_num, v, indent, newline);
+        return format_len_field(field_num, v, end_of_input, indent, newline);
     }
 
     return 0;
 }
 
 static int
-disassemble(struct ppb_buf buf, size_t indent)
+disassemble(struct ppb_buf buf, const char *end_of_input, size_t indent)
 {
     struct ppb_field fields[NUM_FIELDS] = { 0 };
 
@@ -406,9 +422,21 @@ disassemble(struct ppb_buf buf, size_t indent)
      * validated (toplevel: explicit prescan in main; recursive:
      * submessage_field_count prescans before calling us), so this must
      * succeed.
+     *
+     * Run over the wider slice [buf.buf, end_of_input) with a hard limit
+     * of buf.size so that a malformed message that claims to be smaller
+     * than it really is is caught as an error rather than reading past the
+     * declared boundary.
      */
-    ptrdiff_t scanned = ppb_prescan(buf, NUM_FIELDS, catchall_tags, fields, SIZE_MAX);
-    assert((size_t)scanned == buf.size && "redundant prescan must succeed");
+    size_t msg_size = buf.size;
+    struct ppb_buf wider = {
+        .buf = buf.buf,
+        .size = (size_t)((const char *)end_of_input - (const char *)buf.buf),
+    };
+
+    ptrdiff_t scanned = ppb_prescan_with_hard_limit(wider, msg_size, NUM_FIELDS, catchall_tags, fields,
+        SIZE_MAX);
+    assert((size_t)scanned == msg_size && "redundant prescan must succeed");
 
     struct ppb_field_meta prescan_m[NUM_FIELDS] = { 0 };
     for (size_t i = 0; i < NUM_FIELDS; i++)
@@ -422,9 +450,16 @@ disassemble(struct ppb_buf buf, size_t indent)
     /* Lower bound on total varint value bytes, computed from decoded values. */
     size_t varint_lower_bound = 0;
 
-    while (buf.size > 0)
+    /*
+     * Lex the wider slice with a hard limit so we stop exactly at the
+     * declared message boundary, even though the buffer extends beyond.
+     */
+    size_t end_size = wider.size - msg_size; /* bytes in wider after the message */
+    buf = wider; /* lex from the wider buffer so the limit mechanism is active */
+    while (buf.size > end_size)
     {
-        struct ppb_lexn_ret ret = ppb_lexn(&buf, NUM_FIELDS, catchall_tags, fields, 1);
+        struct ppb_lexn_ret ret = ppb_lexn_with_hard_limit(&buf, msg_size, NUM_FIELDS, catchall_tags, fields,
+            1);
 
         if (ret.status != PPB_OK)
         {
@@ -480,7 +515,7 @@ disassemble(struct ppb_buf buf, size_t indent)
 
         print_indent(indent);
 
-        if (format_field(idx, field_num, v, indent, /*newline=*/true) != 0)
+        if (format_field(idx, field_num, v, end_of_input, indent, /*newline=*/true) != 0)
         {
             return 1;
         }
@@ -704,7 +739,8 @@ main(int argc, char **argv)
         return 1;
     }
 
-    int ret = disassemble(buf, 0);
+    const char *end_of_input = (const char *)data + size;
+    int ret = disassemble(buf, end_of_input, 0);
     free(data);
     return ret;
 }
