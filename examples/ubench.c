@@ -219,6 +219,7 @@ decode_input(const uint8_t *input, size_t input_size)
     struct ppb_field outer_fields[1] = { 0 };
     struct ppb_field inner_fields[OUTPUT_SW_PIPELINE][4] = { 0 };
     struct ppb_buf buf = { input, input_size };
+    const char *end_of_input = (const char *)input + input_size;
     size_t count = 0;
 
     while (buf.size > 0)
@@ -240,7 +241,18 @@ decode_input(const uint8_t *input, size_t input_size)
             dst[2].v.u64 = 0;
             dst[3].v.u64 = 0;
 
-            ppb_prescan(payload, 4, inner_tags, dst, SIZE_MAX);
+            /*
+             * Prescan the inner message over the wider slice [payload.buf,
+             * end_of_input) with a hard limit of payload.size: a record
+             * that claims to be smaller than it really is is caught here
+             * rather than silently reading past its declared boundary.
+             */
+            struct ppb_buf wider = {
+                .buf = payload.buf,
+                .size = (size_t)(end_of_input - (const char *)payload.buf),
+            };
+
+            ppb_prescan_with_hard_limit(wider, payload.size, 4, inner_tags, dst, SIZE_MAX);
         }
 
         const struct ppb_field *result = inner_fields[(count + 1) % OUTPUT_SW_PIPELINE];
