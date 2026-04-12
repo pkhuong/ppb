@@ -5,11 +5,13 @@ jobs:
     runs-on: ubuntu-slim
     steps:
       - name: install deps
-        run: sudo apt-get update && sudo apt-get install -y gcovr
+        run: sudo apt-get update && sudo apt-get install -y gcovr clang
       - name: checkout
         uses: actions/checkout@v4
       - name: build and test
         run: make CC=gcc EXTRA_FLAGS=-mbmi2 test
+      - name: build and test (sanitizers)
+        run: make CC=clang EXTRA_FLAGS="-mbmi2 -fsanitize=address,undefined -fno-omit-frame-pointer" test
       - name: gather coverage
         run: export EXTRA_FLAGS=-mbmi2 ; ./coverage.sh
       - name: Upload coverage to Codecov
@@ -23,11 +25,13 @@ jobs:
     runs-on: ubuntu-24.04-arm
     steps:
       - name: install deps
-        run: sudo apt-get update && sudo apt-get install -y gcovr
+        run: sudo apt-get update && sudo apt-get install -y gcovr clang
       - name: checkout
         uses: actions/checkout@v4
       - name: build and test
         run: make CC=gcc test
+      - name: build and test (sanitizers)
+        run: make CC=clang EXTRA_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer" test
       - name: gather coverage
         run: ./coverage.sh
       - name: Upload coverage to Codecov
