@@ -52,8 +52,6 @@ static_assert(PPB_TAG_BITS(-1, PPB_WIRE_I32) == ((UINT64_MAX << 3) | 5), "catch-
 /*
  * Bitwise OR is monotone: OR can only set bits, never clear them.
  * WP lacks a built-in axiom for this, so we admit it globally.
- * The proposition is self-evident: (a | b) has every bit of a set, plus
- * possibly more from b, so the numerical value is ≥ a.
  */
 /*@ admit lemma bitor_ge_l: \forall uint64_t a, b; (a | b) ≥ a; */
 
@@ -188,12 +186,8 @@ ppb_decode_varint(struct ppb_buf *restrict buf, enum ppb_error *restrict error)
 }
 
 /*
- * Binary searches for the `ppb_field` in `fields` where `tag.bits` matches `tag`:
- * `tag` masks off irrelevant bytes, but still contains the continuation/stop bit
- * at the top of each byte.
- *
- * Returns the index of an exact match in `fields`, and an invalid
- * index, greater than or equal to `num_fields`.
+ * Binary searches `tags` for an entry whose `.bits` equals `tag`.
+ * Returns its index, or SIZE_MAX if not found.
  */
 /*@ requires \valid_read(tags + (0 .. num_fields - 1));
   @ terminates \true;
@@ -222,12 +216,7 @@ find_tag(const size_t num_fields, const struct ppb_encoded_tag *__restrict tags,
         size_t next_len = len - (len / 2);
         size_t pivot = len / 2;
 
-        /*
-         * Assume monotonicity: callers pass strictly sorted arrays
-         * (ppb_prescan validates, ppb_lexn requires it informally).
-         * Sortedness and tags[lo + pivot] > tag imply tags[i] > tag
-         * for i >= lo + pivot.
-         */
+        /* Sortedness: if the pivot exceeds tag, so do all elements after it. */
         /*@ admit tags[lo + pivot].bits > tag ==>
           @    ∀ integer i; lo + pivot ≤ i < num_fields ==> tags[i].bits > tag;
           @*/
@@ -396,8 +385,8 @@ ppb_prescan_impl(const struct ppb_buf buf, const size_t num_fields,
     }
 
     /*
-     * tags[0].bits != 0 (sentinel check above) and the array is strictly sorted
-     * (sort check above), so every element exceeds the previous and all are > 0.
+     * tags[0].bits >= 8 (sentinel check above) and the array is strictly sorted
+     * (sort check above), so every element exceeds the previous and all are > 7.
      * WP cannot prove the universally-quantified induction automatically.
      */
     /*@ admit \forall integer j; 0 ≤ j < num_fields ==> tags[j].bits > 7; */
@@ -435,14 +424,14 @@ ppb_prescan_impl(const struct ppb_buf buf, const size_t num_fields,
          * All encoded_tags are > 7: fields[0].tag.bits > 7 and the
          * array is strictly sorted, so each element > 7.
          * find_tag postcondition: field_idx < num_fields ==> tags[field_idx].bits ≡ tag.
-         * Together: field_idx < num_fields ==> tag > 0.
+         * Together: field_idx < num_fields ==> tag > 7.
          */
         /*@ admit zero_absent: tag < 8 ==> field_idx ≥ num_fields; */
         /*@ assert field_idx < num_fields ==> tag > 7; */
 
         if (unlikely(field_idx >= num_fields)) /* -1UL for missing, so mutant-ok: '>=' -> '>' */
         {
-            /* field index == 0 is invalid for any type tag. */
+            /* tag < 8: field number 0 is invalid in protobuf. */
             if (unlikely(tag < 8))
             {
                 error_set(&error, PPB_ERROR_CORRUPT_TAG);
@@ -519,10 +508,8 @@ ppb_lexn_impl(struct ppb_buf *restrict const buf, const size_t num_fields,
 
     struct ppb_field dummy = { 0 };
     /*
-     * look for a catch-all field if field_idx > try_catch_all_field_id.
-     *
-     * This is set to num_fields - 1 when we have at least one catch-all
-     * field, and to SIZE_MAX (never look for catchall) otherwise.
+     * look for a catch-all field if field_idx > try_catch_all_field_id:
+     * num_fields - 1 when the last tag is a catch-all, SIZE_MAX otherwise.
      */
     const size_t try_catch_all_field_id = (num_fields > 0 && (int64_t)tags[num_fields - 1].bits < 0) ?
         num_fields - 1 : /* could be any larger value < SIZE_MAX; mutant-skip */
@@ -532,7 +519,7 @@ ppb_lexn_impl(struct ppb_buf *restrict const buf, const size_t num_fields,
     size_t last_field = 0;
     /*
      * Break when src.size falls to or below this threshold, meaning bytes
-     * consumed >= limit (just a saturating substraction).
+     * consumed >= limit (just a saturating subtraction).
      */
     const size_t break_size = (limit <= src.size) ? src.size - limit : 0; /* mutant-ok: 'operator:<= -> <' */
     /*@ ghost size_t ghost_consumed = 0; */
@@ -591,7 +578,7 @@ ppb_lexn_impl(struct ppb_buf *restrict const buf, const size_t num_fields,
             /*@ assert num_tag_bytes > 0; */
 
             field_idx = find_tag(num_fields, tags, tag);
-            /* See if want to dump this in a catch-all field. */
+            /* See if we want to dump this in a catch-all field. */
             if (unlikely(field_idx > try_catch_all_field_id))
             {
                 /*@ assert prev_tag < tag ∧ prev_tag < (1 << 63); */
@@ -635,7 +622,7 @@ ppb_lexn_impl(struct ppb_buf *restrict const buf, const size_t num_fields,
     /*
      * Signal the limit error (if any) if the final field ended
      * strictly after the limit.  error_set is sticky, so we're
-     * not "losing" a prior errors.
+     * not losing a prior error.
      */
     if (unlikely(src.size < break_size))
     {
@@ -647,7 +634,6 @@ ppb_lexn_impl(struct ppb_buf *restrict const buf, const size_t num_fields,
      * can't fold buf_valid through the struct copy (hence the
      * admitted postcondition).
      */
-    /* assert buf_valid(src); */
     *buf = src;
 
     uint32_t field_range;

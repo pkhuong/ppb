@@ -93,7 +93,7 @@ fuzz_zag(const uint8_t *data, size_t size)
     {
         int64_t r = ppb_zag(x);
 
-    /* Admitted postcondition (sint32 behavior): ppb.c line 65. */
+        /* Admitted postcondition: sint32 behavior of ppb_zag. */
         if (x < (1UL << 32))
         {
             POSTCOND(r >= (int64_t)INT32_MIN);
@@ -186,7 +186,7 @@ check_lexn_postconds(struct ppb_lexn_ret ret, struct ppb_buf buf, size_t num_fie
     /* buf_valid postcondition (partly admitted in Frama-C). */
     check_buf_valid(buf, data, size);
 
-    /* Metadata must be unchanged (admitted postcondition, ppb.c line 634). */
+    /* Admitted postcondition: fields[].m unchanged across ppb_lexn. */
     for (size_t i = 0; i < num_fields; i++)
         POSTCOND(memcmp(&fields[i].m, &meta_snapshot[i], sizeof(meta_snapshot[0])) == 0);
 

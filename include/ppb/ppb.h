@@ -29,7 +29,7 @@
  * of the first lexed (and not skipped) field, and the width of that
  * range (or UINT32_MAX if unknown).
  *
- * The runtime complexity of `ppb_field` is also `\Theta(n log m)`, where
+ * The runtime complexity of `ppb_lexn` is also `\Theta(n log m)`, where
  * `n` is the number of toplevel fields decoded in the call and `m` the
  * number of `ppb_field`s.
  *
@@ -316,8 +316,8 @@ ppb_prescan_with_soft_limit(struct ppb_buf buf, size_t limit, size_t num_fields,
 }
 
 /*
- * Consumes from `buf` until it's lexed up to `max_lexed_fields` toplevel
- * fields.  See `ppb_lexn_impl` for details.
+ * Consumes from `buf` up to `max_lexed_fields` toplevel fields in
+ * strictly ascending order.  Returns the decoded field range and status.
  */
 static inline struct ppb_lexn_ret
 ppb_lexn(struct ppb_buf *__restrict buf, size_t num_fields, const struct ppb_encoded_tag *__restrict tags,
