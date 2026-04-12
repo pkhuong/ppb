@@ -83,10 +83,11 @@ enum ppb_error
 {
     PPB_OK = 0,
     PPB_ERROR_UNSORTED_FIELD_ARR = -1,  /* tags[].bits not strictly ascending */
-    PPB_ERROR_SENTINEL_FIELD_ARR = -2,  /* tags[].bits includes 0 (invalid in protobuf) */
+    PPB_ERROR_SENTINEL_FIELD_ARR = -2,  /* tags[].bits includes < 8 (field number 0 is forbidden in protobuf) */
     PPB_ERROR_TRUNCATED_DATA = -3,  /* message cut short at the end of the `ppb_buf` */
     PPB_ERROR_CORRUPT_VARINT = -4,  /* invalid varint encoding (overlong) */
     PPB_ERROR_CORRUPT_TAG = -5,  /* invalid tag encoding (zero, overlong, or unsupported wire type) */
+    PPB_ERROR_LIMIT_EXCEEDED = -6,  /* consumed bytes exceeded hard limit */
 };
 
 /*
@@ -107,6 +108,23 @@ enum ppb_error
  * A negative value is a ppb_error.
  */
 ptrdiff_t ppb_prescan(struct ppb_buf buf, size_t num_fields,
+    const struct ppb_encoded_tag *__restrict tags, struct ppb_field *__restrict fields,
+    size_t max_lexed_fields);
+
+/*
+ * Like `ppb_prescan`, but stops at the first field boundary where bytes
+ * consumed >= `limit`.  If consumed bytes exceed `limit`, returns
+ * `PPB_ERROR_LIMIT_EXCEEDED`.
+ */
+ptrdiff_t ppb_prescan_with_hard_limit(struct ppb_buf buf, size_t limit, size_t num_fields,
+    const struct ppb_encoded_tag *__restrict tags, struct ppb_field *__restrict fields,
+    size_t max_lexed_fields);
+
+/*
+ * Like `ppb_prescan`, but stops at the first field boundary where bytes
+ * consumed >= `limit`.  Consuming more than `limit` bytes is not an error.
+ */
+ptrdiff_t ppb_prescan_with_soft_limit(struct ppb_buf buf, size_t limit, size_t num_fields,
     const struct ppb_encoded_tag *__restrict tags, struct ppb_field *__restrict fields,
     size_t max_lexed_fields);
 
@@ -152,6 +170,23 @@ struct ppb_lexn_ret
 struct ppb_lexn_ret ppb_lexn(struct ppb_buf *__restrict buf, size_t num_fields,
     const struct ppb_encoded_tag *__restrict tags, struct ppb_field *__restrict fields,
     size_t max_lexed_fields);
+
+/*
+ * Like `ppb_lexn`, but stops at the first field boundary where bytes
+ * consumed >= `limit`.  If consumed bytes exceed `limit`, the returned
+ * `status` is `PPB_ERROR_LIMIT_EXCEEDED`.
+ */
+struct ppb_lexn_ret ppb_lexn_with_hard_limit(struct ppb_buf *__restrict buf, size_t limit,
+    size_t num_fields, const struct ppb_encoded_tag *__restrict tags,
+    struct ppb_field *__restrict fields, size_t max_lexed_fields);
+
+/*
+ * Like `ppb_lexn`, but stops at the first field boundary where bytes
+ * consumed >= `limit`.  Consuming more than `limit` bytes is not an error.
+ */
+struct ppb_lexn_ret ppb_lexn_with_soft_limit(struct ppb_buf *__restrict buf, size_t limit,
+    size_t num_fields, const struct ppb_encoded_tag *__restrict tags,
+    struct ppb_field *__restrict fields, size_t max_lexed_fields);
 
 /*
  * Decodes zigzag-encoded sint32 and sint64 values.
@@ -260,6 +295,14 @@ sort after all specific entries.
 - `ptr`: pointer to the field's tag byte in the original buffer (useful for catch-all).
 
 **Zigzag**: call `ppb_zag(field.v.u64)` to decode `sint32` / `sint64` values.
+
+**Byte length limiting**: use `ppb_prescan_with_hard_limit` / `ppb_lexn_with_hard_limit`
+when the message length is known to be smaller than the remaining readable region: the
+hard limit avoids the end-of-buffer slow paths that would otherwise trigger on every
+field, which improves performance.  Use the `_with_soft_limit` variants to implement
+chunked processing at approximate boundaries: pass a target chunk size as the limit and
+PPB will stop at the first clean field boundary at or past that size, so the chunk
+always ends just before another valid field.
 
 Example tool
 ------------
