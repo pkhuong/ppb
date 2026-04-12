@@ -78,7 +78,7 @@ static inline int64_t ppb_zag(uint64_t x);
   @ requires \separated(tags + (0..num_fields - 1), fields + (0..num_fields - 1));
   @ terminates \true;
   @ assigns g_initial_buf, fields[0..num_fields - 1];
-  @ ensures \result ≥ 0 ==> (num_fields ≡ 0 ∨ tags[0].bits ≢ 0);
+  @ ensures \result ≥ 0 ==> (num_fields ≡ 0 ∨ tags[0].bits > 7);
   @ ensures \result ≥ 0 ==> \result ≤ buf.size;
   @*/
 static inline ptrdiff_t ppb_prescan(struct ppb_buf buf, size_t num_fields,
@@ -92,7 +92,7 @@ static inline ptrdiff_t ppb_prescan(struct ppb_buf buf, size_t num_fields,
   @ requires \separated(tags + (0..num_fields - 1), fields + (0..num_fields - 1));
   @ terminates \true;
   @ assigns g_initial_buf, fields[0..num_fields - 1];
-  @ ensures \result ≥ 0 ==> (num_fields ≡ 0 ∨ tags[0].bits ≢ 0);
+  @ ensures \result ≥ 0 ==> (num_fields ≡ 0 ∨ tags[0].bits > 7);
   @ ensures \result ≥ 0 ==> \result ≤ buf.size;
   @ ensures \result ≥ 0 ==> \result ≤ limit;
   @*/
@@ -107,7 +107,7 @@ static inline ptrdiff_t ppb_prescan_with_hard_limit(struct ppb_buf buf, size_t l
   @ requires \separated(tags + (0..num_fields - 1), fields + (0..num_fields - 1));
   @ terminates \true;
   @ assigns g_initial_buf, fields[0..num_fields - 1];
-  @ ensures \result ≥ 0 ==> (num_fields ≡ 0 ∨ tags[0].bits ≢ 0);
+  @ ensures \result ≥ 0 ==> (num_fields ≡ 0 ∨ tags[0].bits > 7);
   @ ensures \result ≥ 0 ==> \result ≤ buf.size;
   @*/
 static inline ptrdiff_t ppb_prescan_with_soft_limit(struct ppb_buf buf, size_t limit, size_t num_fields,
@@ -119,7 +119,7 @@ static inline ptrdiff_t ppb_prescan_with_soft_limit(struct ppb_buf buf, size_t l
   @ requires \valid_read(tags + (0..num_fields - 1));
   @ requires \valid(fields + (0..num_fields - 1));
   @ requires \separated(tags + (0..num_fields - 1), fields + (0..num_fields - 1));
-  @ requires \forall integer j; 0 ≤ j < num_fields ==> tags[j].bits ≢ 0;
+  @ requires \forall integer j; 0 ≤ j < num_fields ==> tags[j].bits > 7;
   @ terminates \true;
   @ assigns g_initial_buf, *buf, fields[0..num_fields - 1];
   @ ensures buf_valid(*buf);
@@ -137,7 +137,7 @@ static inline struct ppb_lexn_ret ppb_lexn(struct ppb_buf *__restrict buf, size_
   @ requires \valid_read(tags + (0..num_fields - 1));
   @ requires \valid(fields + (0..num_fields - 1));
   @ requires \separated(tags + (0..num_fields - 1), fields + (0..num_fields - 1));
-  @ requires \forall integer j; 0 ≤ j < num_fields ==> tags[j].bits ≢ 0;
+  @ requires \forall integer j; 0 ≤ j < num_fields ==> tags[j].bits > 7;
   @ terminates \true;
   @ assigns g_initial_buf, *buf, fields[0..num_fields - 1];
   @ ensures buf_valid(*buf);
@@ -157,7 +157,7 @@ static inline struct ppb_lexn_ret ppb_lexn_with_hard_limit(struct ppb_buf *__res
   @ requires \valid_read(tags + (0..num_fields - 1));
   @ requires \valid(fields + (0..num_fields - 1));
   @ requires \separated(tags + (0..num_fields - 1), fields + (0..num_fields - 1));
-  @ requires \forall integer j; 0 ≤ j < num_fields ==> tags[j].bits ≢ 0;
+  @ requires \forall integer j; 0 ≤ j < num_fields ==> tags[j].bits > 7;
   @ terminates \true;
   @ assigns g_initial_buf, *buf, fields[0..num_fields - 1];
   @ ensures buf_valid(*buf);
@@ -247,7 +247,7 @@ find_tag(const size_t num_fields, const struct ppb_encoded_tag *__restrict tags,
  * Always updates the `dst->v` field, but updates `dst->m` only when
  * `update_metadata` is set.
  */
-/*@ requires valid_tag: tag ≢ 0;
+/*@ requires valid_tag: tag > 7;
   @ requires \valid(dst);
   @ requires \valid(src);
   @ requires buf_valid(*src);
@@ -362,7 +362,7 @@ handle_field(uint64_t tag, struct ppb_field *restrict dst, struct ppb_buf *restr
   @ requires (int)limit_error ≤ 0;
   @ terminates \true;
   @ assigns g_initial_buf, fields[0..num_fields - 1];
-  @ ensures \result ≥ 0 ==> (num_fields ≡ 0 ∨ tags[0].bits ≢ 0);
+  @ ensures \result ≥ 0 ==> (num_fields ≡ 0 ∨ tags[0].bits > 7);
   @ ensures \result ≥ 0 ==> \result ≤ buf.size;
   @ behavior hard_limit:
   @   assumes (int)limit_error < 0;
@@ -378,7 +378,7 @@ ppb_prescan_impl(const struct ppb_buf buf, const size_t num_fields,
     struct ppb_buf src = buf;
     /*@ assert buf_valid(src); */
 
-    if (unlikely(num_fields > 0 && tags[0].bits == 0))
+    if (unlikely(num_fields > 0 && tags[0].bits < 8))
     {
         return PPB_ERROR_SENTINEL_FIELD_ARR;
     }
@@ -400,7 +400,7 @@ ppb_prescan_impl(const struct ppb_buf buf, const size_t num_fields,
      * (sort check above), so every element exceeds the previous and all are > 0.
      * WP cannot prove the universally-quantified induction automatically.
      */
-    /*@ admit \forall integer j; 0 ≤ j < num_fields ==> tags[j].bits > 0; */
+    /*@ admit \forall integer j; 0 ≤ j < num_fields ==> tags[j].bits > 7; */
 
     struct ppb_field dummy = { 0 };
     bool has_catch_all = num_fields > 0 && (int64_t)tags[num_fields - 1].bits < 0;
@@ -432,13 +432,13 @@ ppb_prescan_impl(const struct ppb_buf buf, const size_t num_fields,
         size_t field_idx = find_tag(num_fields, tags, tag);
         /*@ assert error ≢ PPB_OK ==> tag ≡ 0; */
         /*
-         * All encoded_tags are > 0: fields[0].tag.bits ≢ 0 and the
-         * array is strictly sorted, so each element > 0.
+         * All encoded_tags are > 7: fields[0].tag.bits > 7 and the
+         * array is strictly sorted, so each element > 7.
          * find_tag postcondition: field_idx < num_fields ==> tags[field_idx].bits ≡ tag.
          * Together: field_idx < num_fields ==> tag > 0.
          */
-        /*@ admit zero_absent: tag ≡ 0 ==> field_idx ≥ num_fields; */
-        /*@ assert field_idx < num_fields ==> tag ≢ 0; */
+        /*@ admit zero_absent: tag < 8 ==> field_idx ≥ num_fields; */
+        /*@ assert field_idx < num_fields ==> tag > 7; */
 
         if (unlikely(field_idx >= num_fields)) /* -1UL for missing, so mutant-ok: '>=' -> '>' */
         {
@@ -460,7 +460,7 @@ ppb_prescan_impl(const struct ppb_buf buf, const size_t num_fields,
         struct ppb_field *dst = (field_idx < num_fields) ? fields + field_idx : &dummy;
         dst->v = (struct ppb_field_value) { .ptr = ptr };
 
-        /*@ admit tag ≢ 0; // all tags[k] > 0 (admit above) and tag==0 returns early */
+        /*@ admit tag > 7; // all tags[k] > 7 (admit above) and tag < 8 returns early */
         int rc = handle_field(tag, dst, &src, /*update_metadata=*/true, &error);
         if (unlikely(rc != 0))
         {
@@ -492,7 +492,7 @@ ppb_prescan_impl(const struct ppb_buf buf, const size_t num_fields,
   @ requires \valid_read(tags + (0..num_fields - 1));
   @ requires \valid(fields + (0..num_fields - 1));
   @ requires \separated(tags + (0..num_fields - 1), fields + (0..num_fields - 1));
-  @ requires \forall integer j; 0 ≤ j < num_fields ==> tags[j].bits ≢ 0;
+  @ requires \forall integer j; 0 ≤ j < num_fields ==> tags[j].bits > 7;
   @ requires (int)limit_error ≤ 0;
   @ terminates \true;
   @ assigns g_initial_buf, *buf, fields[0..num_fields - 1];
@@ -624,7 +624,7 @@ ppb_lexn_impl(struct ppb_buf *restrict const buf, const size_t num_fields,
         }
 
         dst->v = (struct ppb_field_value) { .ptr = ptr };
-        /*@ assert tag ≢ 0; */
+        /*@ assert tag > 7; */
         int rc = handle_field(tag, dst, &src, false, &error);
 
         /*
@@ -687,7 +687,7 @@ ppb_lexn_impl(struct ppb_buf *restrict const buf, const size_t num_fields,
   @ requires \valid_read(tags + (0..num_fields - 1));
   @ requires \valid(fields + (0..num_fields - 1));
   @ requires \separated(tags + (0..num_fields - 1), fields + (0..num_fields - 1));
-  @ requires \forall integer j; 0 ≤ j < num_fields ==> tags[j].bits ≢ 0;
+  @ requires \forall integer j; 0 ≤ j < num_fields ==> tags[j].bits > 7;
   @ terminates \true;
   @ assigns g_initial_buf, *buf, fields[0..num_fields - 1];
   @ ensures buf_valid(*buf);
