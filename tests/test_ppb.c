@@ -1517,6 +1517,160 @@ test_lexn_zero_tag_after_valid(void)
     CHECK(ret.field_range == 0);
 }
 
+/*
+ * Limit tests use four_field_wire (24 bytes total):
+ *   bytes  0- 2: field 1 varint 150   (3 bytes)
+ *   bytes  3-11: field 2 i64 1        (9 bytes)
+ *   bytes 12-18: field 3 LEN "hello"  (7 bytes)
+ *   bytes 19-23: field 4 i32 42       (5 bytes)
+ *
+ * Interesting boundaries:
+ *   limit= 3: exact end of field 1
+ *   limit= 5: mid-field-2 (starts at 3, ends at 11)
+ *   limit=12: exact end of field 2
+ *   limit=24: full buffer (same as no limit)
+ */
+
+static void
+test_prescan_hard_limit(void)
+{
+    printf("test_prescan_hard_limit\n");
+
+    struct ppb_encoded_tag tags[4];
+    init_four_tags(tags);
+    struct ppb_field fields[4];
+
+    struct ppb_buf buf = make_buf(four_field_wire, sizeof(four_field_wire));
+
+    /* Limit exactly at a field boundary: returns limit bytes, no error. */
+    init_four_fields(fields);
+    ptrdiff_t ret = ppb_prescan_with_hard_limit(buf, 3, 4, tags, fields, SIZE_MAX);
+    CHECK(ret == 3);
+    CHECK(fields[0].m.num_occurrences == 1);
+    CHECK(fields[0].v.u64 == 150);
+    CHECK(fields[1].m.num_occurrences == 0);
+
+    /* Limit in the middle of field 2: returns LIMIT_EXCEEDED. */
+    init_four_fields(fields);
+    ret = ppb_prescan_with_hard_limit(buf, 5, 4, tags, fields, SIZE_MAX);
+    CHECK(ret == PPB_ERROR_LIMIT_EXCEEDED);
+
+    /* Limit exactly at the end of field 2. */
+    init_four_fields(fields);
+    ret = ppb_prescan_with_hard_limit(buf, 12, 4, tags, fields, SIZE_MAX);
+    CHECK(ret == 12);
+    CHECK(fields[0].m.num_occurrences == 1);
+    CHECK(fields[1].m.num_occurrences == 1);
+    CHECK(fields[2].m.num_occurrences == 0);
+
+    /* Limit larger than buffer: same as no limit. */
+    init_four_fields(fields);
+    ret = ppb_prescan_with_hard_limit(buf, SIZE_MAX, 4, tags, fields, SIZE_MAX);
+    CHECK(ret == 24);
+    CHECK(fields[0].m.num_occurrences == 1);
+    CHECK(fields[3].m.num_occurrences == 1);
+
+    /* Limit = 0: returns 0 immediately (nothing consumed). */
+    init_four_fields(fields);
+    ret = ppb_prescan_with_hard_limit(buf, 0, 4, tags, fields, SIZE_MAX);
+    CHECK(ret == 0);
+    CHECK(fields[0].m.num_occurrences == 0);
+}
+
+static void
+test_prescan_soft_limit(void)
+{
+    printf("test_prescan_soft_limit\n");
+
+    struct ppb_encoded_tag tags[4];
+    init_four_tags(tags);
+    struct ppb_field fields[4];
+
+    struct ppb_buf buf = make_buf(four_field_wire, sizeof(four_field_wire));
+
+    /* Limit exactly at a field boundary: returns limit bytes, no error. */
+    init_four_fields(fields);
+    ptrdiff_t ret = ppb_prescan_with_soft_limit(buf, 3, 4, tags, fields, SIZE_MAX);
+    CHECK(ret == 3);
+    CHECK(fields[0].m.num_occurrences == 1);
+
+    /* Limit in the middle of field 2: returns bytes consumed (> limit), no error. */
+    init_four_fields(fields);
+    ret = ppb_prescan_with_soft_limit(buf, 5, 4, tags, fields, SIZE_MAX);
+    CHECK(ret == 12); /* consumed through end of field 2 */
+    CHECK(fields[0].m.num_occurrences == 1);
+    CHECK(fields[1].m.num_occurrences == 1);
+    CHECK(fields[2].m.num_occurrences == 0);
+
+    /* Limit larger than buffer: same as no limit. */
+    init_four_fields(fields);
+    ret = ppb_prescan_with_soft_limit(buf, SIZE_MAX, 4, tags, fields, SIZE_MAX);
+    CHECK(ret == 24);
+}
+
+static void
+test_lexn_hard_limit(void)
+{
+    printf("test_lexn_hard_limit\n");
+
+    struct ppb_encoded_tag tags[4];
+    init_four_tags(tags);
+    struct ppb_field fields[4];
+
+    /* Limit exactly at a field boundary: field decoded, buf advanced by limit. */
+    {
+        init_four_fields(fields);
+        struct ppb_buf buf = make_buf(four_field_wire, sizeof(four_field_wire));
+        struct ppb_lexn_ret ret = ppb_lexn_with_hard_limit(&buf, 3, 4, tags, fields, SIZE_MAX);
+        CHECK(ret.status == PPB_OK);
+        CHECK(ret.first_field == 0);
+        CHECK(ret.field_range == 1);
+        CHECK(fields[0].v.u64 == 150);
+        CHECK(buf.size == 21); /* 24 - 3 */
+    }
+
+    /* Limit mid-field-2: LIMIT_EXCEEDED; field 1 (boundary) + field 2 (overshoot) consumed. */
+    {
+        init_four_fields(fields);
+        struct ppb_buf buf = make_buf(four_field_wire, sizeof(four_field_wire));
+        struct ppb_lexn_ret ret = ppb_lexn_with_hard_limit(&buf, 5, 4, tags, fields, SIZE_MAX);
+        CHECK(ret.status == PPB_ERROR_LIMIT_EXCEEDED);
+        /* Fields 1 and 2 were decoded before the error was detected. */
+        CHECK(fields[0].v.u64 == 150);
+        CHECK(fields[1].v.u64 == 1);
+        CHECK(buf.size == 12); /* 24 - 12: stopped after field 2 */
+    }
+
+    /* Limit larger than buffer: same as no limit. */
+    {
+        init_four_fields(fields);
+        struct ppb_buf buf = make_buf(four_field_wire, sizeof(four_field_wire));
+        struct ppb_lexn_ret ret = ppb_lexn_with_hard_limit(&buf, SIZE_MAX, 4, tags, fields, SIZE_MAX);
+        CHECK(ret.status == PPB_OK);
+        CHECK(ret.field_range == 4);
+        CHECK(buf.size == 0);
+    }
+}
+
+static void
+test_lexn_soft_limit(void)
+{
+    printf("test_lexn_soft_limit\n");
+
+    struct ppb_encoded_tag tags[4];
+    init_four_tags(tags);
+    struct ppb_field fields[4];
+
+    /* Limit mid-field-2: field 2 fully decoded (no error). */
+    init_four_fields(fields);
+    struct ppb_buf buf = make_buf(four_field_wire, sizeof(four_field_wire));
+    struct ppb_lexn_ret ret = ppb_lexn_with_soft_limit(&buf, 5, 4, tags, fields, SIZE_MAX);
+    CHECK(ret.status == PPB_OK);
+    CHECK(fields[0].v.u64 == 150);
+    CHECK(fields[1].v.u64 == 1);
+    CHECK(buf.size == 12); /* consumed through end of field 2 */
+}
+
 static void
 test_tag_macros(void)
 {
@@ -1640,6 +1794,7 @@ main(void)
     test_decode_varint();
     test_peek_varint_error();
     test_peek_tag_error();
+    test_peek_tag_range();
 
     test_prescan_known_fields();
     test_prescan_repeated_fields();
@@ -1677,6 +1832,11 @@ main(void)
     test_lexn_corrupt_tag();
     test_lexn_truncated_tag();
     test_lexn_zero_tag_after_valid();
+
+    test_prescan_hard_limit();
+    test_prescan_soft_limit();
+    test_lexn_hard_limit();
+    test_lexn_soft_limit();
 
     test_tag_macros();
     test_tag_varint_roundtrip();

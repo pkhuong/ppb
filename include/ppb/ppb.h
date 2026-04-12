@@ -54,6 +54,7 @@ enum ppb_error
     PPB_ERROR_TRUNCATED_DATA = -3,  /* message cut short at the end of the `ppb_buf` */
     PPB_ERROR_CORRUPT_VARINT = -4,  /* invalid varint encoding (overlong) */
     PPB_ERROR_CORRUPT_TAG = -5,  /* invalid tag encoding (zero, overlong, or unsupported wire type) */
+    PPB_ERROR_LIMIT_EXCEEDED = -6,  /* consumed bytes exceeded hard limit */
 };
 
 /*
@@ -203,11 +204,14 @@ uint64_t ppb_decode_varint(struct ppb_buf *__restrict buf, enum ppb_error *__res
 
 /*
  * Traverses `buf` until it's lexed up to `max_lexed_fields` toplevel
- * fields.  This traversal is relatively cheap, and can be useful to
- * preallocate storage.
+ * fields, stopping early when the number of bytes consumed reaches or
+ * exceeds `limit`.  Stopping before or exactly at `limit` is always
+ * OK; stopping past `limit` (because a field straddled the boundary)
+ * signals `limit_error` if `limit_error != PPB_OK` (hard limit), and
+ * is silent otherwise (soft limit).  Pass `limit = SIZE_MAX` and
+ * `limit_error = PPB_OK` for the unlimited behavior of `ppb_prescan`.
  *
- * Returns the number of bytes traversed, until the end of `buf`, or
- * just before the first byte of the `max_lexed_fields`th field.
+ * Returns the number of bytes traversed, or a negative `ppb_error`.
  *
  * `tags` is a parallel array of `num_fields` encoded tags (sorted
  * ascending) that identifies which fields to decode; `fields` is the
@@ -217,14 +221,10 @@ uint64_t ppb_decode_varint(struct ppb_buf *__restrict buf, enum ppb_error *__res
  * Updates `fields[].m` with aggregate metadata for all the fields
  * seen, and populates `fields[].v` with the last value seen for each
  * field, if any.
- *
- * A non-negative value is the total number of bytes summarized (equals
- * buf.size on success).
- *
- * A negative value is a ppb_error.
  */
-ptrdiff_t ppb_prescan(struct ppb_buf buf, size_t num_fields, const struct ppb_encoded_tag *__restrict tags,
-    struct ppb_field *__restrict fields, size_t max_lexed_fields);
+ptrdiff_t ppb_prescan_impl(struct ppb_buf buf, size_t num_fields,
+    const struct ppb_encoded_tag *__restrict tags, struct ppb_field *__restrict fields,
+    size_t max_lexed_fields, size_t limit, enum ppb_error limit_error);
 
 /*
  * A `ppb_lexn_ret` describes a range of indices in `fields` that
@@ -246,16 +246,20 @@ struct ppb_lexn_ret
 
 /*
  * Consumes from `buf` until it's lexed up to `max_lexed_fields`
- * toplevel fields.  May stop early, but only after at least 1 field,
- * or on error/end-of-buf.
+ * toplevel fields, stopping early when the number of bytes consumed
+ * reaches or exceeds `limit`.  Stopping before or exactly at `limit`
+ * is always OK; stopping past `limit` signals `limit_error` if it is
+ * not `PPB_OK` (hard limit), and is silent otherwise (soft limit).
+ * Pass `limit = SIZE_MAX` and `limit_error = PPB_OK` for the
+ * unlimited behavior of `ppb_lexn`.
  *
  * This function may decode multiple fields at a time, but only in
  * strictly ascending order, and always stops before a non-monotonic
  * (repeated or decreasing) tag or after an unknown field.  This
  * guarantees that we can always recover the order of the fields on
  * the wire, and that we always see every field value.  Call
- * `ppb_lexn` in a loop to process all fields in a message, in batches
- * of strictly monotonically increasing fields.
+ * `ppb_lexn*` in a loop to process all fields in a message, in
+ * batches of strictly monotonically increasing fields.
  *
  * Updates `fields[].v` in place, and sets `ptr` to the decoded
  * field's first byte in `buf` (i.e., where the tag varint begins);
@@ -263,12 +267,86 @@ struct ppb_lexn_ret
  * the initial value of `buf.buf`.
  *
  * Assumes the tags are sorted and valid (no zero tag);
- * ppb_prescan checks for that.
+ * ppb_prescan_impl checks for that.
  */
-struct ppb_lexn_ret ppb_lexn(struct ppb_buf *__restrict buf, size_t num_fields,
+struct ppb_lexn_ret ppb_lexn_impl(struct ppb_buf *__restrict buf, size_t num_fields,
     const struct ppb_encoded_tag *__restrict tags, struct ppb_field *__restrict fields,
-    size_t max_lexed_fields);
+    size_t max_lexed_fields, size_t limit, enum ppb_error limit_error);
 
 #ifdef __cplusplus
 }  // extern "C"
 #endif
+
+/*
+ * Traverses `buf` scanning all toplevel fields (up to `max_lexed_fields`).
+ *
+ * Returns the number of bytes traversed (equals `buf.size` on success),
+ * or a negative `ppb_error`.
+ */
+static inline ptrdiff_t
+ppb_prescan(struct ppb_buf buf, size_t num_fields, const struct ppb_encoded_tag *__restrict tags,
+    struct ppb_field *__restrict fields, size_t max_lexed_fields)
+{
+    return ppb_prescan_impl(buf, num_fields, tags, fields, max_lexed_fields, SIZE_MAX, PPB_OK);
+}
+
+/*
+ * Like `ppb_prescan`, but stops at the first field boundary where bytes
+ * consumed >= `limit`.  If consumed bytes exceed `limit`, returns
+ * `PPB_ERROR_LIMIT_EXCEEDED`.
+ */
+static inline ptrdiff_t
+ppb_prescan_with_hard_limit(struct ppb_buf buf, size_t limit, size_t num_fields,
+    const struct ppb_encoded_tag *__restrict tags, struct ppb_field *__restrict fields,
+    size_t max_lexed_fields)
+{
+    return ppb_prescan_impl(buf, num_fields, tags, fields, max_lexed_fields, limit, PPB_ERROR_LIMIT_EXCEEDED);
+}
+
+/*
+ * Like `ppb_prescan`, but stops at the first field boundary where bytes
+ * consumed >= `limit`.  Consuming more than `limit` bytes is not an error.
+ */
+static inline ptrdiff_t
+ppb_prescan_with_soft_limit(struct ppb_buf buf, size_t limit, size_t num_fields,
+    const struct ppb_encoded_tag *__restrict tags, struct ppb_field *__restrict fields,
+    size_t max_lexed_fields)
+{
+    return ppb_prescan_impl(buf, num_fields, tags, fields, max_lexed_fields, limit, PPB_OK);
+}
+
+/*
+ * Consumes from `buf` until it's lexed up to `max_lexed_fields` toplevel
+ * fields.  See `ppb_lexn_impl` for details.
+ */
+static inline struct ppb_lexn_ret
+ppb_lexn(struct ppb_buf *__restrict buf, size_t num_fields, const struct ppb_encoded_tag *__restrict tags,
+    struct ppb_field *__restrict fields, size_t max_lexed_fields)
+{
+    return ppb_lexn_impl(buf, num_fields, tags, fields, max_lexed_fields, SIZE_MAX, PPB_OK);
+}
+
+/*
+ * Like `ppb_lexn`, but stops at the first field boundary where bytes
+ * consumed >= `limit`.  If consumed bytes exceed `limit`, the returned
+ * `status` is `PPB_ERROR_LIMIT_EXCEEDED`.
+ */
+static inline struct ppb_lexn_ret
+ppb_lexn_with_hard_limit(struct ppb_buf *__restrict buf, size_t limit, size_t num_fields,
+    const struct ppb_encoded_tag *__restrict tags, struct ppb_field *__restrict fields,
+    size_t max_lexed_fields)
+{
+    return ppb_lexn_impl(buf, num_fields, tags, fields, max_lexed_fields, limit, PPB_ERROR_LIMIT_EXCEEDED);
+}
+
+/*
+ * Like `ppb_lexn`, but stops at the first field boundary where bytes
+ * consumed >= `limit`.  Consuming more than `limit` bytes is not an error.
+ */
+static inline struct ppb_lexn_ret
+ppb_lexn_with_soft_limit(struct ppb_buf *__restrict buf, size_t limit, size_t num_fields,
+    const struct ppb_encoded_tag *__restrict tags, struct ppb_field *__restrict fields,
+    size_t max_lexed_fields)
+{
+    return ppb_lexn_impl(buf, num_fields, tags, fields, max_lexed_fields, limit, PPB_OK);
+}
