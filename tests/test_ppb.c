@@ -914,9 +914,8 @@ test_lexn_two_sorted_runs(void)
 }
 
 /*
- * After a catch-all match, prev_tag_id becomes huge (~UINT64_MAX/8),
- * so the next field is always nonmonotonic.  This holds even when
- * the wire types would otherwise be ascending (varint=0 < i32=5).
+ * Confirm that we lex catch-all fields one by one, even when they
+ * have different type tags.
  */
 static void
 test_lexn_catchall_always_stops(void)
@@ -954,6 +953,47 @@ test_lexn_catchall_always_stops(void)
     CHECK(fields[2].v.u64 == 1);
 
     ret = ppb_lexn(&buf, 3, tags, fields, 4);
+    CHECK(ret.field_range == 0);
+}
+
+/*
+ * Like test_lexn_catchall_always_stops, but with descending wire types:
+ * an unknown i32 (wire=5) followed by an unknown varint (wire=0).
+ */
+static void
+test_lexn_catchall_always_stops_descending(void)
+{
+    printf("test_lexn_catchall_always_stops_descending\n");
+
+    static const uint8_t wire[] = {
+        0x9d, 0x06, 0x01, 0x00, 0x00, 0x00,  /* field 99 i32 1 → catch-all i32 */
+        0xa0, 0x06, 0x02,                    /* field 100 varint 2 → catch-all varint */
+    };
+
+    /* sorted ascending by PPB_TAG_BITS(-1, wire_type) */
+    struct ppb_encoded_tag tags[2] = {
+        PPB_TAG(-1, PPB_WIRE_VARINT),
+        PPB_TAG(-1, PPB_WIRE_I32),
+    };
+    struct ppb_field fields[2];
+    zero_fields(2, fields);
+
+    struct ppb_buf buf = make_buf(wire, sizeof(wire));
+    struct ppb_lexn_ret ret;
+
+    ret = ppb_lexn(&buf, 2, tags, fields, 4);
+    CHECK(ret.status == PPB_OK);
+    CHECK(ret.first_field == 1);  /* catch-all i32 */
+    CHECK(ret.field_range == 1);
+    CHECK(fields[1].v.u32 == 1);
+
+    ret = ppb_lexn(&buf, 2, tags, fields, 4);
+    CHECK(ret.status == PPB_OK);
+    CHECK(ret.first_field == 0);  /* catch-all varint */
+    CHECK(ret.field_range == 1);
+    CHECK(fields[0].v.u64 == 2);
+
+    ret = ppb_lexn(&buf, 2, tags, fields, 4);
     CHECK(ret.field_range == 0);
 }
 
@@ -1227,6 +1267,7 @@ main(void)
     test_lexn_unknown_field_in_order_skipped_at_end();
     test_lexn_two_sorted_runs();
     test_lexn_catchall_always_stops();
+    test_lexn_catchall_always_stops_descending();
     test_lexn_empty();
     test_lexn_error();
     test_lexn_zero_tag();
