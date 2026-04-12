@@ -518,9 +518,10 @@ test_prescan_validation(void)
         CHECK(ret == PPB_ERROR_UNSORTED_FIELD_ARR);
     }
 
-    /* Sentinel (tags[0].bits == 0). */
+    /* Sentinel: all bits values 0-7 (field number 0 is forbidden; bits < 8 triggers the check). */
+    for (uint64_t b = 0; b <= 7; b++)
     {
-        struct ppb_encoded_tag tags[1] = { { .bits = 0 } };
+        struct ppb_encoded_tag tags[1] = { { .bits = b } };
         struct ppb_field fields[1];
         zero_fields(1, fields);
 
