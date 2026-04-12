@@ -406,9 +406,9 @@ ppb_prescan_impl(const struct ppb_buf buf, const size_t num_fields,
     bool has_catch_all = num_fields > 0 && (int64_t)tags[num_fields - 1].bits < 0;
     /*
      * Break when src.size falls to or below this threshold, meaning bytes
-     * consumed >= limit.
+     * consumed >= limit (just a saturating subtraction).
      */
-    const size_t break_size = (limit <= buf.size) ? buf.size - limit : 0;
+    const size_t break_size = (limit <= buf.size) ? buf.size - limit : 0; /* mutant-ok: 'operator:<= -> <' */
 
     /*@ loop assigns i, fields[0..num_fields - 1], src, error, dummy;
       @ loop invariant 0 ≤ i ≤ max_lexed_fields;
@@ -532,10 +532,9 @@ ppb_lexn_impl(struct ppb_buf *restrict const buf, const size_t num_fields,
     size_t last_field = 0;
     /*
      * Break when src.size falls to or below this threshold, meaning bytes
-     * consumed >= limit.  When limit >= buf->size (no effective limit),
-     * break_size is 0 so the check degenerates to the usual src.size == 0.
+     * consumed >= limit (just a saturating substraction).
      */
-    const size_t break_size = (limit <= buf->size) ? buf->size - limit : 0;
+    const size_t break_size = (limit <= src.size) ? src.size - limit : 0; /* mutant-ok: 'operator:<= -> <' */
     /*@ ghost size_t ghost_consumed = 0; */
 
     /*@ loop assigns i, fields[0..num_fields - 1], src, error, dummy, prev_tag, first_field, last_field,
