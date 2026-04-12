@@ -657,7 +657,7 @@ ppb_lexn_impl(struct ppb_buf *restrict const buf, const size_t num_fields,
     }
     else if (unlikely(last_field - first_field >= UINT32_MAX)) /* mutant-triaged: needs large fields array */
     {
-        field_range = UINT32_MAX; /* mutant-triaged: currently unreachable */
+        field_range = UINT32_MAX; /* GCOVR_EXCL_LINE mutant-triaged: currently unreachable */
     }
     else
     {
