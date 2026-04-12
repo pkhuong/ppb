@@ -476,21 +476,23 @@ test_prescan_repeated_len(void)
 }
 
 static void
-test_prescan_validation(void)
+test_validate_tags(void)
 {
-    printf("test_prescan_validation\n");
+    printf("test_validate_tags\n");
 
-    static const uint8_t wire[] = { 0x08, 0x01 };
-    struct ppb_buf buf = make_buf(wire, sizeof(wire));
+    /* Empty array: vacuously valid. */
+    CHECK(ppb_validate_tags(0, NULL) == PPB_OK);
+
+    /* Valid single-field array. */
+    {
+        struct ppb_encoded_tag tags[1] = { PPB_TAG(1, PPB_WIRE_VARINT) };
+        CHECK(ppb_validate_tags(1, tags) == PPB_OK);
+    }
 
     /* Unsorted fields. */
     {
         struct ppb_encoded_tag tags[2] = { PPB_TAG(2, PPB_WIRE_VARINT), PPB_TAG(1, PPB_WIRE_VARINT) };
-        struct ppb_field fields[2];
-        zero_fields(2, fields);
-
-        ptrdiff_t ret = ppb_prescan(buf, 2, tags, fields, SIZE_MAX);
-        CHECK(ret == PPB_ERROR_UNSORTED_FIELD_ARR);
+        CHECK(ppb_validate_tags(2, tags) == PPB_ERROR_UNSORTED_FIELD_ARR);
     }
 
     /* Unsorted field after sorted run. */
@@ -501,58 +503,39 @@ test_prescan_validation(void)
             PPB_TAG(4, PPB_WIRE_VARINT),
             PPB_TAG(3, PPB_WIRE_VARINT),
         };
-        struct ppb_field fields[4];
-        zero_fields(4, fields);
-
-        ptrdiff_t ret = ppb_prescan(buf, 4, tags, fields, SIZE_MAX);
-        CHECK(ret == PPB_ERROR_UNSORTED_FIELD_ARR);
+        CHECK(ppb_validate_tags(4, tags) == PPB_ERROR_UNSORTED_FIELD_ARR);
     }
 
-    /* Repeated field. */
+    /* Repeated tag. */
     {
         struct ppb_encoded_tag tags[2] = { PPB_TAG(1, PPB_WIRE_VARINT), PPB_TAG(1, PPB_WIRE_VARINT) };
-        struct ppb_field fields[2];
-        zero_fields(2, fields);
-
-        ptrdiff_t ret = ppb_prescan(buf, 2, tags, fields, SIZE_MAX);
-        CHECK(ret == PPB_ERROR_UNSORTED_FIELD_ARR);
+        CHECK(ppb_validate_tags(2, tags) == PPB_ERROR_UNSORTED_FIELD_ARR);
     }
 
     /* Sentinel: all bits values 0-7 (field number 0 is forbidden; bits < 8 triggers the check). */
     for (uint64_t b = 0; b <= 7; b++)
     {
         struct ppb_encoded_tag tags[1] = { { .bits = b } };
-        struct ppb_field fields[1];
-        zero_fields(1, fields);
-
-        ptrdiff_t ret = ppb_prescan(buf, 1, tags, fields, SIZE_MAX);
-        CHECK(ret == PPB_ERROR_SENTINEL_FIELD_ARR);
-    }
-
-    /* Empty fields array succeeds on valid data. */
-    {
-        ptrdiff_t ret = ppb_prescan(buf, 0, NULL, NULL, SIZE_MAX);
-        CHECK(ret == (ptrdiff_t)sizeof(wire));
+        CHECK(ppb_validate_tags(1, tags) == PPB_ERROR_SENTINEL_FIELD_ARR);
     }
 }
 
-/* Sentinel check fires before the sortedness loop. */
+/* Sentinel check fires before the sortedness check. */
 static void
-test_prescan_sentinel_early_return(void)
+test_validate_tags_sentinel_first(void)
 {
-    printf("test_prescan_sentinel_early_return\n");
+    printf("test_validate_tags_sentinel_first\n");
 
-    static const uint8_t wire[] = { 0x08, 0x01 };
-    struct ppb_buf buf = make_buf(wire, sizeof(wire));
+    /* bits=0 is a sentinel, and the second entry would also be unsorted.
+     * Sentinel error must be returned, not UNSORTED. */
+    struct ppb_encoded_tag tags[2] = { { .bits = 0 }, { .bits = 0 } };
+    CHECK(ppb_validate_tags(2, tags) == PPB_ERROR_SENTINEL_FIELD_ARR);
 
-    struct ppb_encoded_tag tags[2] = { { .bits = 0 }, PPB_TAG(1, PPB_WIRE_VARINT) };
-    struct ppb_field fields[2];
-    zero_fields(2, fields);
-    fields[1].m.num_occurrences = 42; /* canary */
-
-    ptrdiff_t ret = ppb_prescan(buf, 2, tags, fields, SIZE_MAX);
-    CHECK(ret == PPB_ERROR_SENTINEL_FIELD_ARR);
-    CHECK(fields[1].m.num_occurrences == 42);
+    /* Valid first entry, invalid (unsorted) second: UNSORTED returned. */
+    {
+        struct ppb_encoded_tag tags2[2] = { PPB_TAG(2, PPB_WIRE_VARINT), PPB_TAG(1, PPB_WIRE_VARINT) };
+        CHECK(ppb_validate_tags(2, tags2) == PPB_ERROR_UNSORTED_FIELD_ARR);
+    }
 }
 
 static void
@@ -1840,8 +1823,8 @@ main(void)
     test_prescan_known_fields();
     test_prescan_repeated_fields();
     test_prescan_repeated_len();
-    test_prescan_validation();
-    test_prescan_sentinel_early_return();
+    test_validate_tags();
+    test_validate_tags_sentinel_first();
     test_prescan_unknown_fields();
     test_prescan_max_fields();
     test_prescan_zero_tag();

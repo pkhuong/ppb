@@ -59,20 +59,9 @@ static const struct ppb_encoded_tag MIXED_TAGS[] = {
 __attribute__((constructor)) static void
 check_tag_ordering(void)
 {
-    for (size_t i = 1; i < N_SPECIFIC; i++)
-        assert(SPECIFIC_TAGS[i - 1].bits < SPECIFIC_TAGS[i].bits);
-    for (size_t i = 0; i < N_SPECIFIC; i++)
-        assert(SPECIFIC_TAGS[i].bits > 7);
-
-    for (size_t i = 1; i < N_CATCHALL; i++)
-        assert(CATCHALL_TAGS[i - 1].bits < CATCHALL_TAGS[i].bits);
-    for (size_t i = 0; i < N_CATCHALL; i++)
-        assert(CATCHALL_TAGS[i].bits > 7);
-
-    for (size_t i = 1; i < N_MIXED; i++)
-        assert(MIXED_TAGS[i - 1].bits < MIXED_TAGS[i].bits);
-    for (size_t i = 0; i < N_MIXED; i++)
-        assert(MIXED_TAGS[i].bits > 7);
+    assert(ppb_validate_tags(N_SPECIFIC, SPECIFIC_TAGS) == PPB_OK);
+    assert(ppb_validate_tags(N_CATCHALL, CATCHALL_TAGS) == PPB_OK);
+    assert(ppb_validate_tags(N_MIXED, MIXED_TAGS) == PPB_OK);
 }
 
 static inline void

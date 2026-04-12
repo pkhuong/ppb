@@ -203,6 +203,18 @@ ppb_zag(uint64_t x)
 uint64_t ppb_decode_varint(struct ppb_buf *__restrict buf, enum ppb_error *__restrict error);
 
 /*
+ * Validates a tag array: checks that all entries have `.bits > 7` (field number 0
+ * is forbidden in protobuf) and that the array is strictly sorted ascending.
+ *
+ * Call once on any static tag array before passing it to `ppb_prescan` or
+ * `ppb_lexn`.  Passing an unvalidated array to prescan or lexn does not cause
+ * undefined behaviour, but may produce incorrect results.
+ *
+ * Returns `PPB_OK` on success, or the first error found.
+ */
+enum ppb_error ppb_validate_tags(size_t num_fields, const struct ppb_encoded_tag *tags);
+
+/*
  * Traverses `buf` until it's lexed up to `max_lexed_fields` toplevel
  * fields, stopping early when the number of bytes consumed reaches or
  * exceeds `limit`.  Stopping before or exactly at `limit` is always
@@ -279,6 +291,8 @@ struct ppb_lexn_ret ppb_lexn_impl(struct ppb_buf *__restrict buf, size_t num_fie
 
 /*
  * Traverses `buf` scanning all toplevel fields (up to `max_lexed_fields`).
+ * Tags must be pre-validated with `ppb_validate_tags`; passing invalid tags
+ * may cause incorrect decoding.
  *
  * Returns the number of bytes traversed (equals `buf.size` on success),
  * or a negative `ppb_error`.
@@ -293,7 +307,7 @@ ppb_prescan(struct ppb_buf buf, size_t num_fields, const struct ppb_encoded_tag 
 /*
  * Like `ppb_prescan`, but stops at the first field boundary where bytes
  * consumed >= `limit`.  If consumed bytes exceed `limit`, returns
- * `PPB_ERROR_LIMIT_EXCEEDED`.
+ * `PPB_ERROR_LIMIT_EXCEEDED`.  Tags must be pre-validated.
  */
 static inline ptrdiff_t
 ppb_prescan_with_hard_limit(struct ppb_buf buf, size_t limit, size_t num_fields,
@@ -306,6 +320,9 @@ ppb_prescan_with_hard_limit(struct ppb_buf buf, size_t limit, size_t num_fields,
 /*
  * Like `ppb_prescan`, but stops at the first field boundary where bytes
  * consumed >= `limit`.  Consuming more than `limit` bytes is not an error.
+ * Tags must be pre-validated with `ppb_validate_tags`; skipping
+ * validation does not cause undefined behaviour but may produce
+ * incorrect results.
  */
 static inline ptrdiff_t
 ppb_prescan_with_soft_limit(struct ppb_buf buf, size_t limit, size_t num_fields,
@@ -318,6 +335,8 @@ ppb_prescan_with_soft_limit(struct ppb_buf buf, size_t limit, size_t num_fields,
 /*
  * Consumes from `buf` up to `max_lexed_fields` toplevel fields in
  * strictly ascending order.  Returns the decoded field range and status.
+ * Tags must be pre-validated with `ppb_validate_tags`; skipping validation
+ * does not cause undefined behaviour but may produce incorrect results.
  */
 static inline struct ppb_lexn_ret
 ppb_lexn(struct ppb_buf *__restrict buf, size_t num_fields, const struct ppb_encoded_tag *__restrict tags,
@@ -329,7 +348,9 @@ ppb_lexn(struct ppb_buf *__restrict buf, size_t num_fields, const struct ppb_enc
 /*
  * Like `ppb_lexn`, but stops at the first field boundary where bytes
  * consumed >= `limit`.  If consumed bytes exceed `limit`, the returned
- * `status` is `PPB_ERROR_LIMIT_EXCEEDED`.
+ * `status` is `PPB_ERROR_LIMIT_EXCEEDED`.  Tags must be pre-validated with
+ * `ppb_validate_tags`; skipping validation does not cause undefined behaviour
+ * but may produce incorrect results.
  */
 static inline struct ppb_lexn_ret
 ppb_lexn_with_hard_limit(struct ppb_buf *__restrict buf, size_t limit, size_t num_fields,
@@ -342,6 +363,8 @@ ppb_lexn_with_hard_limit(struct ppb_buf *__restrict buf, size_t limit, size_t nu
 /*
  * Like `ppb_lexn`, but stops at the first field boundary where bytes
  * consumed >= `limit`.  Consuming more than `limit` bytes is not an error.
+ * Tags must be pre-validated with `ppb_validate_tags`; skipping validation
+ * does not cause undefined behaviour but may produce incorrect results.
  */
 static inline struct ppb_lexn_ret
 ppb_lexn_with_soft_limit(struct ppb_buf *__restrict buf, size_t limit, size_t num_fields,

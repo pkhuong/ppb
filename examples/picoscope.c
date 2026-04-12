@@ -664,6 +664,8 @@ read_all(FILE *f, size_t *OUT_size)
 int
 main(int argc, char **argv)
 {
+    assert(ppb_validate_tags(NUM_FIELDS, catchall_tags) == PPB_OK);
+
     FILE *f = stdin;
     int i = 1;
 

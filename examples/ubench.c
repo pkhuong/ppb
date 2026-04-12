@@ -13,6 +13,7 @@
 
 #include "ppb/ppb.h"
 
+#include <assert.h>
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -206,16 +207,17 @@ gen_input(uint8_t *buf, size_t buf_size, uint64_t prng[2], size_t *msg_count_out
  * Decodes the Outer message in [input, input+input_size).
  * Returns the number of messages decoded.
  */
+static const struct ppb_encoded_tag outer_tags[1] = { PPB_TAG(42, PPB_WIRE_LEN) };
+static const struct ppb_encoded_tag inner_tags[4] = {
+    PPB_TAG(1, PPB_WIRE_VARINT),
+    PPB_TAG(2, PPB_WIRE_VARINT),
+    PPB_TAG(3, PPB_WIRE_VARINT),
+    PPB_TAG(4, PPB_WIRE_VARINT),
+};
+
 static size_t
 decode_input(const uint8_t *input, size_t input_size)
 {
-    static const struct ppb_encoded_tag outer_tags[1] = { PPB_TAG(42, PPB_WIRE_LEN) };
-    static const struct ppb_encoded_tag inner_tags[4] = {
-        PPB_TAG(1, PPB_WIRE_VARINT),
-        PPB_TAG(2, PPB_WIRE_VARINT),
-        PPB_TAG(3, PPB_WIRE_VARINT),
-        PPB_TAG(4, PPB_WIRE_VARINT),
-    };
     struct ppb_field outer_fields[1] = { 0 };
     struct ppb_field inner_fields[OUTPUT_SW_PIPELINE][4] = { 0 };
     struct ppb_buf buf = { input, input_size };
@@ -289,6 +291,9 @@ cmp_sample_ns(const void *a, const void *b)
 int
 main(void)
 {
+    assert(ppb_validate_tags(1, outer_tags) == PPB_OK);
+    assert(ppb_validate_tags(4, inner_tags) == PPB_OK);
+
     uint8_t *input_buf = malloc(INPUT_BUF_CAPACITY);
     if (!input_buf)
     {

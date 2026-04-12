@@ -208,6 +208,16 @@ ppb_zag(uint64_t x)
  * zero): it will be strictly negative on error, and zero on success.
  */
 uint64_t ppb_decode_varint(struct ppb_buf *__restrict buf, enum ppb_error *__restrict error);
+
+/*
+ * Validates a tag array: checks that all entries have `.bits > 7` (field number 0
+ * is forbidden in protobuf) and that the array is strictly sorted ascending.
+ * Returns `PPB_OK` on success, or the first error found.
+ *
+ * Call once on any static tag array before passing it to `ppb_prescan` or `ppb_lexn`.
+ * Skipping validation does not cause undefined behaviour, but may produce incorrect results.
+ */
+enum ppb_error ppb_validate_tags(size_t num_fields, const struct ppb_encoded_tag *tags);
 ```
 
 Usage pattern
@@ -227,6 +237,9 @@ static const struct ppb_encoded_tag tags[NUM_FIELDS] = {
 /* Tags must be sorted: PPB_TAG(1,2) < PPB_TAG(2,0) < PPB_TAG(5,2). */
 
 struct ppb_field fields[NUM_FIELDS] = { 0 };  /* mutable per-call state */
+
+/* 0. Validate tags once (e.g., in main() or a static constructor). */
+assert(ppb_validate_tags(NUM_FIELDS, tags) == PPB_OK);
 
 /* 1. Validate and gather stats (for preallocation). */
 struct ppb_buf msg = { .buf = wire_bytes, .size = wire_len };
