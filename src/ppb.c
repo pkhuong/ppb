@@ -224,7 +224,7 @@ find_tag(const size_t num_fields, const struct ppb_encoded_tag *__restrict tags,
         len = next_len;
     }
 
-    return tags[lo].bits == tag ? lo : SIZE_MAX;
+    return likely(tags[lo].bits == tag) ? lo : SIZE_MAX;
 }
 
 /*
