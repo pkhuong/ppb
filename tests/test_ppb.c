@@ -1033,6 +1033,306 @@ test_lexn_error(void)
 }
 
 /*
+ * For each of the 8 wire types, verify two things:
+ *   1. Field index 1 with that wire type: succeeds for the four valid wire
+ *      types (VARINT, I64, LEN, I32), returns CORRUPT_TAG for the four
+ *      invalid ones (SGROUP, EGROUP, and the two reserved types).
+ *   2. Flipping bit 3 of the tag byte to set field index 0: must always
+ *      return CORRUPT_TAG regardless of wire type, because field numbers
+ *      start at 1.
+ *
+ * Plus, smoke test the similar behaviour for _prescan while we're here.
+ */
+
+static void
+test_lexn_field_zero_wire0(void)
+{
+    printf("test_lexn_field_zero_wire0 (VARINT)\n");
+
+    struct ppb_encoded_tag tags[1] = { PPB_TAG(1, PPB_WIRE_VARINT) };
+    struct ppb_field fields[1];
+
+    /* Field 1, varint: succeeds. */
+    {
+        static const uint8_t wire[] = { 0x08, 0x01 };
+        struct ppb_buf buf = make_buf(wire, sizeof(wire));
+        zero_fields(1, fields);
+
+        CHECK(ppb_prescan(buf, 1, tags, fields, 4) == sizeof(wire));
+
+        struct ppb_lexn_ret ret = ppb_lexn(&buf, 1, tags, fields, 4);
+        CHECK(ret.status == PPB_OK);
+        CHECK(ret.field_range == 1);
+        CHECK(fields[0].v.u64 == 1);
+    }
+
+    /* Field 0, varint (tag byte 0x00): CORRUPT_TAG. */
+    {
+        static const uint8_t wire[] = { 0x00, 0x01 };
+        struct ppb_buf buf = make_buf(wire, sizeof(wire));
+        zero_fields(1, fields);
+
+        CHECK(ppb_prescan(buf, 1, tags, fields, 4) == PPB_ERROR_CORRUPT_TAG);
+
+        struct ppb_lexn_ret ret = ppb_lexn(&buf, 1, tags, fields, 4);
+        CHECK(ret.status == PPB_ERROR_CORRUPT_TAG);
+        CHECK(ret.field_range == 0);
+    }
+}
+
+static void
+test_lexn_field_zero_wire1(void)
+{
+    printf("test_lexn_field_zero_wire1 (I64)\n");
+
+    struct ppb_encoded_tag tags[1] = { PPB_TAG(1, PPB_WIRE_I64) };
+    struct ppb_field fields[1];
+
+    /* Field 1, I64: succeeds. */
+    {
+        static const uint8_t wire[] = { 0x09, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 };
+        struct ppb_buf buf = make_buf(wire, sizeof(wire));
+        zero_fields(1, fields);
+
+        CHECK(ppb_prescan(buf, 1, tags, fields, 4) == sizeof(wire));
+
+        struct ppb_lexn_ret ret = ppb_lexn(&buf, 1, tags, fields, 4);
+        CHECK(ret.status == PPB_OK);
+        CHECK(ret.field_range == 1);
+        CHECK(fields[0].v.u64 == 0);
+    }
+
+    /* Field 0, I64 (tag byte 0x01): CORRUPT_TAG. */
+    {
+        static const uint8_t wire[] = { 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 };
+        struct ppb_buf buf = make_buf(wire, sizeof(wire));
+        zero_fields(1, fields);
+
+        CHECK(ppb_prescan(buf, 1, tags, fields, 4) == PPB_ERROR_CORRUPT_TAG);
+
+        struct ppb_lexn_ret ret = ppb_lexn(&buf, 1, tags, fields, 4);
+        CHECK(ret.status == PPB_ERROR_CORRUPT_TAG);
+        CHECK(ret.field_range == 0);
+    }
+}
+
+static void
+test_lexn_field_zero_wire2(void)
+{
+    printf("test_lexn_field_zero_wire2 (LEN)\n");
+
+    struct ppb_encoded_tag tags[1] = { PPB_TAG(1, PPB_WIRE_LEN) };
+    struct ppb_field fields[1];
+
+    /* Field 1, LEN, length 1: succeeds. */
+    {
+        static const uint8_t wire[] = { 0x0A, 0x01, 0x42 };
+        struct ppb_buf buf = make_buf(wire, sizeof(wire));
+        zero_fields(1, fields);
+
+        CHECK(ppb_prescan(buf, 1, tags, fields, 4) == sizeof(wire));
+
+        struct ppb_lexn_ret ret = ppb_lexn(&buf, 1, tags, fields, 4);
+        CHECK(ret.status == PPB_OK);
+        CHECK(ret.field_range == 1);
+        CHECK(fields[0].v.payload.size == 1);
+    }
+
+    /* Field 0, LEN (tag byte 0x02): CORRUPT_TAG. */
+    {
+        static const uint8_t wire[] = { 0x02, 0x01, 0x42 };
+        struct ppb_buf buf = make_buf(wire, sizeof(wire));
+        zero_fields(1, fields);
+
+        CHECK(ppb_prescan(buf, 1, tags, fields, 4) == PPB_ERROR_CORRUPT_TAG);
+
+        struct ppb_lexn_ret ret = ppb_lexn(&buf, 1, tags, fields, 4);
+        CHECK(ret.status == PPB_ERROR_CORRUPT_TAG);
+        CHECK(ret.field_range == 0);
+    }
+}
+
+static void
+test_lexn_field_zero_wire3(void)
+{
+    printf("test_lexn_field_zero_wire3 (SGROUP, invalid)\n");
+
+    /* Wire type 3 (SGROUP) is rejected by handle_field even for field 1. */
+    struct ppb_encoded_tag tags[1] = { { .bits = PPB_TAG_BITS(1, 3) } };
+    struct ppb_field fields[1];
+
+    /* Field 1, SGROUP: CORRUPT_TAG (invalid wire type); tag was matched so field_range=1. */
+    {
+        static const uint8_t wire[] = { 0x0B };
+        struct ppb_buf buf = make_buf(wire, sizeof(wire));
+        zero_fields(1, fields);
+
+        CHECK(ppb_prescan(buf, 1, tags, fields, 4) == PPB_ERROR_CORRUPT_TAG);
+
+        struct ppb_lexn_ret ret = ppb_lexn(&buf, 1, tags, fields, 4);
+        CHECK(ret.status == PPB_ERROR_CORRUPT_TAG);
+        CHECK(ret.field_range == 1);
+    }
+
+    /* Field 0, SGROUP (tag byte 0x03): CORRUPT_TAG. */
+    {
+        static const uint8_t wire[] = { 0x03 };
+        struct ppb_buf buf = make_buf(wire, sizeof(wire));
+        zero_fields(1, fields);
+
+        CHECK(ppb_prescan(buf, 1, tags, fields, 4) == PPB_ERROR_CORRUPT_TAG);
+
+        struct ppb_lexn_ret ret = ppb_lexn(&buf, 1, tags, fields, 4);
+        CHECK(ret.status == PPB_ERROR_CORRUPT_TAG);
+        CHECK(ret.field_range == 0);
+    }
+}
+
+static void
+test_lexn_field_zero_wire4(void)
+{
+    printf("test_lexn_field_zero_wire4 (EGROUP, invalid)\n");
+
+    /* Wire type 4 (EGROUP) is rejected by handle_field even for field 1. */
+    struct ppb_encoded_tag tags[1] = { { .bits = PPB_TAG_BITS(1, 4) } };
+    struct ppb_field fields[1];
+
+    /* Field 1, EGROUP: CORRUPT_TAG (invalid wire type); tag was matched so field_range=1. */
+    {
+        static const uint8_t wire[] = { 0x0C };
+        struct ppb_buf buf = make_buf(wire, sizeof(wire));
+        zero_fields(1, fields);
+
+        CHECK(ppb_prescan(buf, 1, tags, fields, 4) == PPB_ERROR_CORRUPT_TAG);
+
+        struct ppb_lexn_ret ret = ppb_lexn(&buf, 1, tags, fields, 4);
+        CHECK(ret.status == PPB_ERROR_CORRUPT_TAG);
+        CHECK(ret.field_range == 1);
+    }
+
+    /* Field 0, EGROUP (tag byte 0x04): CORRUPT_TAG. */
+    {
+        static const uint8_t wire[] = { 0x04 };
+        struct ppb_buf buf = make_buf(wire, sizeof(wire));
+        zero_fields(1, fields);
+
+        CHECK(ppb_prescan(buf, 1, tags, fields, 4) == PPB_ERROR_CORRUPT_TAG);
+
+        struct ppb_lexn_ret ret = ppb_lexn(&buf, 1, tags, fields, 4);
+        CHECK(ret.status == PPB_ERROR_CORRUPT_TAG);
+        CHECK(ret.field_range == 0);
+    }
+}
+
+static void
+test_lexn_field_zero_wire5(void)
+{
+    printf("test_lexn_field_zero_wire5 (I32)\n");
+
+    struct ppb_encoded_tag tags[1] = { PPB_TAG(1, PPB_WIRE_I32) };
+    struct ppb_field fields[1];
+
+    /* Field 1, I32: succeeds. */
+    {
+        static const uint8_t wire[] = { 0x0D, 0x00, 0x00, 0x00, 0x00 };
+        struct ppb_buf buf = make_buf(wire, sizeof(wire));
+        zero_fields(1, fields);
+
+        CHECK(ppb_prescan(buf, 1, tags, fields, 4) == sizeof(wire));
+
+        struct ppb_lexn_ret ret = ppb_lexn(&buf, 1, tags, fields, 4);
+        CHECK(ret.status == PPB_OK);
+        CHECK(ret.field_range == 1);
+        CHECK(fields[0].v.u32 == 0);
+    }
+
+    /* Field 0, I32 (tag byte 0x05): CORRUPT_TAG. */
+    {
+        static const uint8_t wire[] = { 0x05, 0x00, 0x00, 0x00, 0x00 };
+        struct ppb_buf buf = make_buf(wire, sizeof(wire));
+        zero_fields(1, fields);
+
+        CHECK(ppb_prescan(buf, 1, tags, fields, 4) == PPB_ERROR_CORRUPT_TAG);
+
+        struct ppb_lexn_ret ret = ppb_lexn(&buf, 1, tags, fields, 4);
+        CHECK(ret.status == PPB_ERROR_CORRUPT_TAG);
+        CHECK(ret.field_range == 0);
+    }
+}
+
+static void
+test_lexn_field_zero_wire6(void)
+{
+    printf("test_lexn_field_zero_wire6 (reserved, invalid)\n");
+
+    /* Wire type 6 is reserved and rejected by handle_field even for field 1. */
+    struct ppb_encoded_tag tags[1] = { { .bits = PPB_TAG_BITS(1, 6) } };
+    struct ppb_field fields[1];
+
+    /* Field 1, wire 6: CORRUPT_TAG (invalid wire type); tag was matched so field_range=1. */
+    {
+        static const uint8_t wire[] = { 0x0E };
+        struct ppb_buf buf = make_buf(wire, sizeof(wire));
+        zero_fields(1, fields);
+
+        CHECK(ppb_prescan(buf, 1, tags, fields, 4) == PPB_ERROR_CORRUPT_TAG);
+
+        struct ppb_lexn_ret ret = ppb_lexn(&buf, 1, tags, fields, 4);
+        CHECK(ret.status == PPB_ERROR_CORRUPT_TAG);
+        CHECK(ret.field_range == 1);
+    }
+
+    /* Field 0, wire 6 (tag byte 0x06): CORRUPT_TAG. */
+    {
+        static const uint8_t wire[] = { 0x06 };
+        struct ppb_buf buf = make_buf(wire, sizeof(wire));
+        zero_fields(1, fields);
+
+        CHECK(ppb_prescan(buf, 1, tags, fields, 4) == PPB_ERROR_CORRUPT_TAG);
+
+        struct ppb_lexn_ret ret = ppb_lexn(&buf, 1, tags, fields, 4);
+        CHECK(ret.status == PPB_ERROR_CORRUPT_TAG);
+        CHECK(ret.field_range == 0);
+    }
+}
+
+static void
+test_lexn_field_zero_wire7(void)
+{
+    printf("test_lexn_field_zero_wire7 (reserved, invalid)\n");
+
+    /* Wire type 7 is reserved and rejected by handle_field even for field 1. */
+    struct ppb_encoded_tag tags[1] = { { .bits = PPB_TAG_BITS(1, 7) } };
+    struct ppb_field fields[1];
+
+    /* Field 1, wire 7: CORRUPT_TAG (invalid wire type); tag was matched so field_range=1. */
+    {
+        static const uint8_t wire[] = { 0x0F };
+        struct ppb_buf buf = make_buf(wire, sizeof(wire));
+        zero_fields(1, fields);
+
+        CHECK(ppb_prescan(buf, 1, tags, fields, 4) == PPB_ERROR_CORRUPT_TAG);
+
+        struct ppb_lexn_ret ret = ppb_lexn(&buf, 1, tags, fields, 4);
+        CHECK(ret.status == PPB_ERROR_CORRUPT_TAG);
+        CHECK(ret.field_range == 1);
+    }
+
+    /* Field 0, wire 7 (tag byte 0x07): CORRUPT_TAG. */
+    {
+        static const uint8_t wire[] = { 0x07 };
+        struct ppb_buf buf = make_buf(wire, sizeof(wire));
+        zero_fields(1, fields);
+
+        CHECK(ppb_prescan(buf, 1, tags, fields, 4) == PPB_ERROR_CORRUPT_TAG);
+
+        struct ppb_lexn_ret ret = ppb_lexn(&buf, 1, tags, fields, 4);
+        CHECK(ret.status == PPB_ERROR_CORRUPT_TAG);
+        CHECK(ret.field_range == 0);
+    }
+}
+
+/*
  * tag == 0 sets CORRUPT_TAG, regardless of the monotonicity check.
  */
 static void
@@ -1270,6 +1570,14 @@ main(void)
     test_lexn_catchall_always_stops_descending();
     test_lexn_empty();
     test_lexn_error();
+    test_lexn_field_zero_wire0();
+    test_lexn_field_zero_wire1();
+    test_lexn_field_zero_wire2();
+    test_lexn_field_zero_wire3();
+    test_lexn_field_zero_wire4();
+    test_lexn_field_zero_wire5();
+    test_lexn_field_zero_wire6();
+    test_lexn_field_zero_wire7();
     test_lexn_zero_tag();
     test_lexn_corrupt_tag();
     test_lexn_truncated_tag();

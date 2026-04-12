@@ -313,11 +313,11 @@ ppb_prescan(const struct ppb_buf buf, const size_t num_fields,
 
         if (unlikely(field_idx >= num_fields)) /* -1UL for missing, so mutant-ok: '>=' -> '>' */
         {
-            /* tag == 0 is invalid. */
-            if (unlikely(tag == 0))
+            /* field index == 0 is invalid for any type tag. */
+            if (unlikely(tag < 8))
             {
                 error_set(&error, PPB_ERROR_CORRUPT_TAG);
-                return (ptrdiff_t)error; /* handle_field detects old error for varint; mutant-ok: 'delete' */
+                return (ptrdiff_t)error;
             }
 
             /* See if we want to dump this in a catch-all field (branch is an optimization). */
@@ -372,7 +372,7 @@ ppb_lexn(struct ppb_buf *restrict const buf, const size_t num_fields,
     const size_t try_catch_all_field_id = (num_fields > 0 && (int64_t)tags[num_fields - 1].bits < 0) ?
         num_fields - 1 : /* could be any larger value < SIZE_MAX; mutant-skip */
         SIZE_MAX;
-    uint64_t prev_tag = 0;
+    uint64_t prev_tag = 7; /* 8 = PPB_TAG_BITS(1, PPB_WIRE_VARINT) is the minimum valid tag */
     size_t first_field = SIZE_MAX;
     size_t last_field = 0;
 
@@ -380,6 +380,7 @@ ppb_lexn(struct ppb_buf *restrict const buf, const size_t num_fields,
       @ loop invariant 0 ≤ i ≤ max_lexed_fields;
       @ loop invariant buf_valid(src);
       @ loop invariant error ≡ PPB_OK;
+      @ loop invariant prev_tag_monotonic: prev_tag ≥ \at(prev_tag, LoopCurrent) \geq 7;
       @ loop invariant ∀ integer j; 0 ≤ j < num_fields ==> fields[j].m ≡ \at(fields[j].m, Pre);
       @ loop variant max_lexed_fields - i;
       @*/
@@ -400,7 +401,7 @@ ppb_lexn(struct ppb_buf *restrict const buf, const size_t num_fields,
         {
             int num_tag_bytes = peek_tag(src, &tag);
             /*@ assert num_tag_bytes ≤ 0 ==> tag ≡ 0; */
-            /*@ assert tag ≡ 0 ==> tag ≤ prev_tag; */
+            /*@ assert tag < 8 ==> tag ≤ prev_tag; */
 
             /*
              * peek_tag decodes with limb_width=8, keeping continuation
@@ -419,7 +420,7 @@ ppb_lexn(struct ppb_buf *restrict const buf, const size_t num_fields,
                 {
                     error_set(&error, (enum ppb_error)num_tag_bytes);
                 }
-                else if (unlikely(tag == 0))
+                else if (unlikely(tag < 8))
                 {
                     error_set(&error, PPB_ERROR_CORRUPT_TAG);
                 }
@@ -435,7 +436,10 @@ ppb_lexn(struct ppb_buf *restrict const buf, const size_t num_fields,
             if (unlikely(field_idx > try_catch_all_field_id))
             {
                 /*@ assert prev_tag < tag; */
+                /*@ ghost uint64_t pre_or_tag = tag; */
                 tag |= UINT64_MAX << 3; /* preserve the type, but otherwise all 1s. */
+                /*@ admit tag_or_monotone: tag ≥ pre_or_tag; // OR cannot clear bits */
+                /*@ assert tag > prev_tag; // tag_or_monotone: tag >= pre_or_tag > prev_tag */
                 field_idx = find_tag(num_fields, tags, tag);
             }
 
@@ -446,6 +450,7 @@ ppb_lexn(struct ppb_buf *restrict const buf, const size_t num_fields,
         /* Update metadata if we want the field (but always lex to advance `src`). */
         if (likely(field_idx < num_fields))
         {
+            /*@ assert tag > prev_tag; */
             prev_tag = tag;
             first_field = field_idx < first_field ? field_idx : first_field;
             last_field = field_idx > last_field ? field_idx : last_field;
