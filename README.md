@@ -9,6 +9,14 @@ rejects varints longer than 10 bytes).  The PPB interface requires the
 entire serialized message to be in a contiguous read-only buffer, and
 decodes values to 64-bit values, or as subslices in that buffer.
 
+The contents of the input buffer are untrusted and validated as
+needed; other inputs to the library must be zero-initialized on
+allocations, except for the `ppb_encoded_tag` arrays, which are
+assumed to be constructed correctly (check with `ppb_validate_tag`).
+The *spirit* of the design is that even invalid trusted inputs will
+not introduce undefined behavior, only unexpected (illogical)
+results... but there's no formal support for that claim.
+
 The core pattern is: call `ppb_validate_tags` to confirm the array of
 tags to parse has a valid structure, call `ppb_prescan` once to
 collect field statistics for preallocation, then call `ppb_lexn` in a

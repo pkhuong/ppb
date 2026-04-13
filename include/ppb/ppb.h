@@ -4,7 +4,10 @@
 
 /*
  * PPB (Pico Protobuf) is an allocation-free lexer for modern (v2 or
- * v3, without groups) protobuf-encoded bytes.
+ * v3, without groups) protobuf-encoded bytes.  It is designed to
+ * parse contiguous buffers of untrusted bytes, with fuzz testing and
+ * formal verification for lack of undefined behavior, memory unsafety
+ * or logic bugs.
  *
  * An initial `ppb_prescan` validates the input message and gathers
  * statistics about all the toplevel fields in the message.  With the
@@ -14,7 +17,11 @@
  * easily pre-allocate storage for a message before `ppb_lexn`.
  *
  * The library is trivially thread-safe and reentrant, since it
- * doesn't have any global state.
+ * doesn't have any global state.  It should be safe to call the
+ * library on any `ppb_buf` inputs; for the other (trusted) inputs,
+ * the *goal* is that invalid trusted inputs only results in
+ * surprising results, not undefined behavior or undefined behavior
+ * (but we don't have formal checks for that last goal).
  *
  * The runtime complexity of `ppb_prescan` is `\Theta(m + n log m)`,
  * where `n` is the number of toplevel fields and `m` the number of
@@ -63,7 +70,8 @@ enum ppb_error
 /*
  * PPB never takes ownership of storage, but we have to pass slices of
  * encoded bytes.  `ppb_buf` is that slice type; PPB never writes
- * through such slices.
+ * through such slices.  The contents of `ppb_buf` are untrusted and
+ * validated as needed.
  *
  * A valid slice may not have more than `PTRDIFF_MAX` bytes (otherwise,
  * it's very easy to introduce undefined behavior in programs, c.f.
