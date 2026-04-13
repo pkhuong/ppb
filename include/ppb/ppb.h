@@ -13,6 +13,9 @@
  * strings, nested messages, or packed repeated fields), a caller can
  * easily pre-allocate storage for a message before `ppb_lexn`.
  *
+ * The library is trivially thread-safe and reentrant, since it
+ * doesn't have any global state.
+ *
  * The runtime complexity of `ppb_prescan` is `\Theta(m + n log m)`,
  * where `n` is the number of toplevel fields and `m` the number of
  * `ppb_fields`, regardless of the actual size of the encoded bytes;
@@ -61,11 +64,15 @@ enum ppb_error
  * PPB never takes ownership of storage, but we have to pass slices of
  * encoded bytes.  `ppb_buf` is that slice type; PPB never writes
  * through such slices.
+ *
+ * A valid slice may not have more than `PTRDIFF_MAX` bytes (otherwise,
+ * it's very easy to introduce undefined behavior in programs, c.f.
+ * https://www.trust-in-soft.com/resources/blogs/2016-05-20-objects-larger-than-ptrdiff_max-bytes).
  */
 struct ppb_buf
 {
     const void *buf;
-    size_t size; /* in bytes */
+    size_t size; /* in bytes, at most PTRDIFF_MAX */
 };
 
 /*
@@ -95,7 +102,8 @@ enum ppb_wire_type
  * Encodes a (field_number, wire_type) pair into the encoded_tag
  * format expected by ppb_field.  For positive field numbers, the
  * result is the varint-encoded tag in little endian (matching the
- * internal representation used by ppb_lexn).
+ * internal representation used by ppb_lexn).  Both `FIELD_NUMBER`
+ * and `WIRE_TYPE` must be safe for multiple evaluation.
  *
  * Field number 0 is forbidden by the protobuf spec.
  * Field number -1 (UINT64_MAX when unsigned) is reserved for
@@ -206,6 +214,12 @@ uint64_t ppb_decode_varint(struct ppb_buf *__restrict buf, enum ppb_error *__res
  * Validates a tag array: checks that all entries have `.bits > 7` (field number 0
  * is forbidden in protobuf) and that the array is strictly sorted ascending.
  *
+ * N.B., the encoding sticks the wire type in the low bits of the tag,
+ * so a list of encoded tags with strictly ascending, strict positive,
+ * field numbers is valid.  When there are multiple `ppb_encoded_tag`s
+ * with the same field number (e.g., for catch-alls with -1), the types
+ * must follow the order in `enum ppb_wire_type`.
+ *
  * Call once on any static tag array before passing it to `ppb_prescan` or
  * `ppb_lexn`.  Passing an unvalidated array to prescan or lexn does not cause
  * undefined behaviour, but may produce incorrect results.
@@ -252,7 +266,7 @@ ptrdiff_t ppb_prescan_impl(struct ppb_buf buf, size_t num_fields,
 struct ppb_lexn_ret
 {
     size_t first_field;
-    uint32_t field_range;
+    uint32_t field_range;  /* saturates at UINT32_MAX */
     enum ppb_error status;
 };
 
@@ -284,10 +298,6 @@ struct ppb_lexn_ret
 struct ppb_lexn_ret ppb_lexn_impl(struct ppb_buf *__restrict buf, size_t num_fields,
     const struct ppb_encoded_tag *__restrict tags, struct ppb_field *__restrict fields,
     size_t max_lexed_fields, size_t limit, enum ppb_error limit_error);
-
-#ifdef __cplusplus
-}  // extern "C"
-#endif
 
 /*
  * Traverses `buf` scanning all toplevel fields (up to `max_lexed_fields`).
@@ -373,3 +383,7 @@ ppb_lexn_with_soft_limit(struct ppb_buf *__restrict buf, size_t limit, size_t nu
 {
     return ppb_lexn_impl(buf, num_fields, tags, fields, max_lexed_fields, limit, PPB_OK);
 }
+
+#ifdef __cplusplus
+}  // extern "C"
+#endif

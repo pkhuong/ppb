@@ -3,24 +3,26 @@ PPB: Pico Protobuf
 [![codecov](https://codecov.io/gh/pkhuong/ppb/graph/badge.svg?token=YH1Q5HD3B7)](https://codecov.io/gh/pkhuong/ppb)
 
 PPB is an allocation-free non-recursive lexer for protobuf binary
-encoding (v2/v3, no groups).  It requires the entire serialized
-message to be in a contiguous read-only buffer, and decodes values to
-64-bit values, or as subslices in that buffer.
+encoding (v2/v3, no groups); like many protobuf implementations, it
+silently discard the extra 6 bits in 10-byte varints (but otherwise
+rejects varints longer than 10 bytes).  The PPB interface requires the
+entire serialized message to be in a contiguous read-only buffer, and
+decodes values to 64-bit values, or as subslices in that buffer.
 
-The core pattern is: call `ppb_prescan` once to validate the input and
+The core pattern is: call `ppb_validate_tags` to confirm the array of
+tags to parse has a valid structure, call `ppb_prescan` once to
 collect field statistics for preallocation, then call `ppb_lexn` in a
-loop to walk the fields.  While validating, `ppb_prescan` also saves
-the last value associated with each tag, which implements exactly the
-last-write-wins semantics needed for non-repeated fields.  We thus
-only need `ppb_lexn` for repeated fields, and only when `ppb_prescan`
-reports multiple occurrences of such a field (packed repeated fields,
-for example, usually appear at most once).
+loop to walk the fields.  While gathering statistics and validating
+the input, `ppb_prescan` also saves the last value associated with
+each tag, which implements exactly the last-write-wins semantics
+needed for non-repeated fields.  We thus only need `ppb_lexn` for
+repeated fields, and only when `ppb_prescan` reports multiple
+occurrences of such a field (packed repeated fields, for example,
+usually appear at most once).
 
 The `ppb_lexn` function is always safe to call, even without
-`ppb_prescan`: `ppb_lexn` performs its own redundant validation *of
-message bytes* on the fly (`ppb_prescan` also validates the structure
-of the `fields[]` array).  Both functions operate only on toplevel
-fields; call them recursively on nested submessages.
+`ppb_prescan`. Both functions operate only on toplevel fields; call
+them recursively on nested submessages.
 
 This usage pattern lets the calling program choose how to handle
 nesting and variable-length values.  Both `ppb_prescan` and
@@ -335,10 +337,14 @@ The test suite runs unit tests and comparisons against
 [protoscope](https://github.com/protocolbuffers/protoscope):
 
     make test           # run unit tests + golden tests
+    make test EXTRA_FLAGS='-fsanitize=undefined,address'  # same with ubsan & asan
+    make fuzz           # quick libfuzzer-based run
+    ./coverage.sh       # report code (line and branch) coverage for `make test`
     make regen_test     # regenerate golden files (requires protoscope in PATH)
 
-To add a valid test case, encode a protoscope source file to binary and
-convert to hex:
+Picoscope-based tests are high value for little effort.  To add a test
+case for a valid protobuf message, generate protobuf bytes (e.g.,
+encode a protoscope source file to binary) and convert to hex:
 
     echo '1: 42  2: {"hello"}' | protoscope -s | xxd -p | tr -d '\n' \
         > testdata/my-test.hex
@@ -365,6 +371,18 @@ varint and tag encodings, repeated and nested fields.  The
 invalid-input suite checks that corrupt or truncated data is rejected
 with the correct error.
 
-Formal verification, mostly for memory safety, is done with Frama-C,
-with `make wp`. Source formatting with `make format` uses
-`clang-format-20`.
+Formal verification, mostly for memory safety and termination, is done
+with Frama-C, with `make wp`. Source formatting with `make format`
+uses `clang-format-20`.
+
+The ACSL annotations include `admit`ted properties; we try to confirm
+them with unit tests and annotations. The fuzz tests in particular
+dynamically test ACSL-proven postconditions, in addition to the usual
+property that UBSan and ASan must not flag undefined behaviour or
+memory safety issues.
+
+Validate the test suite with `mutants.py`: the script mutates the code
+and checks whether the mutation is detected by the test suite.
+Undetected mutations may point at gaps in the test suite (or maybe the
+mutant is expected or an equivalent formulation, and mutation testing
+should be disabled locally).
