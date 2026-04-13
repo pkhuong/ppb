@@ -23,7 +23,7 @@
  * surprising results, not undefined behavior or undefined behavior
  * (but we don't have formal checks for that last goal).
  *
- * The runtime complexity of `ppb_prescan` is `\Theta(m + n log m)`,
+ * The runtime complexity of `ppb_prescan` is `\Theta(n log m)`,
  * where `n` is the number of toplevel fields and `m` the number of
  * `ppb_fields`, regardless of the actual size of the encoded bytes;
  * that's what makes it reasonble to "lex" toplevel fields only, and

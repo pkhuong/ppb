@@ -78,8 +78,8 @@ API (include/ppb/ppb.h)
 
 **Complexity**: Helper functions `ppb_zag` and `ppb_decode_varint`
 have a bounded runtime (asymptotically constant).  The `ppb_prescan`
-function runs in Θ(m + n log m), while `ppb_lexn` runs in Θ(n log m),
-where n is the number of toplevel fields consumed and m is
+and `ppb_lexn` function families runs in constant space and Θ(n log m)
+time, where n is the number of toplevel fields consumed and m is
 `num_fields`.  Runtime does *not* scale with payload sizes of
 length-prefixed fields -- that's what makes recursive descent on
 nested submessages practical.
