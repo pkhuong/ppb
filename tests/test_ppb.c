@@ -1810,6 +1810,86 @@ test_tag_varint_roundtrip(void)
     }
 }
 
+/*
+ * Encode a single fixed32 (wire type 5) field into `out`.
+ * Returns the number of bytes written.
+ */
+static size_t
+encode_i32_field(uint64_t field_num, uint32_t value, uint8_t *out)
+{
+    uint64_t tag = field_num << 3 | PPB_WIRE_I32;
+    size_t n = 0;
+    while (tag >= 0x80)
+    {
+        out[n++] = (uint8_t)(tag | 0x80);
+        tag >>= 7;
+    }
+    out[n++] = (uint8_t)tag;
+    memcpy(out + n, &value, 4);
+    return n + 4;
+}
+
+/*
+ * Systematic binary-search exercise: 8 even-numbered I32 tags (2,4,...,16).
+ * For each prefix length 0..8, probe with field numbers 1..17 and verify
+ * that odd tags are skipped and even tags in range are found at the
+ * correct index.
+ */
+static void
+test_prescan_bsearch_systematic(void)
+{
+    printf("test_prescan_bsearch_systematic\n");
+
+    struct ppb_encoded_tag all_tags[8] = {
+        PPB_TAG(2, PPB_WIRE_I32),
+        PPB_TAG(4, PPB_WIRE_I32),
+        PPB_TAG(6, PPB_WIRE_I32),
+        PPB_TAG(8, PPB_WIRE_I32),
+        PPB_TAG(10, PPB_WIRE_I32),
+        PPB_TAG(12, PPB_WIRE_I32),
+        PPB_TAG(14, PPB_WIRE_I32),
+        PPB_TAG(16, PPB_WIRE_I32),
+    };
+
+    for (size_t prefix_len = 0; prefix_len <= 8; prefix_len++)
+    {
+        CHECK(ppb_validate_tags(prefix_len, all_tags) == PPB_OK);
+
+        for (uint64_t probe = 1; probe <= 17; probe++)
+        {
+            uint8_t wire[16];
+            size_t wire_len = encode_i32_field(probe, (uint32_t)probe, wire);
+
+            /*
+             * Match iff probe is even, in [2..16], and its table
+             * index (probe/2 - 1) falls within the prefix.
+             */
+            bool should_match = (probe % 2 == 0) && (probe >= 2) && (probe / 2 <= prefix_len);
+            size_t expected_idx = (size_t)(probe / 2 - 1);
+
+            struct ppb_field fields[8];
+            zero_fields(8, fields);
+            struct ppb_buf buf = make_buf(wire, wire_len);
+
+            ptrdiff_t r = ppb_prescan(buf, prefix_len, all_tags, fields, SIZE_MAX);
+            CHECK(r == (ptrdiff_t)wire_len);
+
+            for (size_t i = 0; i < prefix_len; i++)
+            {
+                if (should_match && i == expected_idx)
+                {
+                    CHECK(fields[i].m.num_occurrences == 1);
+                    CHECK(fields[i].m.total_bytes == 4);
+                }
+                else
+                {
+                    CHECK(fields[i].m.num_occurrences == 0);
+                }
+            }
+        }
+    }
+}
+
 int
 main(void)
 {
@@ -1865,6 +1945,8 @@ main(void)
 
     test_tag_macros();
     test_tag_varint_roundtrip();
+
+    test_prescan_bsearch_systematic();
 
     printf("\n%d checks, %d failures\n", g_check_count, g_fail_count);
     return g_fail_count > 0 ? 1 : 0;
