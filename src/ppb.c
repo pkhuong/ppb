@@ -303,7 +303,7 @@ handle_field(uint64_t tag, struct ppb_field *restrict dst, struct ppb_buf *restr
             return *error;
         }
 
-        num_bytes = (const char *)src->buf - initial;
+        num_bytes = (size_t)((const char *)src->buf - initial);
         dst->v.u64 = varint;
         break;
     }
@@ -595,7 +595,7 @@ ppb_lexn_impl(struct ppb_buf *restrict const buf, const size_t num_fields,
                 field_idx = find_tag(num_fields, tags, tag);
             }
 
-            buf_advance(&src, num_tag_bytes);
+            buf_advance(&src, (size_t)num_tag_bytes); /* num_tag_bytes > 0 here */
             /*@ ghost ghost_consumed += (size_t)num_tag_bytes; */
         }
 
@@ -656,7 +656,7 @@ ppb_lexn_impl(struct ppb_buf *restrict const buf, const size_t num_fields,
     else
     {
         /*@ assert no_truncation: 1 + last_field - first_field ≤ UINT32_MAX; */
-        field_range = 1 + last_field - first_field;
+        field_range = (uint32_t)(1 + last_field - first_field);
     }
 
     return (struct ppb_lexn_ret) {

@@ -1,6 +1,6 @@
 CC := ccache gcc
 EXTRA_FLAGS :=
-COMMON_FLAGS := -O2 -Iinclude/ -Wall -Wextra -Wpedantic -ggdb $(EXTRA_FLAGS)
+COMMON_FLAGS := -O2 -Iinclude/ -Wall -Wextra -Wpedantic -Wshadow -Wconversion -Wsign-conversion -ggdb $(EXTRA_FLAGS)
 CFLAGS := -std=c11 $(COMMON_FLAGS)
 
 C_SRCS := src/ppb.c

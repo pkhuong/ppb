@@ -328,7 +328,7 @@ main(void)
 
         int idx = run - NWARM;
         samples[idx].ns_per_msg = (double)elapsed_ns / (double)decoded;
-        samples[idx].mb_per_s = (1e-6 * input_size) / (1e-9 * (double)elapsed_ns);
+        samples[idx].mb_per_s = (1e-6 * (double)input_size) / (1e-9 * (double)elapsed_ns);
 
         last_input_size = input_size;
         last_msg_count = msg_count;

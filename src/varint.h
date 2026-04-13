@@ -195,7 +195,7 @@ decode_varint(struct ppb_buf *restrict src, enum ppb_error *restrict error)
     /*@ assert num ≢ 0; */
     if (likely(num >= 0)) /* num != 0, mutant-ok: '>=' -> '>' */
     {
-        buf_advance(src, num);
+        buf_advance(src, (size_t)num);
         return ret;
     }
 
@@ -296,7 +296,7 @@ decode_tag(struct ppb_buf *restrict src, enum ppb_error *restrict error)
     /*@ assert num ≢ 0; */
     if (likely(num >= 0)) /* num != 0, mutant-ok: '>=' -> '>' */
     {
-        buf_advance(src, num);
+        buf_advance(src, (size_t)num);
         return ret;
     }
 

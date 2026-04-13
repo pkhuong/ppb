@@ -313,7 +313,7 @@ format_len_field(uint64_t field_num, const struct ppb_field_value *v, const char
                 struct ppb_field_value *iv = &fields[i].v;
                 struct ppb_buf tag_buf = {
                     .buf = iv->ptr,
-                    .size = (const char *)payload.buf + payload.size - (const char *)iv->ptr,
+                    .size = (size_t)((const char *)payload.buf + payload.size - (const char *)iv->ptr),
                 };
                 enum ppb_error tag_err = PPB_OK;
                 uint64_t inner_num = ppb_decode_varint(&tag_buf, &tag_err) >> 3;
@@ -481,7 +481,7 @@ disassemble(struct ppb_buf buf, const char *end_of_input, size_t indent)
         if (idx == FIELD_VARINT)
         {
             uint64_t val = v->u64;
-            varint_lower_bound += (val == 0) ? 1 : 1 + __builtin_ctzll(val) / 7;
+            varint_lower_bound += (val == 0) ? 1 : (size_t)(1 + __builtin_ctzll(val) / 7);
         }
 
         if (idx == FIELD_LEN)
@@ -501,7 +501,7 @@ disassemble(struct ppb_buf buf, const char *end_of_input, size_t indent)
         /* Recover field number by re-decoding the tag varint at v->ptr. */
         struct ppb_buf tag_buf = {
             .buf = v->ptr,
-            .size = (const char *)buf.buf - (const char *)v->ptr,
+            .size = (size_t)((const char *)buf.buf - (const char *)v->ptr),
         };
         enum ppb_error tag_err = PPB_OK;
         uint64_t raw_tag = ppb_decode_varint(&tag_buf, &tag_err);
