@@ -71,6 +71,68 @@ check_buf_valid(struct ppb_buf buf, const uint8_t *data, size_t size)
     POSTCOND((const char *)buf.buf + buf.size == (const char *)data + size);
 }
 
+static inline unsigned
+wire_type_of(const struct ppb_encoded_tag *tags, size_t idx)
+{
+    return (unsigned)(tags[idx].bits & 7);
+}
+
+/*
+ * Accumulate per-field stats from a single lexn-decoded field,
+ * for cross-validation against prescan metadata.
+ */
+static void
+accumulate_field(struct ppb_field_meta *acc, const struct ppb_field *fields,
+    const struct ppb_encoded_tag *tags, size_t idx)
+{
+    acc[idx].num_occurrences++;
+    if (wire_type_of(tags, idx) == PPB_WIRE_LEN)
+    {
+        size_t sz = fields[idx].v.payload.size;
+        acc[idx].total_bytes += sz;
+        if (sz > 0 && (acc[idx].min_nonzero_bytes == 0 || sz < acc[idx].min_nonzero_bytes))
+            acc[idx].min_nonzero_bytes = sz;
+        if (sz > acc[idx].max_bytes)
+            acc[idx].max_bytes = sz;
+    }
+}
+
+/*
+ * Cross-validate prescan metadata against lexn-accumulated per-field
+ * stats.  Modeled on the validation in examples/picoscope.c.
+ */
+static void
+cross_validate_meta(size_t num_fields, const struct ppb_encoded_tag *tags,
+    const struct ppb_field_meta *prescan_m, const struct ppb_field_meta *lexn_m)
+{
+    for (size_t i = 0; i < num_fields; i++)
+    {
+        POSTCOND(prescan_m[i].num_occurrences == lexn_m[i].num_occurrences);
+
+        unsigned wt = wire_type_of(tags, i);
+
+        if (wt == PPB_WIRE_LEN)
+        {
+            POSTCOND(prescan_m[i].total_bytes == lexn_m[i].total_bytes);
+            POSTCOND(prescan_m[i].min_nonzero_bytes == lexn_m[i].min_nonzero_bytes);
+            POSTCOND(prescan_m[i].max_bytes == lexn_m[i].max_bytes);
+        }
+
+        if (wt == PPB_WIRE_I32)
+            POSTCOND(prescan_m[i].total_bytes == 4 * prescan_m[i].num_occurrences);
+
+        if (wt == PPB_WIRE_I64)
+            POSTCOND(prescan_m[i].total_bytes == 8 * prescan_m[i].num_occurrences);
+
+        if (wt == PPB_WIRE_VARINT)
+        {
+            /* At least 1 byte per varint, at most 10. */
+            POSTCOND(prescan_m[i].total_bytes >= prescan_m[i].num_occurrences);
+            POSTCOND(prescan_m[i].total_bytes <= 10 * prescan_m[i].num_occurrences);
+        }
+    }
+}
+
 static void
 fuzz_zag(const uint8_t *data, size_t size)
 {
@@ -116,14 +178,15 @@ do_prescan(const uint8_t *data, size_t size, size_t num_fields, const struct ppb
     struct ppb_field *fields)
 {
     struct ppb_buf buf = { data, size };
+    ptrdiff_t full_r;
 
     {
         memset(fields, 0, num_fields * sizeof(fields[0]));
-        ptrdiff_t r = ppb_prescan(buf, num_fields, tags, fields, SIZE_MAX);
+        full_r = ppb_prescan(buf, num_fields, tags, fields, SIZE_MAX);
 
-        if (r >= 0)
+        if (full_r >= 0)
         {
-            POSTCOND((size_t)r <= size);
+            POSTCOND((size_t)full_r <= size);
             POSTCOND(num_fields == 0 || tags[0].bits > 7);
         }
     }
@@ -142,28 +205,63 @@ do_prescan(const uint8_t *data, size_t size, size_t num_fields, const struct ppb
     for (size_t li = 0; li < sizeof(limits) / sizeof(limits[0]); li++)
     {
         size_t limit = limits[li];
-        memset(fields, 0, num_fields * sizeof(fields[0]));
-        ptrdiff_t r = ppb_prescan_with_hard_limit(buf, limit, num_fields, tags, fields, SIZE_MAX);
 
-        if (r >= 0)
+        /* Hard limit. */
+        memset(fields, 0, num_fields * sizeof(fields[0]));
+        ptrdiff_t hr = ppb_prescan_with_hard_limit(buf, limit, num_fields, tags, fields, SIZE_MAX);
+
+        if (hr >= 0)
         {
-            POSTCOND((size_t)r <= size);
-            POSTCOND((size_t)r <= limit);
+            POSTCOND((size_t)hr <= size);
+            POSTCOND((size_t)hr <= limit);
             POSTCOND(num_fields == 0 || tags[0].bits > 7);
         }
-    }
 
-    for (size_t li = 0; li < sizeof(limits) / sizeof(limits[0]); li++)
-    {
-        size_t limit = limits[li];
+        /* Save hard-limit metadata for cross-check with soft limit. */
+        struct ppb_field_meta hard_m[MAX_FIELDS];
+        for (size_t i = 0; i < num_fields; i++)
+            hard_m[i] = fields[i].m;
+
+        /* Soft limit with the same limit value. */
         memset(fields, 0, num_fields * sizeof(fields[0]));
+        ptrdiff_t sr = ppb_prescan_with_soft_limit(buf, limit, num_fields, tags, fields, SIZE_MAX);
 
-        ptrdiff_t r = ppb_prescan_with_soft_limit(buf, limit, num_fields, tags, fields, SIZE_MAX);
-        if (r >= 0)
+        if (sr >= 0)
         {
-            POSTCOND((size_t)r <= size);
+            POSTCOND((size_t)sr <= size);
             POSTCOND(num_fields == 0 || tags[0].bits > 7);
         }
+
+        /*
+         * Cross-check hard vs soft limit.  Both stop at the first
+         * field boundary where consumed >= limit.  Hard signals
+         * LIMIT_EXCEEDED when consumed > limit; soft does not.
+         */
+        if (hr >= 0)
+        {
+            /* Hard succeeded (consumed <= limit) → soft at same boundary. */
+            POSTCOND(sr == hr);
+            /* Same fields processed → metadata must match. */
+            for (size_t i = 0; i < num_fields; i++)
+                POSTCOND(memcmp(&hard_m[i], &fields[i].m, sizeof(hard_m[0])) == 0);
+        }
+        else if (hr == PPB_ERROR_LIMIT_EXCEEDED)
+        {
+            /* Field straddled limit → soft succeeds past it. */
+            POSTCOND(sr >= 0);
+            POSTCOND((size_t)sr > limit);
+        }
+        else
+        {
+            /* Data error before reaching limit → both see it. */
+            POSTCOND(sr == hr);
+        }
+
+        /* Cross-check against unlimited prescan. */
+        if (full_r >= 0 && hr >= 0)
+            POSTCOND(hr <= full_r);
+        if (full_r >= 0 && sr >= 0)
+            POSTCOND(sr <= full_r);
     }
 }
 
@@ -289,36 +387,75 @@ fuzz_prescan_then_lexn(const uint8_t *data, size_t size, size_t num_fields,
     if (scan < 0)
         return; /* invalid input; no lexn */
 
+    /* Save prescan metadata for cross-validation against lexn. */
+    struct ppb_field_meta prescan_m[MAX_FIELDS];
+    for (size_t i = 0; i < num_fields; i++)
+        prescan_m[i] = fields[i].m;
+
+    /*
+     * Lex one field at a time, accumulating per-field stats for
+     * cross-validation against prescan metadata (cf. picoscope.c).
+     */
+    struct ppb_field_meta lexn_m[MAX_FIELDS];
+    memset(lexn_m, 0, num_fields * sizeof(lexn_m[0]));
+
     buf = (struct ppb_buf) { data, size };
-    for (;;)
+    while (buf.size > 0)
     {
-        if (buf.size == 0)
-            break;
-        struct ppb_lexn_ret ret = do_lexn_call(&buf, num_fields, tags, fields, SIZE_MAX, data, size);
+        const void *old_buf = buf.buf;
+        struct ppb_lexn_ret ret = do_lexn_call(&buf, num_fields, tags, fields, 1, data, size);
         if (ret.status != PPB_OK)
             break;
+
+        if (ret.field_range > 0)
+        {
+            POSTCOND(ret.first_field < num_fields);
+            POSTCOND(fields[ret.first_field].v.ptr >= old_buf);
+            accumulate_field(lexn_m, fields, tags, ret.first_field);
+        }
     }
 
+    /* Prescan validated → lexn must consume entire message. */
+    POSTCOND(buf.size == 0);
+
+    /* Prescan metadata must match lexn-accumulated stats. */
+    cross_validate_meta(num_fields, tags, prescan_m, lexn_m);
+
+    /*
+     * Cross-check hard vs soft limit lexn: run both independently
+     * with the same limit, then verify soft consumed >= hard.
+     */
     size_t half = (size / 2 > 0) ? size / 2 : 1;
-    buf = (struct ppb_buf) { data, size };
-    for (;;)
-    {
-        if (buf.size == 0)
-            break;
-        struct ppb_lexn_ret ret = do_lexn_hard(&buf, half, num_fields, tags, fields, SIZE_MAX, data, size);
-        if (ret.status != PPB_OK)
-            break;
-    }
 
+    struct ppb_field hard_fields[MAX_FIELDS];
+    memset(hard_fields, 0, num_fields * sizeof(hard_fields[0]));
     buf = (struct ppb_buf) { data, size };
-    for (;;)
+    while (buf.size > 0)
     {
-        if (buf.size == 0)
-            break;
-        struct ppb_lexn_ret ret = do_lexn_soft(&buf, half, num_fields, tags, fields, SIZE_MAX, data, size);
+        struct ppb_lexn_ret ret = do_lexn_hard(&buf, half, num_fields, tags, hard_fields, SIZE_MAX, data,
+            size);
         if (ret.status != PPB_OK)
             break;
     }
+    size_t hard_remaining = buf.size;
+
+    struct ppb_field soft_fields[MAX_FIELDS];
+    memset(soft_fields, 0, num_fields * sizeof(soft_fields[0]));
+    buf = (struct ppb_buf) { data, size };
+    while (buf.size > 0)
+    {
+        struct ppb_lexn_ret ret = do_lexn_soft(&buf, half, num_fields, tags, soft_fields, SIZE_MAX, data,
+            size);
+        if (ret.status != PPB_OK)
+            break;
+    }
+    size_t soft_remaining = buf.size;
+
+    /* Soft limit is strictly more permissive → consumes >= hard. */
+    POSTCOND(soft_remaining <= hard_remaining);
+
+    /* Valid message + soft limit → must consume everything. */
+    POSTCOND(soft_remaining == 0);
 }
 
 static void
