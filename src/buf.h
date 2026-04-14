@@ -14,7 +14,7 @@
 
 /*@ predicate buf_valid(struct ppb_buf buf) =
   @    buf_valid_range(g_initial_buf)
-  @  ∧ buf.size ≤ g_initial_buf.size
+  @  ∧ buf.size ≤ g_initial_buf.size ≤ PTRDIFF_MAX
   @  ∧ (const char *)buf.buf ≡ ((const char *)g_initial_buf.buf + (g_initial_buf.size - buf.size))
   @  ∧ buf_valid_range(buf);
   @*/
