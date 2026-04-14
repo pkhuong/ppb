@@ -324,8 +324,8 @@ handle_field(uint64_t tag, struct ppb_field *restrict dst, struct ppb_buf *restr
 
     case PPB_WIRE_LEN:
     {
-        num_bytes = decode_varint(src, error);
-        if (unlikely(buf_check(*src, num_bytes, error) | (num_bytes == 0))) /* mutant-ok: 'if:force_true' */
+        uint64_t len = decode_varint(src, error);
+        if (unlikely(buf_check(*src, len, error) | (len == 0))) /* mutant-ok: 'if:force_true' */
         {
             if (likely(*error))
             {
@@ -333,6 +333,7 @@ handle_field(uint64_t tag, struct ppb_field *restrict dst, struct ppb_buf *restr
             }
         }
 
+        num_bytes = len;
         dst->v.payload.buf = src->buf;
         dst->v.payload.size = num_bytes;
         /*@ assert buf_valid_range(dst->v.payload); */
