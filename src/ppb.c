@@ -115,6 +115,7 @@ static inline ptrdiff_t ppb_prescan_with_soft_limit(struct ppb_buf buf, size_t l
 
 /*@ requires \valid(buf);
   @ requires buf_valid_range(*buf);
+  @ requires buf->size ≤ (size_t)PTRDIFF_MAX;
   @ requires \valid_read(tags + (0..num_fields - 1));
   @ requires \valid(fields + (0..num_fields - 1));
   @ requires \separated(tags + (0..num_fields - 1), fields + (0..num_fields - 1));
@@ -133,6 +134,7 @@ static inline struct ppb_lexn_ret ppb_lexn(struct ppb_buf *__restrict buf, size_
 
 /*@ requires \valid(buf);
   @ requires buf_valid_range(*buf);
+  @ requires buf->size ≤ (size_t)PTRDIFF_MAX;
   @ requires \valid_read(tags + (0..num_fields - 1));
   @ requires \valid(fields + (0..num_fields - 1));
   @ requires \separated(tags + (0..num_fields - 1), fields + (0..num_fields - 1));
@@ -153,6 +155,7 @@ static inline struct ppb_lexn_ret ppb_lexn_with_hard_limit(struct ppb_buf *__res
 
 /*@ requires \valid(buf);
   @ requires buf_valid_range(*buf);
+  @ requires buf->size ≤ (size_t)PTRDIFF_MAX;
   @ requires \valid_read(tags + (0..num_fields - 1));
   @ requires \valid(fields + (0..num_fields - 1));
   @ requires \separated(tags + (0..num_fields - 1), fields + (0..num_fields - 1));
@@ -171,6 +174,7 @@ static inline struct ppb_lexn_ret ppb_lexn_with_soft_limit(struct ppb_buf *__res
 
 /*@ requires \valid(buf);
   @ requires buf_valid_range(*buf);
+  @ requires buf->size ≤ (size_t)PTRDIFF_MAX;
   @ requires \valid(error);
   @ requires *error ≡ 0;
   @ terminates \true;
@@ -487,6 +491,7 @@ ppb_prescan_impl(const struct ppb_buf buf, const size_t num_fields,
 
 /*@ requires \valid(buf);
   @ requires buf_valid_range(*buf);
+  @ requires buf->size ≤ (size_t)PTRDIFF_MAX;
   @ requires \valid_read(tags + (0..num_fields - 1));
   @ requires \valid(fields + (0..num_fields - 1));
   @ requires \separated(tags + (0..num_fields - 1), fields + (0..num_fields - 1));
