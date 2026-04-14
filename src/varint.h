@@ -182,12 +182,12 @@ peek_varint(struct ppb_buf src, uint64_t *restrict OUT_varint)
   @ assigns *src, *error;
   @ ensures buf_valid(*src);
   @ ensures *error ≤ 0;
-  @ ensures *error ≢ 0 ==> \result ≡ 0;
+  @ ensures *error ≢ 0 ==> \result ≡ on_error;
   @ ensures src->size ≤ \old(src->size);
   @ ensures src->buf ≡ (const char *)\old(src->buf) + \old(src->size) - src->size;
   @*/
 static inline uint64_t
-decode_varint(struct ppb_buf *restrict src, enum ppb_error *restrict error)
+decode_varint(struct ppb_buf *restrict src, enum ppb_error *restrict error, uint64_t on_error)
 {
     uint64_t ret;
     int num = peek_varint(*src, &ret);
@@ -200,7 +200,7 @@ decode_varint(struct ppb_buf *restrict src, enum ppb_error *restrict error)
     }
 
     error_set(error, (enum ppb_error)num);
-    return 0;
+    return on_error;
 }
 
 /*

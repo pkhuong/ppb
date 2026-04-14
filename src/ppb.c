@@ -187,7 +187,7 @@ uint64_t
 ppb_decode_varint(struct ppb_buf *restrict buf, enum ppb_error *restrict error)
 {
     /*@ ghost g_initial_buf = *buf; */
-    return decode_varint(buf, error);
+    return decode_varint(buf, error, /*on_error=*/0);
 }
 
 /*@ requires \valid_read(tags + (0..num_fields - 1));
@@ -302,7 +302,7 @@ handle_field(uint64_t tag, struct ppb_field *restrict dst, struct ppb_buf *restr
     case PPB_WIRE_VARINT:
     {
         const char *initial = src->buf;
-        uint64_t varint = decode_varint(src, error);
+        uint64_t varint = decode_varint(src, error, /*on_error=*/0);
         if (unlikely(*error != PPB_OK))
         {
             return *error;
@@ -328,13 +328,12 @@ handle_field(uint64_t tag, struct ppb_field *restrict dst, struct ppb_buf *restr
 
     case PPB_WIRE_LEN:
     {
-        uint64_t len = decode_varint(src, error);
-        if (unlikely(buf_check(*src, len, error) | (len == 0))) /* mutant-ok: 'if:force_true' */
+        static_assert(UINT64_MAX > PTRDIFF_MAX, "we assume UINT64_MAX always fails buf_check");
+
+        uint64_t len = decode_varint(src, error, /*on_error=*/UINT64_MAX);
+        if (unlikely(buf_check(*src, len, error)))
         {
-            if (likely(*error))
-            {
-                return *error;
-            }
+            return *error;
         }
 
         num_bytes = len;
