@@ -3,6 +3,8 @@
 #include "error.h"
 #include "ppb/ppb.h"
 
+#include <assert.h>
+
 /*@ predicate buf_valid_range(struct ppb_buf buf) =
   @    \valid_read((const char *)buf.buf + (0..buf.size - 1));
   @*/
@@ -39,8 +41,15 @@
   @ disjoint behaviors sticky_neg, flag;
   @*/
 static inline int
-buf_check(struct ppb_buf src, size_t delta, enum ppb_error *restrict error)
+buf_check(struct ppb_buf src, uint64_t delta, enum ppb_error *restrict error)
 {
+    /*
+     * delta can come from the wire, where we naturally decode to
+     * uint64_t; try to be safe on 32-bit platforms, let someone else
+     * figure > 64-bit platorms.
+     */
+    static_assert(sizeof(uint64_t) >= sizeof(size_t), "we assume size_t -> uint64_t is safe");
+
     if (unlikely(delta > src.size))
     {
         return error_set(error, PPB_ERROR_TRUNCATED_DATA);
