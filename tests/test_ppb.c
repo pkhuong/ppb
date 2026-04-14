@@ -6,6 +6,7 @@
  * Run:   build/test_ppb
  */
 #include "ppb/ppb.h"
+#include "src/sat_sub.h"
 #include "src/varint.h"
 
 #include <inttypes.h>
@@ -89,6 +90,56 @@ test_zag(void)
      */
     CHECK(ppb_zag(UINT32_MAX - 1) == INT32_MAX);
     CHECK(ppb_zag(UINT32_MAX) == (int64_t)INT32_MIN);
+}
+
+static void
+test_saturating_subzu(void)
+{
+    printf("test_saturating_subzu\n");
+
+    /* Normal behavior: x >= y => x - y. */
+    CHECK(saturating_subzu(0, 0) == 0);
+    CHECK(saturating_subzu(1, 0) == 1);
+    CHECK(saturating_subzu(1, 1) == 0);
+    CHECK(saturating_subzu(42, 17) == 25);
+    CHECK(saturating_subzu(SIZE_MAX, 0) == SIZE_MAX);
+    CHECK(saturating_subzu(SIZE_MAX, 1) == SIZE_MAX - 1);
+    CHECK(saturating_subzu(SIZE_MAX, SIZE_MAX) == 0);
+
+    /* Saturating behavior: x < y => 0. */
+    CHECK(saturating_subzu(0, 1) == 0);
+    CHECK(saturating_subzu(0, SIZE_MAX) == 0);
+    CHECK(saturating_subzu(1, 2) == 0);
+    CHECK(saturating_subzu(17, 42) == 0);
+    CHECK(saturating_subzu(SIZE_MAX - 1, SIZE_MAX) == 0);
+}
+
+static void
+test_saturating_range_u32(void)
+{
+    printf("test_saturating_range_u32\n");
+
+    /* In range: x == y => 1. */
+    CHECK(saturating_range_u32(0, 0) == 1);
+    CHECK(saturating_range_u32(1, 1) == 1);
+    CHECK(saturating_range_u32(SIZE_MAX, SIZE_MAX) == 1);
+
+    /* In range: small deltas. */
+    CHECK(saturating_range_u32(0, 1) == 2);
+    CHECK(saturating_range_u32(10, 19) == 10);
+    CHECK(saturating_range_u32(100, 1000) == 901);
+
+    /* In range, upper boundary: y - x == UINT32_MAX - 1 => 1 + y - x == UINT32_MAX. */
+    CHECK(saturating_range_u32(0, (size_t)UINT32_MAX - 1) == UINT32_MAX);
+    CHECK(saturating_range_u32(7, (size_t)UINT32_MAX - 1 + 7) == UINT32_MAX);
+
+    /* Saturate boundary: y - x == UINT32_MAX => UINT32_MAX. */
+    CHECK(saturating_range_u32(0, (size_t)UINT32_MAX) == UINT32_MAX);
+    CHECK(saturating_range_u32(1, (size_t)UINT32_MAX + 1) == UINT32_MAX);
+
+    /* Saturate: large deltas. */
+    CHECK(saturating_range_u32(0, SIZE_MAX) == UINT32_MAX);
+    CHECK(saturating_range_u32(SIZE_MAX / 2, SIZE_MAX) == UINT32_MAX);
 }
 
 static void
@@ -1894,6 +1945,8 @@ int
 main(void)
 {
     test_zag();
+    test_saturating_subzu();
+    test_saturating_range_u32();
     test_peekn();
     test_decode_varint();
     test_peek_varint_error();

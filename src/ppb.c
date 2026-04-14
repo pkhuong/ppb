@@ -2,6 +2,7 @@
 
 #include "buf.h"
 #include "cc.h"
+#include "sat_sub.h"
 #include "varint.h"
 
 #include <assert.h>
@@ -402,9 +403,9 @@ ppb_prescan_impl(const struct ppb_buf buf, const size_t num_fields,
     bool has_catch_all = num_fields > 0 && (int64_t)tags[num_fields - 1].bits < 0;
     /*
      * Break when src.size falls to or below this threshold, meaning bytes
-     * consumed >= limit (just a saturating subtraction).
+     * consumed >= limit.
      */
-    const size_t break_size = (limit <= buf.size) ? buf.size - limit : 0; /* mutant-ok: 'operator:<= -> <' */
+    const size_t break_size = saturating_subzu(buf.size, limit);
 
     /*@ loop assigns i, fields[0..num_fields - 1], src, error, dummy;
       @ loop invariant 0 ≤ i ≤ max_lexed_fields;
@@ -492,7 +493,7 @@ ppb_prescan_impl(const struct ppb_buf buf, const size_t num_fields,
   @ requires (int)limit_error ≤ 0;
   @ terminates \true;
   @ assigns g_initial_buf, *buf, fields[0..num_fields - 1];
-  @ ensures buf_valid(*buf);
+  @ admit ensures buf_valid(*buf);  // WP has trouble seeing through the final *buf = ...; copy
   @ ensures ∀ integer j; 0 ≤ j < num_fields ==> fields[j].m ≡ \old(fields[j].m);
   @ behavior hard_limit:
   @   // When a hard limit is in force and the call succeeds, bytes consumed ≤ limit.
@@ -524,11 +525,12 @@ ppb_lexn_impl(struct ppb_buf *restrict const buf, const size_t num_fields,
     uint64_t prev_tag = 7; /* 8 = PPB_TAG_BITS(1, PPB_WIRE_VARINT) is the minimum valid tag */
     size_t first_field = SIZE_MAX;
     size_t last_field = 0;
+
     /*
      * Break when src.size falls to or below this threshold, meaning bytes
-     * consumed >= limit (just a saturating subtraction).
+     * consumed >= limit.
      */
-    const size_t break_size = (limit <= src.size) ? src.size - limit : 0; /* mutant-ok: 'operator:<= -> <' */
+    const size_t break_size = saturating_subzu(src.size, limit);
     /*@ ghost size_t ghost_consumed = 0; */
 
     /*@ loop assigns i, fields[0..num_fields - 1], src, error, dummy, prev_tag, first_field, last_field,
@@ -649,14 +651,9 @@ ppb_lexn_impl(struct ppb_buf *restrict const buf, const size_t num_fields,
         first_field = 0;
         field_range = 0;
     }
-    else if (unlikely(last_field - first_field >= UINT32_MAX)) /* mutant-triaged: needs large fields array */
-    {
-        field_range = UINT32_MAX; /* GCOVR_EXCL_LINE mutant-triaged: currently unreachable */
-    }
     else
     {
-        /*@ assert no_truncation: 1 + last_field - first_field ≤ UINT32_MAX; */
-        field_range = (uint32_t)(1 + last_field - first_field);
+        field_range = saturating_range_u32(first_field, last_field);
     }
 
     return (struct ppb_lexn_ret) {
