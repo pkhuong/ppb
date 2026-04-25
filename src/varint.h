@@ -79,7 +79,7 @@ squish_varint(uint64_t x)
  */
 /*@ requires buf_valid(src);
   @ requires limb_width ∈ {7, 8};
-  @ requires (int)corrupt_error < 0;
+  @ requires corrupt_error < 0;
   @ terminates \true;
   @ assigns *OUT_varint;
   @ ensures buf_valid(src);
@@ -177,14 +177,15 @@ peek_varint(struct ppb_buf src, uint64_t *restrict OUT_varint)
 /*@ requires \valid(src);
   @ requires buf_valid(*src);
   @ requires \valid(error);
-  @ requires *error ≡ 0;
   @ terminates \true;
   @ assigns *src, *error;
   @ ensures buf_valid(*src);
-  @ ensures *error ≤ 0;
-  @ ensures *error ≢ 0 ==> \result ≡ on_error;
   @ ensures src->size ≤ \old(src->size);
   @ ensures src->buf ≡ (const char *)\old(src->buf) + \old(src->size) - src->size;
+  @ behavior well_formed:
+  @  assumes *error ≡ 0;
+  @  ensures *error ≤ 0;
+  @  ensures *error ≢ 0 ==> \result ≡ on_error;
   @*/
 static inline uint64_t
 decode_varint(struct ppb_buf *restrict src, enum ppb_error *restrict error, uint64_t on_error)
@@ -278,14 +279,15 @@ peek_tag(struct ppb_buf src, uint64_t *restrict OUT_tag)
 /*@ requires \valid(src);
   @ requires buf_valid(*src);
   @ requires \valid(error);
-  @ requires *error ≡ 0;
   @ terminates \true;
   @ assigns *src, *error;
   @ ensures buf_valid(*src);
-  @ ensures *error ≤ 0;
-  @ ensures *error ≢ 0 ==> \result ≡ 0;
   @ ensures src->size ≤ \old(src->size);
   @ ensures src->buf ≡ (const char *)\old(src->buf) + \old(src->size) - src->size;
+  @ behavior well_formed:
+  @  assumes *error ≡ 0;
+  @  ensures *error ≤ 0;
+  @  ensures *error ≢ 0 ==> \result ≡ 0;
   @*/
 static inline uint64_t
 decode_tag(struct ppb_buf *restrict src, enum ppb_error *restrict error)
