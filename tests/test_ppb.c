@@ -1891,6 +1891,71 @@ encode_i32_field(uint64_t field_num, uint32_t value, uint8_t *out)
 }
 
 /*
+ * fields[].v is zeroed before handle_field so that v.ptr stays NULL
+ * when parsing fails.  Without that clear a second occurrence of
+ * field 1 that fails would leave the ptr from the first (successful)
+ * occurrence.
+ *
+ * Wire: valid field 1 varint, then field 1 with a truncated value.
+ * After prescan returns an error, fields[0].v.ptr must be NULL.
+ */
+static void
+test_prescan_v_ptr_null_on_error(void)
+{
+    printf("test_prescan_v_ptr_null_on_error\n");
+
+    static const uint8_t wire[] = {
+        0x08, 0x01,  /* field 1 varint 1 (valid) */
+        0x08, 0x80,  /* field 1 varint — truncated, no terminating byte */
+    };
+
+    struct ppb_encoded_tag tags[1] = { PPB_TAG(1, PPB_WIRE_VARINT) };
+    struct ppb_field fields[1];
+    zero_fields(1, fields);
+
+    struct ppb_buf buf = make_buf(wire, sizeof(wire));
+    ptrdiff_t ret = ppb_prescan(buf, 1, tags, fields, SIZE_MAX);
+
+    CHECK(ret == PPB_ERROR_TRUNCATED_DATA);
+    CHECK(fields[0].v.ptr == NULL);
+}
+
+/*
+ * Same guarantee for lexn.  First call succeeds and sets v.ptr;
+ * second call encounters a truncated value for the same field and
+ * must leave v.ptr == NULL on return.
+ */
+static void
+test_lexn_v_ptr_null_on_error(void)
+{
+    printf("test_lexn_v_ptr_null_on_error\n");
+
+    static const uint8_t first_wire[] = {
+        0x08, 0x01,  /* field 1 varint 1 (valid) */
+    };
+    static const uint8_t second_wire[] = {
+        0x08, 0x80,  /* field 1 varint — truncated */
+    };
+
+    struct ppb_encoded_tag tags[1] = { PPB_TAG(1, PPB_WIRE_VARINT) };
+    struct ppb_field fields[1];
+    zero_fields(1, fields);
+
+    /* First call: succeeds, v.ptr gets set to the tag byte. */
+    struct ppb_buf buf = make_buf(first_wire, sizeof(first_wire));
+    struct ppb_lexn_ret ret = ppb_lexn(&buf, 1, tags, fields, SIZE_MAX);
+    CHECK(ret.status == PPB_OK);
+    CHECK(ret.field_range == 1);
+    CHECK(fields[0].v.ptr == first_wire);  /* ptr was set */
+
+    /* Second call: truncated value — handle_field fails, ptr must be NULL. */
+    buf = make_buf(second_wire, sizeof(second_wire));
+    ret = ppb_lexn(&buf, 1, tags, fields, SIZE_MAX);
+    CHECK(ret.status == PPB_ERROR_TRUNCATED_DATA);
+    CHECK(fields[0].v.ptr == NULL);
+}
+
+/*
  * Systematic binary-search exercise: 8 even-numbered I32 tags (2,4,...,16).
  * For each prefix length 0..8, probe with field numbers 1..17 and verify
  * that odd tags are skipped and even tags in range are found at the
@@ -2008,6 +2073,9 @@ main(void)
 
     test_tag_macros();
     test_tag_varint_roundtrip();
+
+    test_prescan_v_ptr_null_on_error();
+    test_lexn_v_ptr_null_on_error();
 
     test_prescan_bsearch_systematic();
 
