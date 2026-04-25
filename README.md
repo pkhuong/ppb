@@ -1,6 +1,10 @@
 PPB: Pico Protobuf
 ==================
 [![codecov](https://codecov.io/gh/pkhuong/ppb/graph/badge.svg?token=YH1Q5HD3B7)](https://codecov.io/gh/pkhuong/ppb)
+<a href="https://scan.coverity.com/projects/pkhuong-ppb">
+  <img alt="Coverity Scan Build Status"
+       src="https://scan.coverity.com/projects/33051/badge.svg"/>
+</a>
 
 PPB is an allocation-free non-recursive lexer for protobuf binary
 encoding (v2/v3, no groups); like many protobuf implementations, it
