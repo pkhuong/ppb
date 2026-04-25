@@ -2016,6 +2016,108 @@ test_prescan_bsearch_systematic(void)
     }
 }
 
+/*
+ * Check ppb_prescan metadata against per-field stats accumulated by
+ * lexing one field at a time.  We have similar code in the fuzzing
+ * harness and in picoscope, but this is a crucial invariant.
+ */
+static void
+test_cross_check_meta(void)
+{
+    printf("test_cross_check_meta\n");
+
+    struct ppb_encoded_tag tags[4];
+    init_four_tags(tags);
+    CHECK(ppb_validate_tags(4, tags) == PPB_OK);
+
+    struct ppb_buf buf = make_buf(four_field_wire, sizeof(four_field_wire));
+    struct ppb_field fields[4];
+    zero_fields(4, fields);
+
+    ptrdiff_t scan = ppb_prescan(buf, 4, tags, fields, SIZE_MAX);
+    CHECK(scan == (ptrdiff_t)sizeof(four_field_wire));
+
+    struct ppb_field_meta prescan_m[4];
+    for (size_t i = 0; i < 4; i++)
+        prescan_m[i] = fields[i].m;
+
+    /* Lex one field at a time and accumulate stats into lexn_m. */
+    struct ppb_field_meta lexn_m[4];
+    memset(lexn_m, 0, sizeof(lexn_m));
+
+    buf = make_buf(four_field_wire, sizeof(four_field_wire));
+    zero_fields(4, fields);
+
+    while (buf.size > 0)
+    {
+        struct ppb_lexn_ret ret = ppb_lexn(&buf, 4, tags, fields, 1);
+        CHECK(ret.status == PPB_OK);
+        if (ret.field_range > 0)
+        {
+            size_t i = ret.first_field;
+            unsigned wt = (unsigned)(tags[i].bits & 7);
+            lexn_m[i].num_occurrences++;
+            if (wt == PPB_WIRE_LEN)
+            {
+                size_t sz = fields[i].v.payload.size;
+                lexn_m[i].total_bytes += sz;
+                if (sz > 0 && (lexn_m[i].min_nonzero_bytes == 0 || sz < lexn_m[i].min_nonzero_bytes))
+                    lexn_m[i].min_nonzero_bytes = sz;
+                if (sz > lexn_m[i].max_bytes)
+                    lexn_m[i].max_bytes = sz;
+            }
+        }
+    }
+
+    for (size_t i = 0; i < 4; i++)
+    {
+        CHECK(prescan_m[i].num_occurrences == lexn_m[i].num_occurrences);
+
+        unsigned wt = (unsigned)(tags[i].bits & 7);
+
+        if (wt == PPB_WIRE_LEN)
+        {
+            CHECK(prescan_m[i].total_bytes == lexn_m[i].total_bytes);
+            CHECK(prescan_m[i].min_nonzero_bytes == lexn_m[i].min_nonzero_bytes);
+            CHECK(prescan_m[i].max_bytes == lexn_m[i].max_bytes);
+        }
+
+        if (wt == PPB_WIRE_I32)
+            CHECK(prescan_m[i].total_bytes == 4 * prescan_m[i].num_occurrences);
+
+        if (wt == PPB_WIRE_I64)
+            CHECK(prescan_m[i].total_bytes == 8 * prescan_m[i].num_occurrences);
+    }
+}
+
+/*
+ * Two ppb_prescan calls on the same buffer with zero-initialized
+ * fields arrays must produce byte-identical metadata.  We're just
+ * testing determinism, and it's trivially true given statelessness,
+ * but it's nice to be explicit.
+ */
+static void
+test_prescan_deterministic(void)
+{
+    printf("test_prescan_deterministic\n");
+
+    struct ppb_encoded_tag tags[4];
+    init_four_tags(tags);
+
+    struct ppb_buf buf = make_buf(four_field_wire, sizeof(four_field_wire));
+
+    struct ppb_field fields1[4], fields2[4];
+    zero_fields(4, fields1);
+    zero_fields(4, fields2);
+
+    ptrdiff_t r1 = ppb_prescan(buf, 4, tags, fields1, SIZE_MAX);
+    ptrdiff_t r2 = ppb_prescan(buf, 4, tags, fields2, SIZE_MAX);
+
+    CHECK(r1 == r2);
+    for (size_t i = 0; i < 4; i++)
+        CHECK(memcmp(&fields1[i].m, &fields2[i].m, sizeof(fields1[i].m)) == 0);
+}
+
 int
 main(void)
 {
@@ -2078,6 +2180,9 @@ main(void)
     test_lexn_v_ptr_null_on_error();
 
     test_prescan_bsearch_systematic();
+
+    test_cross_check_meta();
+    test_prescan_deterministic();
 
     printf("\n%d checks, %d failures\n", g_check_count, g_fail_count);
     return g_fail_count > 0 ? 1 : 0;
