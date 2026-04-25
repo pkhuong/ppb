@@ -52,3 +52,24 @@ jobs:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: "build/coverage/*.gc*"
           gcov_include: "src/*.[ch]"
+
+  s390x-be:
+    runs-on: ubuntu-latest
+    steps:
+      - name: checkout
+        uses: actions/checkout@v4
+      - name: build and test (s390x, big-endian)
+        uses: uraimo/run-on-arch-action@v3
+        with:
+          arch: s390x
+          distro: ubuntu24.04
+          githubToken: ${{ github.token }}
+          install: |
+            apt-get update -q -y
+            apt-get install -q -y make gcc clang xxd
+          run: |
+            make CC=gcc test
+            # ASan reserves a huge virtual shadow region on startup, which
+            # the s390x QEMU container can't satisfy without overcommit.
+            # Run UBSan only here.
+            make CC=clang EXTRA_FLAGS="-fsanitize=undefined -fno-omit-frame-pointer" test
