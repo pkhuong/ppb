@@ -74,10 +74,11 @@ static inline int64_t ppb_zag(uint64_t x);
   @ requires \valid_read(tags + (0..num_fields - 1));
   @ requires \valid(fields + (0..num_fields - 1));
   @ requires \separated(tags + (0..num_fields - 1), fields + (0..num_fields - 1));
-  @ requires ∀ integer j; 0 ≤ j < num_fields ==> tags[j].bits > 7;
   @ terminates \true;
   @ assigns g_initial_buf, fields[0..num_fields - 1];
-  @ ensures \result ≥ 0 ==> \result ≤ buf.size;
+  @ behavior well_formed:
+  @  assumes ∀ integer j; 0 ≤ j < num_fields ==> tags[j].bits > 7;
+  @  ensures \result ≥ 0 ==> \result ≤ buf.size;
   @*/
 static inline ptrdiff_t ppb_prescan(struct ppb_buf buf, size_t num_fields,
     const struct ppb_encoded_tag *__restrict tags, struct ppb_field *__restrict fields,
@@ -88,11 +89,12 @@ static inline ptrdiff_t ppb_prescan(struct ppb_buf buf, size_t num_fields,
   @ requires \valid_read(tags + (0..num_fields - 1));
   @ requires \valid(fields + (0..num_fields - 1));
   @ requires \separated(tags + (0..num_fields - 1), fields + (0..num_fields - 1));
-  @ requires ∀ integer j; 0 ≤ j < num_fields ==> tags[j].bits > 7;
   @ terminates \true;
   @ assigns g_initial_buf, fields[0..num_fields - 1];
-  @ ensures \result ≥ 0 ==> \result ≤ buf.size;
-  @ ensures \result ≥ 0 ==> \result ≤ limit;
+  @ behavior well_formed:
+  @  assumes ∀ integer j; 0 ≤ j < num_fields ==> tags[j].bits > 7;
+  @  ensures \result ≥ 0 ==> \result ≤ buf.size;
+  @  ensures \result ≥ 0 ==> \result ≤ limit;
   @*/
 static inline ptrdiff_t ppb_prescan_with_hard_limit(struct ppb_buf buf, size_t limit, size_t num_fields,
     const struct ppb_encoded_tag *__restrict tags, struct ppb_field *__restrict fields,
@@ -103,10 +105,11 @@ static inline ptrdiff_t ppb_prescan_with_hard_limit(struct ppb_buf buf, size_t l
   @ requires \valid_read(tags + (0..num_fields - 1));
   @ requires \valid(fields + (0..num_fields - 1));
   @ requires \separated(tags + (0..num_fields - 1), fields + (0..num_fields - 1));
-  @ requires ∀ integer j; 0 ≤ j < num_fields ==> tags[j].bits > 7;
   @ terminates \true;
   @ assigns g_initial_buf, fields[0..num_fields - 1];
-  @ ensures \result ≥ 0 ==> \result ≤ buf.size;
+  @ behavior well_formed:
+  @  assumes ∀ integer j; 0 ≤ j < num_fields ==> tags[j].bits > 7;
+  @  ensures \result ≥ 0 ==> \result ≤ buf.size;
   @*/
 static inline ptrdiff_t ppb_prescan_with_soft_limit(struct ppb_buf buf, size_t limit, size_t num_fields,
     const struct ppb_encoded_tag *__restrict tags, struct ppb_field *__restrict fields,
@@ -118,14 +121,16 @@ static inline ptrdiff_t ppb_prescan_with_soft_limit(struct ppb_buf buf, size_t l
   @ requires \valid_read(tags + (0..num_fields - 1));
   @ requires \valid(fields + (0..num_fields - 1));
   @ requires \separated(tags + (0..num_fields - 1), fields + (0..num_fields - 1));
-  @ requires ∀ integer j; 0 ≤ j < num_fields ==> tags[j].bits > 7;
   @ terminates \true;
   @ assigns g_initial_buf, *buf, fields[0..num_fields - 1];
   @ ensures buf_valid(*buf);
-  @ ensures ∀ integer j; 0 ≤ j < num_fields ==> fields[j].m ≡ \old(fields[j].m);
+  @ behavior well_formed:
+  @  assumes ∀ integer j; 0 ≤ j < num_fields ==> tags[j].bits > 7;
+  @  ensures ∀ integer j; 0 ≤ j < num_fields ==> fields[j].m ≡ \old(fields[j].m);
   @ behavior progress:
-  @   assumes buf->size > 0 ∧ max_lexed_fields > 0;
-  @   ensures \result.status ≢ PPB_OK ∨ buf->size < \old(buf->size);
+  @  assumes ∀ integer j; 0 ≤ j < num_fields ==> tags[j].bits > 7;
+  @  assumes buf->size > 0 ∧ max_lexed_fields > 0;
+  @  ensures \result.status ≢ PPB_OK ∨ buf->size < \old(buf->size);
   @*/
 static inline struct ppb_lexn_ret ppb_lexn(struct ppb_buf *__restrict buf, size_t num_fields,
     const struct ppb_encoded_tag *__restrict tags, struct ppb_field *__restrict fields,
@@ -137,16 +142,19 @@ static inline struct ppb_lexn_ret ppb_lexn(struct ppb_buf *__restrict buf, size_
   @ requires \valid_read(tags + (0..num_fields - 1));
   @ requires \valid(fields + (0..num_fields - 1));
   @ requires \separated(tags + (0..num_fields - 1), fields + (0..num_fields - 1));
-  @ requires ∀ integer j; 0 ≤ j < num_fields ==> tags[j].bits > 7;
   @ terminates \true;
   @ assigns g_initial_buf, *buf, fields[0..num_fields - 1];
   @ ensures buf_valid(*buf);
-  @ ensures ∀ integer j; 0 ≤ j < num_fields ==> fields[j].m ≡ \old(fields[j].m);
+  @ behavior well_formed:
+  @  assumes ∀ integer j; 0 ≤ j < num_fields ==> tags[j].bits > 7;
+  @  ensures ∀ integer j; 0 ≤ j < num_fields ==> fields[j].m ≡ \old(fields[j].m);
   @ behavior hard_limit:
-  @   ensures \result.status ≡ PPB_OK ==> \old(buf->size) - buf->size ≤ limit;
+  @  assumes ∀ integer j; 0 ≤ j < num_fields ==> tags[j].bits > 7;
+  @  ensures \result.status ≡ PPB_OK ==> \old(buf->size) - buf->size ≤ limit;
   @ behavior progress:
-  @   assumes buf->size > 0 ∧ max_lexed_fields > 0 ∧ limit > 0;
-  @   ensures \result.status ≢ PPB_OK ∨ buf->size < \old(buf->size);
+  @  assumes ∀ integer j; 0 ≤ j < num_fields ==> tags[j].bits > 7;
+  @  assumes buf->size > 0 ∧ max_lexed_fields > 0 ∧ limit > 0;
+  @  ensures \result.status ≢ PPB_OK ∨ buf->size < \old(buf->size);
   @*/
 static inline struct ppb_lexn_ret ppb_lexn_with_hard_limit(struct ppb_buf *__restrict buf, size_t limit,
     size_t num_fields, const struct ppb_encoded_tag *__restrict tags, struct ppb_field *__restrict fields,
@@ -158,14 +166,16 @@ static inline struct ppb_lexn_ret ppb_lexn_with_hard_limit(struct ppb_buf *__res
   @ requires \valid_read(tags + (0..num_fields - 1));
   @ requires \valid(fields + (0..num_fields - 1));
   @ requires \separated(tags + (0..num_fields - 1), fields + (0..num_fields - 1));
-  @ requires ∀ integer j; 0 ≤ j < num_fields ==> tags[j].bits > 7;
   @ terminates \true;
   @ assigns g_initial_buf, *buf, fields[0..num_fields - 1];
   @ ensures buf_valid(*buf);
-  @ ensures ∀ integer j; 0 ≤ j < num_fields ==> fields[j].m ≡ \old(fields[j].m);
+  @ behavior well_formed:
+  @  assumes ∀ integer j; 0 ≤ j < num_fields ==> tags[j].bits > 7;
+  @  ensures ∀ integer j; 0 ≤ j < num_fields ==> fields[j].m ≡ \old(fields[j].m);
   @ behavior progress:
-  @   assumes buf->size > 0 ∧ max_lexed_fields > 0 ∧ limit > 0;
-  @   ensures \result.status ≢ PPB_OK ∨ buf->size < \old(buf->size);
+  @  assumes ∀ integer j; 0 ≤ j < num_fields ==> tags[j].bits > 7;
+  @  assumes buf->size > 0 ∧ max_lexed_fields > 0 ∧ limit > 0;
+  @  ensures \result.status ≢ PPB_OK ∨ buf->size < \old(buf->size);
   @*/
 static inline struct ppb_lexn_ret ppb_lexn_with_soft_limit(struct ppb_buf *__restrict buf, size_t limit,
     size_t num_fields, const struct ppb_encoded_tag *__restrict tags, struct ppb_field *__restrict fields,
@@ -279,15 +289,16 @@ find_tag(const size_t num_fields, const struct ppb_encoded_tag *__restrict tags,
   @ requires \valid(src);
   @ requires buf_valid(*src);
   @ requires \valid(error);
-  @ requires *error ≡ PPB_OK;
   @ terminates \true;
   @ assigns *dst, *error;
   @ assigns *src \from indirect:*src;
   @ ensures buf_valid(*src);
-  @ ensures *error ≤ 0;
-  @ ensures \result ≡ *error;
-  @ ensures error_rollback: \result ≢ PPB_OK ==> *dst ≡ \old(*dst);
   @ ensures src->size ≤ \old(src->size);
+  @ behavior well_formed:
+  @  assumes *error ≡ PPB_OK;
+  @  ensures *error ≤ 0;
+  @  ensures \result ≡ *error;
+  @  ensures error_rollback: \result ≢ PPB_OK ==> *dst ≡ \old(*dst);
   @ behavior nometa:
   @  assumes update_metadata ≡ false;
   @  assigns dst->v, *src, *error;
@@ -363,11 +374,11 @@ handle_field(uint64_t tag, struct ppb_field *restrict dst, struct ppb_buf *restr
     case 3: /* mutant-skip: explicit group start instead of default */
     case 4: /* mutant-skip: explicit group end instead of default */
     default:
-        /*@ assert *error ≡ 0; */
+        /*@ for well_formed: assert *error ≡ 0; */
         return error_set(error, PPB_ERROR_CORRUPT_TAG);
     }
 
-    /*@ assert *error ≡ PPB_OK; */
+    /*@ for well_formed: assert *error ≡ PPB_OK; */
     if (update_metadata)
     {
         dst->m.num_occurrences++;
@@ -387,14 +398,16 @@ handle_field(uint64_t tag, struct ppb_field *restrict dst, struct ppb_buf *restr
   @ requires \valid_read(tags + (0..num_fields - 1));
   @ requires \valid(fields + (0..num_fields - 1));
   @ requires \separated(tags + (0..num_fields - 1), fields + (0..num_fields - 1));
-  @ requires ∀ integer j; 0 ≤ j < num_fields ==> tags[j].bits > 7;
-  @ requires (int)limit_error ≤ 0;
   @ terminates \true;
   @ assigns g_initial_buf, fields[0..num_fields - 1];
-  @ ensures \result ≥ 0 ==> \result ≤ buf.size;
+  @ behavior well_formed:
+  @  assumes ∀ integer j; 0 ≤ j < num_fields ==> tags[j].bits > 7;
+  @  assumes (int)limit_error ≤ 0;
+  @  ensures \result ≥ 0 ==> \result ≤ buf.size;
   @ behavior hard_limit:
-  @   assumes (int)limit_error < 0;
-  @   ensures \result ≥ 0 ==> \result ≤ limit;
+  @  assumes ∀ integer j; 0 ≤ j < num_fields ==> tags[j].bits > 7;
+  @  assumes (int)limit_error < 0;
+  @  ensures \result ≥ 0 ==> \result ≤ limit;
   @*/
 ptrdiff_t
 ppb_prescan_impl(const struct ppb_buf buf, const size_t num_fields,
@@ -497,20 +510,24 @@ ppb_prescan_impl(const struct ppb_buf buf, const size_t num_fields,
   @ requires \valid_read(tags + (0..num_fields - 1));
   @ requires \valid(fields + (0..num_fields - 1));
   @ requires \separated(tags + (0..num_fields - 1), fields + (0..num_fields - 1));
-  @ requires ∀ integer j; 0 ≤ j < num_fields ==> tags[j].bits > 7;
-  @ requires (int)limit_error ≤ 0;
   @ terminates \true;
   @ assigns g_initial_buf, *buf, fields[0..num_fields - 1];
   @ admit ensures buf_valid(*buf);  // WP has trouble seeing through the final *buf = ...; copy
-  @ ensures ∀ integer j; 0 ≤ j < num_fields ==> fields[j].m ≡ \old(fields[j].m);
+  @ behavior well_formed:
+  @  assumes ∀ integer j; 0 ≤ j < num_fields ==> tags[j].bits > 7;
+  @  assumes (int)limit_error ≤ 0;
+  @  ensures ∀ integer j; 0 ≤ j < num_fields ==> fields[j].m ≡ \old(fields[j].m);
   @ behavior hard_limit:
-  @   // When a hard limit is in force and the call succeeds, bytes consumed ≤ limit.
-  @   assumes (int)limit_error < 0;
-  @   ensures \result.status ≡ PPB_OK ==> \old(buf->size) - buf->size ≤ limit;
+  @  // When a hard limit is in force and the call succeeds, bytes consumed ≤ limit.
+  @  assumes ∀ integer j; 0 ≤ j < num_fields ==> tags[j].bits > 7;
+  @  assumes (int)limit_error < 0;
+  @  ensures \result.status ≡ PPB_OK ==> \old(buf->size) - buf->size ≤ limit;
   @ behavior progress:
-  @   // either consume at least one byte, or flag an error
-  @   assumes buf->size > 0 ∧ max_lexed_fields > 0 ∧ limit > 0;
-  @   ensures \result.status ≢ PPB_OK ∨ buf->size < \old(buf->size);
+  @  // either consume at least one byte, or flag an error
+  @  assumes ∀ integer j; 0 ≤ j < num_fields ==> tags[j].bits > 7;
+  @  assumes (int)limit_error ≤ 0;
+  @  assumes buf->size > 0 ∧ max_lexed_fields > 0 ∧ limit > 0;
+  @  ensures \result.status ≢ PPB_OK ∨ buf->size < \old(buf->size);
   @*/
 struct ppb_lexn_ret
 ppb_lexn_impl(struct ppb_buf *restrict const buf, const size_t num_fields,
