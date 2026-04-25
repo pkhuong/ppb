@@ -1823,7 +1823,8 @@ test_tag_varint_roundtrip(void)
             uint64_t encoded = PPB_TAG_BITS(fn, wt);
 
             uint8_t tag_bytes[8];
-            memcpy(tag_bytes, &encoded, sizeof(tag_bytes));
+            for (size_t bi = 0; bi < sizeof(tag_bytes); bi++)
+                tag_bytes[bi] = (uint8_t)(encoded >> (8 * bi));
 
             struct ppb_buf buf = make_buf(tag_bytes, sizeof(tag_bytes));
 
@@ -1879,7 +1880,8 @@ encode_i32_field(uint64_t field_num, uint32_t value, uint8_t *out)
         tag >>= 7;
     }
     out[n++] = (uint8_t)tag;
-    memcpy(out + n, &value, 4);
+    for (size_t i = 0; i < 4; i++)
+        out[n + i] = (uint8_t)(value >> (8 * i));
     return n + 4;
 }
 
