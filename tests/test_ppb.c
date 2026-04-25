@@ -138,8 +138,11 @@ test_saturating_range_u32(void)
     CHECK(saturating_range_u32(1, (size_t)UINT32_MAX + 1) == UINT32_MAX);
 
     /* Saturate: large deltas. */
-    CHECK(saturating_range_u32(0, SIZE_MAX) == UINT32_MAX);
-    CHECK(saturating_range_u32(SIZE_MAX / 2, SIZE_MAX) == UINT32_MAX);
+    if (SIZE_MAX > UINT32_MAX)
+    {
+        CHECK(saturating_range_u32(0, SIZE_MAX) == UINT32_MAX);
+        CHECK(saturating_range_u32(SIZE_MAX / 2, SIZE_MAX) == UINT32_MAX);
+    }
 }
 
 static void
