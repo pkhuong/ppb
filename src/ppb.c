@@ -175,12 +175,13 @@ static inline struct ppb_lexn_ret ppb_lexn_with_soft_limit(struct ppb_buf *__res
   @ requires buf_valid_range(*buf);
   @ requires buf->size ≤ (size_t)PTRDIFF_MAX;
   @ requires \valid(error);
-  @ requires *error ≡ 0;
   @ terminates \true;
   @ assigns g_initial_buf, *buf, *error;
   @ ensures buf_valid(*buf);
-  @ ensures *error ≤ 0;
-  @ ensures *error ≢ 0 ==> \result ≡ 0;
+  @ behavior well_formed:
+  @  assumes *error ≡ 0;
+  @  ensures *error ≤ 0;
+  @  ensures *error ≢ 0 ==> \result ≡ 0;
   @*/
 uint64_t
 ppb_decode_varint(struct ppb_buf *restrict buf, enum ppb_error *restrict error)
