@@ -669,25 +669,50 @@ ppb_lexn_impl(struct ppb_buf *restrict const buf, const size_t num_fields,
 }
 
 #ifdef __FRAMAC__
-/*@ requires \valid(buf);
-  @ requires buf_valid_range(*buf);
-  @ requires buf->size ≤ (size_t)PTRDIFF_MAX;
-  @ requires \valid_read(tags + (0..num_fields - 1));
-  @ requires \valid(fields + (0..num_fields - 1));
-  @ requires \separated(tags + (0..num_fields - 1), fields + (0..num_fields - 1));
-  @ terminates \true;
-  @ assigns g_initial_buf, *buf, fields[0..num_fields - 1];
-  @ ensures buf_valid(*buf);
+#define PPB_EVA_BUF_SIZE   64
+#define PPB_EVA_NUM_FIELDS 4
+
+char eva_buf_storage[PPB_EVA_BUF_SIZE];
+struct ppb_encoded_tag eva_tags[PPB_EVA_NUM_FIELDS];
+struct ppb_field eva_fields[PPB_EVA_NUM_FIELDS];
+
+/*@ terminates \true;
+  @ assigns g_initial_buf, eva_fields[0..3];
   @*/
 struct ppb_lexn_ret
-ppb_entry_point(struct ppb_buf *restrict buf, size_t num_fields, const struct ppb_encoded_tag *restrict tags,
-    struct ppb_field *restrict fields, size_t max_lexed_fields)
+ppb_entry_point(size_t buf_size, size_t limit, size_t num_fields, size_t max_lexed_fields)
 {
-    /*@ ghost g_initial_buf = *buf; */
-    enum ppb_error err = ppb_validate_tags(num_fields, tags);
+    if (buf_size > PPB_EVA_BUF_SIZE)
+        buf_size = PPB_EVA_BUF_SIZE;
+    if (num_fields > PPB_EVA_NUM_FIELDS)
+        num_fields = PPB_EVA_NUM_FIELDS;
+    if (max_lexed_fields > PPB_EVA_NUM_FIELDS)
+        max_lexed_fields = PPB_EVA_NUM_FIELDS;
+
+    struct ppb_buf buf = { .buf = eva_buf_storage, .size = buf_size };
+
+    enum ppb_error err = ppb_validate_tags(num_fields, eva_tags);
     if (err != PPB_OK)
         return (struct ppb_lexn_ret) { .status = err };
-    ppb_prescan_impl(*buf, num_fields, tags, fields, max_lexed_fields, SIZE_MAX, PPB_OK);
-    return ppb_lexn_impl(buf, num_fields, tags, fields, max_lexed_fields, SIZE_MAX, PPB_OK);
+
+    /* prescan wrappers take buf by value, so reuse the same one. */
+    ppb_prescan(buf, num_fields, eva_tags, eva_fields, max_lexed_fields);
+    ppb_prescan_with_hard_limit(buf, limit, num_fields, eva_tags, eva_fields, max_lexed_fields);
+    ppb_prescan_with_soft_limit(buf, limit, num_fields, eva_tags, eva_fields, max_lexed_fields);
+
+    /* lexn wrappers mutate *buf; give each a fresh copy. */
+    struct ppb_buf lex_buf = buf;
+    ppb_lexn(&lex_buf, num_fields, eva_tags, eva_fields, max_lexed_fields);
+    lex_buf = buf;
+    ppb_lexn_with_hard_limit(&lex_buf, limit, num_fields, eva_tags, eva_fields, max_lexed_fields);
+    lex_buf = buf;
+    ppb_lexn_with_soft_limit(&lex_buf, limit, num_fields, eva_tags, eva_fields, max_lexed_fields);
+
+    /* exercise the standalone helpers too. */
+    enum ppb_error verr = PPB_OK;
+    (void)ppb_decode_varint(&lex_buf, &verr);
+    (void)ppb_zag(buf_size);
+
+    return (struct ppb_lexn_ret) { .status = verr };
 }
 #endif
