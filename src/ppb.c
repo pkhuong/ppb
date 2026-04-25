@@ -229,6 +229,8 @@ ppb_validate_tags(size_t num_fields, const struct ppb_encoded_tag *tags)
   @ terminates \true;
   @ assigns \result \from tags[0..num_fields - 1].bits, tag;
   @ ensures \result < num_fields ==> tags[\result].bits ≡ tag;
+  @ behavior well_formed:
+  @  assumes ∀ integer i, j; 0 ≤ i < j < num_fields ==> tags[i].bits < tags[j].bits;
   @*/
 static inline size_t
 find_tag(const size_t num_fields, const struct ppb_encoded_tag *__restrict tags, uint64_t tag)
@@ -244,7 +246,7 @@ find_tag(const size_t num_fields, const struct ppb_encoded_tag *__restrict tags,
     /*@ loop assigns lo, len;
       @ loop invariant lo < num_fields;
       @ loop invariant lo + len ≤ num_fields;
-      @ loop invariant ∀ integer i; lo + len ≤ i < num_fields ==> tags[i].bits > tag;
+      @ for well_formed: loop invariant ∀ integer i; lo + len ≤ i < num_fields ==> tags[i].bits > tag;
       @ loop variant len;
       @*/
     while (len > 1)
@@ -253,7 +255,7 @@ find_tag(const size_t num_fields, const struct ppb_encoded_tag *__restrict tags,
         size_t pivot = len / 2;
 
         /* Sortedness: if the pivot exceeds tag, so do all elements after it. */
-        /*@ admit tags[lo + pivot].bits > tag ==>
+        /*@ for well_formed: admit tags[lo + pivot].bits > tag ==>
           @    ∀ integer i; lo + pivot ≤ i < num_fields ==> tags[i].bits > tag;
           @*/
         lo += tags[lo + pivot].bits > tag ? 0 : pivot;
