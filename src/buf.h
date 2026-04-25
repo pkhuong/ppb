@@ -24,12 +24,13 @@
  */
 /*@ requires buf_valid(src);
   @ requires \valid(error);
-  @ requires error_non_pos: *error ≤ 0;
   @ terminates \true;
   @ assigns *error;
-  @ ensures error_non_pos: *error ≤ 0;
   @ ensures ok_is_in_range: \result ≡ 0 ==> delta ≤ src.size;
   @ ensures ok_is_readable: \result ≡ 0 ==> \valid_read((const char *)src.buf + (0.. delta - 1));
+  @ behavior well_formed:
+  @  assumes *error ≤ 0;
+  @  ensures *error ≤ 0;
   @ behavior sticky_neg:
   @  assumes *error < 0;
   @  ensures *error ≡ \old(*error);
@@ -37,7 +38,6 @@
   @  assumes *error ≡ 0;
   @  ensures *error ≤ 0;
   @  ensures *error ≡ \result;
-  @ complete behaviors sticky_neg, flag;
   @ disjoint behaviors sticky_neg, flag;
   @*/
 static inline int
