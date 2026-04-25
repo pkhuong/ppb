@@ -1,5 +1,7 @@
 name:
 on: [push, pull_request]
+permissions:
+  contents: read
 jobs:
   x86-64-bmi:
     runs-on: ubuntu-slim
