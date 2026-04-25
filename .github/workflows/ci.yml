@@ -1,7 +1,7 @@
 name:
 on: [push, pull_request]
 jobs:
-  x64-64-bmi:
+  x86-64-bmi:
     runs-on: ubuntu-slim
     steps:
       - name: install deps
@@ -20,6 +20,18 @@ jobs:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: "build/coverage/*.gc*"
           gcov_include: "src/*.[ch]"
+
+  i686:
+    runs-on: ubuntu-slim
+    steps:
+      - name: install deps
+        run: sudo apt-get update && sudo apt-get install -y clang gcc-multilib
+      - name: checkout
+        uses: actions/checkout@v4
+      - name: build and test
+        run: make CC=gcc EXTRA_FLAGS=-m32 test
+      - name: build and test (sanitizers)
+        run: make CC=clang EXTRA_FLAGS="-m32 -fsanitize=address,undefined -fno-omit-frame-pointer" test
 
   aarch64-vanilla:
     runs-on: ubuntu-24.04-arm
