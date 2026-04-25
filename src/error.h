@@ -5,26 +5,29 @@
  * Sets `*error` to `update`, unless `*error` is already set (not OK).
  */
 /*@ requires \valid(error);
-  @ requires nonpos: *error ≤ 0;
-  @ requires nonpos_update: update ≤ 0;
   @ terminates \true;
   @ assigns *error \from *error, update;
-  @ ensures \result ≡ (int)update;
+  @ ensures \result ≡ update;
+  @
+  @ behavior well_formed:
+  @  assumes *error ≤ 0 ∧ update ≤ 0;
+  @  ensures *error ≤ 0;
   @
   @ behavior real_error:
+  @  assumes *error ≤ 0;
   @  assumes update < 0;
   @  ensures error_is_set: *error < 0;
   @ behavior no_error:
   @  assumes update ≡ 0;
-  @  ensures error_is_set: *error ≡ \old(*error);
+  @  ensures error_unchanged: *error ≡ \old(*error);
   @
   @ behavior initial:
-  @   assumes *error ≡ 0;
-  @   ensures *error ≡ update ≤ 0;
+  @  assumes *error ≡ 0;
+  @  assumes update ≤ 0;
+  @  ensures *error ≡ update ≤ 0;
   @ behavior sticky:
-  @   assumes *error ≢ 0;
-  @   ensures *error ≡ \old(*error) < 0;
-  @ complete behaviors initial, sticky;
+  @  assumes *error < 0;
+  @  ensures *error ≡ \old(*error) < 0;
   @ disjoint behaviors initial, sticky;
   @*/
 static inline int
