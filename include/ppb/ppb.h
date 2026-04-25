@@ -165,18 +165,44 @@ struct ppb_field_value
     /* Varint or i64/f64/i32/f32 field */
 
     /*
-     * Contents as little-endian u64, or raw bytes of fixed 64
-     * encoding.
+     * Decoded value for numeric fields.
+     *
+     * `u64` holds the value in native host order: a decoded varint,
+     * the raw bits of a fixed64 reinterpreted as a uint64, or the
+     * zero-extended bits of a fixed32.  `b[]`, `d`, `u32`, and `f`
+     * are typed views of the same bits; the big-endian block below
+     * places `u32`/`f` at offset 4 so they always alias the low half
+     * of `u64` regardless of host endianness.
+     *
+     * N.B., `b[]` is the host-byte-order layout of the assembled
+     * `u64`, not its protobuf wire encoding.
      */
     union
     {
         uint64_t u64;
 #ifndef __FRAMAC__
         uint8_t b[8];
+        int64_t i64;
         double d;
-        /* XXX: assumes little endian here. */
+#if __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
         uint32_t u32;
+        int32_t i32;
         float f;
+#elif __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
+        struct
+        {
+            uint32_t ppb_be_padding_do_not_use;
+            union
+            {
+                uint32_t u32;
+                int32_t i32;
+                float f;
+            };
+        };
+#else
+    /* we can still access 8-byte fields regardless of host endianness. */
+#warning "unknown byte order (neither little nor big)"
+#endif
 #endif
     };
 
