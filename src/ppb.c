@@ -515,10 +515,11 @@ ppb_prescan_impl(const struct ppb_buf buf, const size_t num_fields,
   @ terminates \true;
   @ assigns g_initial_buf, *buf, fields[0..num_fields - 1];
   @ admit ensures buf_valid(*buf);  // WP has trouble seeing through the final *buf = ...; copy
+  @ ensures ∀ integer j; 0 ≤ j < num_fields ==> fields[j].m ≡ \old(fields[j].m);
+  @
   @ behavior well_formed:
   @  assumes ∀ integer j; 0 ≤ j < num_fields ==> tags[j].bits > 7;
   @  assumes (int)limit_error ≤ 0;
-  @  ensures ∀ integer j; 0 ≤ j < num_fields ==> fields[j].m ≡ \old(fields[j].m);
   @ behavior hard_limit:
   @  // When a hard limit is in force and the call succeeds, bytes consumed ≤ limit.
   @  assumes ∀ integer j; 0 ≤ j < num_fields ==> tags[j].bits > 7;
@@ -526,8 +527,6 @@ ppb_prescan_impl(const struct ppb_buf buf, const size_t num_fields,
   @  ensures \result.status ≡ PPB_OK ==> \old(buf->size) - buf->size ≤ limit;
   @ behavior progress:
   @  // either consume at least one byte, or flag an error
-  @  assumes ∀ integer j; 0 ≤ j < num_fields ==> tags[j].bits > 7;
-  @  assumes (int)limit_error ≤ 0;
   @  assumes buf->size > 0 ∧ max_lexed_fields > 0 ∧ limit > 0;
   @  ensures \result.status ≢ PPB_OK ∨ buf->size < \old(buf->size);
   @*/
