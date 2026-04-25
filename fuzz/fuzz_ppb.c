@@ -9,6 +9,7 @@
 
 #include <assert.h>
 #include <limits.h>
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <string.h>
@@ -461,6 +462,39 @@ fuzz_prescan_then_lexn(const uint8_t *data, size_t size, size_t num_fields,
 
     POSTCOND(soft_remaining <= hard_remaining); /* soft is more permissive */
     POSTCOND(soft_remaining == 0);             /* valid, so fully consumed  */
+
+    /*
+     * For each ppb_lexn call, any catch-all field (tag.bits < 0) is
+     * always the last decoded field in the batch.
+     */
+    memset(fields, 0, num_fields * sizeof(fields[0]));
+    buf = (struct ppb_buf) { data, size };
+    while (buf.size > 0)
+    {
+        const void *old_ptr = buf.buf;
+        struct ppb_lexn_ret ret = do_lexn_call(&buf, num_fields, tags, fields,
+            /*max_lexed_fields=*/SIZE_MAX, data, /*buf_size=*/size);
+        if (ret.status != PPB_OK)
+            break;
+        if (ret.field_range == 0)
+            continue;
+
+        /* Scan decoded fields in index order: once we see a catch-all,
+         * no higher-indexed field in this batch may have been decoded. */
+        size_t end = ret.first_field + (size_t)ret.field_range;
+
+        bool past_catchall = false;
+        for (size_t j = ret.first_field; j < end; j++)
+        {
+            bool decoded_here = (const void *)fields[j].v.ptr >= old_ptr;
+            if (past_catchall)
+                POSTCOND(!decoded_here);
+            if (decoded_here && (int64_t)tags[j].bits < 0)
+                past_catchall = true;
+        }
+    }
+
+    POSTCOND(buf.size == 0);
 }
 
 static void
