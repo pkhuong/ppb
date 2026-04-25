@@ -1822,6 +1822,11 @@ test_tag_varint_roundtrip(void)
 
             uint64_t encoded = PPB_TAG_BITS(fn, wt);
 
+            {
+                CHECK(squish_varint(encoded) == expected);
+                CHECK(squish_varint_portable(encoded) == expected);
+            }
+
             uint8_t tag_bytes[8];
             for (size_t bi = 0; bi < sizeof(tag_bytes); bi++)
                 tag_bytes[bi] = (uint8_t)(encoded >> (8 * bi));

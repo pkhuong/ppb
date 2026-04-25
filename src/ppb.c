@@ -732,6 +732,7 @@ ppb_entry_point(size_t buf_size, size_t limit, size_t num_fields, size_t max_lex
     enum ppb_error verr = PPB_OK;
     (void)ppb_decode_varint(&lex_buf, &verr);
     (void)ppb_zag(buf_size);
+    (void)squish_varint_portable(12345);
 
     return (struct ppb_lexn_ret) { .status = verr };
 }

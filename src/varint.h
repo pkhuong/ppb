@@ -23,11 +23,8 @@
   @ assigns \result \from x;
   @*/
 static inline uint64_t
-squish_varint(uint64_t x)
+squish_varint_portable(uint64_t x)
 {
-#ifdef __BMI2__
-    return _pext_u64(x, 127UL * (UINT64_MAX / UINT8_MAX));
-#else
     /* generate 4x pairs of 14 bits every 16 */
     {
         uint64_t mask = (127UL * (UINT64_MAX / UINT16_MAX));
@@ -56,8 +53,20 @@ squish_varint(uint64_t x)
     }
 
     return x;
-#endif
 }
+
+#ifdef __BMI2__
+/*@ terminates \true;
+  @ assigns \result \from x;
+  @*/
+static inline uint64_t
+squish_varint(uint64_t x)
+{
+    return _pext_u64(x, 127UL * (UINT64_MAX / UINT8_MAX));
+}
+#else
+#define squish_varint squish_varint_portable
+#endif
 
 /*
  * Slow path of attempting to decode the varint at the head of `src`.
