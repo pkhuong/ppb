@@ -497,6 +497,57 @@ fuzz_prescan_then_lexn(const uint8_t *data, size_t size, size_t num_fields,
     POSTCOND(buf.size == 0);
 }
 
+/*
+ * Exercise ppb_validate_tags, ppb_prescan, and ppb_lexn with an
+ * arbitrary (potentially unsorted or invalid) tag array derived from
+ * the fuzz input.
+ *
+ * There's no guarantee on the result when the tags array is invalid,
+ * but there shouldn't be any UB.
+ */
+static void
+fuzz_invalid_tags(const uint8_t *data, size_t size)
+{
+    if (size < 1)
+        return;
+
+    size_t num_tags = (size_t)(data[0] % (MAX_FIELDS + 1));
+    size_t header = 1 + num_tags * sizeof(struct ppb_encoded_tag);
+    if (size < header)
+        return;
+
+    struct ppb_encoded_tag tags[MAX_FIELDS];
+    memcpy(tags, data + 1, num_tags * sizeof(tags[0]));
+
+    const uint8_t *msg = data + header;
+    size_t msg_size = size - header;
+
+    struct ppb_field fields[MAX_FIELDS];
+    struct ppb_buf buf;
+
+    ppb_validate_tags(num_tags, tags);
+
+    memset(fields, 0, num_tags * sizeof(fields[0]));
+    buf = (struct ppb_buf) { msg, msg_size };
+    ptrdiff_t pr = ppb_prescan(buf, num_tags, tags, fields, SIZE_MAX);
+    if (pr >= 0)
+        POSTCOND((size_t)pr <= msg_size);
+
+    memset(fields, 0, num_tags * sizeof(fields[0]));
+    buf = (struct ppb_buf) { msg, msg_size };
+    while (buf.size > 0)
+    {
+        size_t initial_size = buf.size;
+        struct ppb_lexn_ret ret = ppb_lexn(&buf, num_tags, tags, fields, SIZE_MAX);
+        check_buf_valid(buf, msg, msg_size);
+        if (ret.status != PPB_OK)
+            break;
+
+        // must make progress
+        POSTCOND(buf.size < initial_size);
+    }
+}
+
 static void
 exercise_config(const uint8_t *data, size_t size, size_t num_fields, const struct ppb_encoded_tag *tags)
 {
@@ -512,6 +563,7 @@ LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
 {
     fuzz_zag(data, size);
     fuzz_decode_varint(data, size);
+    fuzz_invalid_tags(data, size);
 
     exercise_config(data, size, /*num_fields=*/0, /*tags=*/NULL);
     exercise_config(data, size, /*num_fields=*/N_SPECIFIC, SPECIFIC_TAGS);
