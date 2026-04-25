@@ -14,6 +14,7 @@
 #include "ppb/ppb.h"
 
 #include <assert.h>
+#include <math.h>
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -331,8 +332,8 @@ main(void)
         }
 
         int idx = run - NWARM;
-        samples[idx].ns_per_msg = (double)elapsed_ns / (double)decoded;
-        samples[idx].mb_per_s = (1e-6 * (double)input_size) / (1e-9 * (double)elapsed_ns);
+        samples[idx].ns_per_msg = (double)elapsed_ns / fmax(1.0, (double)decoded);
+        samples[idx].mb_per_s = (1e-6 * (double)input_size) / (1e-9 * fmax(1.0, (double)elapsed_ns));
 
         last_input_size = input_size;
         last_msg_count = msg_count;
