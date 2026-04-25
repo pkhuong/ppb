@@ -35,15 +35,14 @@ static_assert(PPB_TAG_BITS(262144, PPB_WIRE_I64) == 0x01808081UL,
     "field 262144, I64: [0x81, 0x80, 0x80, 0x01]");
 
 /* Five-byte tag (field >= 33554432). */
-static_assert(PPB_TAG_BITS(33554432UL, PPB_WIRE_VARINT) == 0x0180808080UL,
+static_assert(PPB_TAG_BITS(33554432, PPB_WIRE_VARINT) == 0x0180808080ULL,
     "field 33554432, varint: [0x80, 0x80, 0x80, 0x80, 0x01]");
-static_assert(PPB_ENCODE_VARINT((uint64_t)UINT32_MAX) == 0x0FFFFFFFFFUL,
-    "UINT32_MAX: [0xFF, 0xFF, 0xFF, 0xFF, 0x0F]");
+static_assert(PPB_ENCODE_VARINT(UINT32_MAX) == 0x0FFFFFFFFFULL, "UINT32_MAX: [0xFF, 0xFF, 0xFF, 0xFF, 0x0F]");
 
 /* Eight-byte encoding. */
-static_assert(PPB_ENCODE_VARINT(1UL << 49) == 0x0180808080808080UL,
+static_assert(PPB_ENCODE_VARINT(1ULL << 49) == 0x0180808080808080ULL,
     "1<<49: [0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x01]");
-static_assert(PPB_ENCODE_VARINT((1UL << 56) - 1) == 0x7FFFFFFFFFFFFFFFUL,
+static_assert(PPB_ENCODE_VARINT((1ULL << 56) - 1) == 0x7FFFFFFFFFFFFFFFULL,
     "(1<<56)-1: [0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x7F]");
 
 /* Catch-all. */
