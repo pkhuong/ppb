@@ -335,7 +335,8 @@ handle_field(uint64_t tag, struct ppb_field *restrict dst, struct ppb_buf *restr
             return *error;
         }
 
-        num_bytes = len;
+        /*@ assert len ≤ src->size ≤ SIZE_MAX; */
+        num_bytes = (size_t)len;
         dst->v.payload.buf = src->buf;
         dst->v.payload.size = num_bytes;
         /*@ assert buf_valid_range(dst->v.payload); */
