@@ -98,9 +98,10 @@ enum ppb_wire_type
  * Encodes a varint in little-endian byte order, in a uint64_t.
  * `VARINT` must not have side effects.
  */
-#define PPB_ENCODE_VARINT(VARINT)                                                                \
-    (PPB_VB_((VARINT), 0) | PPB_VB_((VARINT), 1) | PPB_VB_((VARINT), 2) | PPB_VB_((VARINT), 3) | \
-        PPB_VB_((VARINT), 4) | PPB_VB_((VARINT), 5) | PPB_VB_((VARINT), 6) | PPB_VB_((VARINT), 7))
+#define PPB_ENCODE_VARINT(VARINT)                                                                          \
+    (PPB_VB_((uint64_t)(VARINT), 0) | PPB_VB_((uint64_t)(VARINT), 1) | PPB_VB_((uint64_t)(VARINT), 2) |    \
+        PPB_VB_((uint64_t)(VARINT), 3) | PPB_VB_((uint64_t)(VARINT), 4) | PPB_VB_((uint64_t)(VARINT), 5) | \
+        PPB_VB_((uint64_t)(VARINT), 6) | PPB_VB_((uint64_t)(VARINT), 7))
 
 #define PPB_VB_(VARINT, SHIFT)                                                                       \
     ((uint64_t)((((VARINT) >> ((SHIFT) * 7)) & 0x7F) | (((VARINT) >> ((SHIFT) * 7 + 7)) ? 0x80 : 0)) \
