@@ -327,6 +327,10 @@ struct ppb_lexn_ret
  * check if we have just decoded the field by comparing its `ptr` with
  * the initial value of `buf.buf`.
  *
+ * On error, `buf` points somewhere within the offending field (at its
+ * first tag or payload byte; the exact position is an implementation
+ * detail), but always after all successfully decoded fields.
+ *
  * Assumes the tags are sorted and valid (no zero tag);
  * ppb_prescan_impl checks for that.
  */
