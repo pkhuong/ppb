@@ -93,7 +93,7 @@ peek_varint_slow(struct ppb_buf src, uint64_t *restrict OUT_varint, size_t limb_
 {
     uint64_t ret = 0;
     int consumed_bytes = 0;
-    uint64_t mask = (1U << limb_width) - 1;
+    uint64_t mask = ((uint64_t)1 << limb_width) - 1;
 
     *OUT_varint = 0;
 
