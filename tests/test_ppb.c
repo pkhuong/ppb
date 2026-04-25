@@ -289,6 +289,71 @@ test_decode_varint(void)
     }
 }
 
+/*
+ * Pin 10-byte varint truncation: only bit 0 of the 10th byte contributes
+ * (bits 1-6 would encode bits 64-69, which overflow uint64_t and are lost).
+ */
+static void
+test_decode_varint_10byte(void)
+{
+    printf("test_decode_varint_10byte\n");
+
+    /* UINT64_MAX, drop extra bits. */
+    {
+        uint8_t data[] = { 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x7f };
+        struct ppb_buf buf = make_buf(data, sizeof(data));
+        enum ppb_error err = PPB_OK;
+        uint64_t val = ppb_decode_varint(&buf, &err);
+        CHECK(err == PPB_OK);
+        CHECK(val == UINT64_MAX);
+        CHECK(buf.size == 0);
+    }
+
+    /* UINT64_MAX, only one extra bit. */
+    {
+        uint8_t data[] = { 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x03 };
+        struct ppb_buf buf = make_buf(data, sizeof(data));
+        enum ppb_error err = PPB_OK;
+        uint64_t val = ppb_decode_varint(&buf, &err);
+        CHECK(err == PPB_OK);
+        CHECK(val == UINT64_MAX);
+        CHECK(buf.size == 0);
+    }
+
+    /* Last byte is a stop bit, and has the low bit clear -> top bit of uint64_t is zero. */
+    {
+        uint8_t data[] = { 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x7e };
+        struct ppb_buf buf = make_buf(data, sizeof(data));
+        enum ppb_error err = PPB_OK;
+        uint64_t val = ppb_decode_varint(&buf, &err);
+        CHECK(err == PPB_OK);
+        CHECK(val == UINT64_MAX >> 1);
+        CHECK(buf.size == 0);
+    }
+
+    /* Continuation bytes all zero, last byte is 1 -> only top bit is set. */
+    {
+        uint8_t data[] = { 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x01 };
+        struct ppb_buf buf = make_buf(data, sizeof(data));
+        enum ppb_error err = PPB_OK;
+        uint64_t val = ppb_decode_varint(&buf, &err);
+        CHECK(err == PPB_OK);
+        CHECK(val == (uint64_t)1 << 63);
+        CHECK(buf.size == 0);
+    }
+
+    /* Same thing, but now the low bit of the last byte is 0 -> result is 0. */
+    {
+        uint8_t data[] = { 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x7e };
+        struct ppb_buf buf = make_buf(data, sizeof(data));
+        enum ppb_error err = PPB_OK;
+        uint64_t val = ppb_decode_varint(&buf, &err);
+        CHECK(err == PPB_OK);
+        CHECK(val == 0);
+        CHECK(buf.size == 0);
+    }
+}
+
 static void
 test_peek_varint_error(void)
 {
@@ -1870,6 +1935,32 @@ test_tag_varint_roundtrip(void)
     }
 }
 
+/* Both squish_varint implementations must agree on arbitrary uint64_t inputs. */
+static void
+test_squish_varint_equivalence(void)
+{
+    printf("test_squish_varint_equivalence\n");
+
+    static const uint64_t cases[] = {
+        0,
+        UINT64_MAX,
+        0xAAAAAAAAAAAAAAAAULL,  /* alternating 10/01 per bit */
+        0x5555555555555555ULL,  /* alternating 01/10 per bit */
+        0x7F7F7F7F7F7F7F7FULL,  /* all data bits, no continuation bits */
+        0x8080808080808080ULL,  /* continuation bits only */
+        0xFF00FF00FF00FF00ULL,
+        0x00FF00FF00FF00FFULL,
+        0x0101010101010101ULL,
+        0x0000000000000001ULL,
+        0x0000000000000080ULL,
+        0x0100000000000000ULL,
+        0x8000000000000000ULL,
+    };
+
+    for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++)
+        CHECK(squish_varint(cases[i]) == squish_varint_portable(cases[i]));
+}
+
 /*
  * Encode a single fixed32 (wire type 5) field into `out`.
  * Returns the number of bytes written.
@@ -2126,6 +2217,7 @@ main(void)
     test_saturating_range_u32();
     test_peekn();
     test_decode_varint();
+    test_decode_varint_10byte();
     test_peek_varint_error();
     test_peek_tag_error();
     test_peek_tag_range();
@@ -2175,6 +2267,7 @@ main(void)
 
     test_tag_macros();
     test_tag_varint_roundtrip();
+    test_squish_varint_equivalence();
 
     test_prescan_v_ptr_null_on_error();
     test_lexn_v_ptr_null_on_error();
