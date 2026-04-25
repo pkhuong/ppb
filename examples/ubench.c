@@ -263,8 +263,12 @@ decode_input(const uint8_t *input, size_t input_size)
         uint64_t src = result[2].v.u64;
         uint64_t dst = result[3].v.u64;
 
-        /* prevent the compiler from eliminating the decode */
-        __asm__ volatile("" : : "r"(id), "r"(deleted), "r"(src), "r"(dst));
+        /* prevent the compiler from eliminating the decode (on 64-bit arch, 32b is slow anyway) */
+        if (sizeof(long) >= sizeof(uint64_t))
+        {
+            __asm__ volatile("" : : "r"(id), "r"(deleted), "r"(src), "r"(dst));
+        }
+
         count++;
     }
 
