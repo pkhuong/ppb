@@ -475,7 +475,7 @@ ppb_prescan_impl(const struct ppb_buf buf, const size_t num_fields,
         }
 
         struct ppb_field *dst = (field_idx < num_fields) ? fields + field_idx : &dummy;
-        dst->v = (struct ppb_field_value) { .ptr = ptr };
+        dst->v = (struct ppb_field_value) { .ptr = NULL };
 
         /*@ admit tag > 7; // precondition: tags[k] > 7; and tag < 8 returns early */
         int rc = handle_field(tag, dst, &src, /*update_metadata=*/true, &error);
@@ -483,6 +483,8 @@ ppb_prescan_impl(const struct ppb_buf buf, const size_t num_fields,
         {
             return (ptrdiff_t)error;
         }
+
+        dst->v.ptr = ptr;
     }
 
     size_t uconsumed = buf.size - src.size; /* safe since src.size ≤ buf.size (loop invariant) */
@@ -637,7 +639,7 @@ ppb_lexn_impl(struct ppb_buf *restrict const buf, const size_t num_fields,
             dst = fields + field_idx;
         }
 
-        dst->v = (struct ppb_field_value) { .ptr = ptr };
+        dst->v = (struct ppb_field_value) { .ptr = NULL };
         /*@ assert tag > 7; */
         int rc = handle_field(tag, dst, &src, false, &error);
 
@@ -651,6 +653,8 @@ ppb_lexn_impl(struct ppb_buf *restrict const buf, const size_t num_fields,
         {
             break;
         }
+
+        dst->v.ptr = ptr;
     }
 
     /*
