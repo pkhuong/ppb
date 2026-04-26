@@ -76,6 +76,12 @@ build/%.hash: build/%
 FUZZ_CC ?= clang
 FUZZ_CFLAGS := $(CFLAGS) -g -fsanitize=fuzzer,address,undefined
 
+# Knobs for `make fuzz`.  Override on the command line, e.g.
+#   make fuzz FUZZ_TIME=3600 FUZZ_MAX_LEN=4096 FUZZ_FLAGS='-jobs=8 -workers=8'
+FUZZ_TIME ?= 60
+FUZZ_MAX_LEN ?= 1024
+FUZZ_FLAGS ?=
+
 build/fuzz_ppb: fuzz/fuzz_ppb.c src/ppb.c
 	@mkdir -p $(dir $@)
 	$(FUZZ_CC) $(FUZZ_CFLAGS) -o $@ fuzz/fuzz_ppb.c src/ppb.c
@@ -84,7 +90,7 @@ fuzz-corpus: fuzz/gen_corpus.py
 	python3 fuzz/gen_corpus.py fuzz/corpus
 
 fuzz: build/fuzz_ppb fuzz-corpus
-	build/fuzz_ppb -max_total_time=60 -max_len=1024 fuzz/corpus
+	build/fuzz_ppb -max_total_time=$(FUZZ_TIME) -max_len=$(FUZZ_MAX_LEN) $(FUZZ_FLAGS) fuzz/corpus
 
 FORCE:
 .SECONDARY:  # don't rm "temporary" (like our .o) output files at the end
