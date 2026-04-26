@@ -51,7 +51,7 @@ build/picoscope: examples/picoscope.c build/libppb.a FORCE
 
 build/ubench: examples/ubench.c build/libppb.a FORCE
 	@mkdir -p $(dir $@)
-	$(CC) $(CFLAGS) -o $@ $< build/libppb.a
+	$(CC) $(CFLAGS) -o $@ $< build/libppb.a -lm
 
 build/test_ppb: tests/test_ppb.c FORCE
 	@mkdir -p $(dir $@)
