@@ -125,6 +125,7 @@ static inline ptrdiff_t ppb_prescan_with_soft_limit(struct ppb_buf buf, size_t l
   @ assigns g_initial_buf, *buf, fields[0..num_fields - 1];
   @ ensures buf_valid(*buf);
   @ ensures ∀ integer j; 0 ≤ j < num_fields ==> fields[j].m ≡ \old(fields[j].m);
+  @ ensures \result.first_field + \result.field_range ≤ num_fields;
   @
   @ behavior well_formed:
   @  assumes ∀ integer j; 0 ≤ j < num_fields ==> tags[j].bits > 7;
@@ -146,6 +147,7 @@ static inline struct ppb_lexn_ret ppb_lexn(struct ppb_buf *__restrict buf, size_
   @ assigns g_initial_buf, *buf, fields[0..num_fields - 1];
   @ ensures buf_valid(*buf);
   @ ensures ∀ integer j; 0 ≤ j < num_fields ==> fields[j].m ≡ \old(fields[j].m);
+  @ ensures \result.first_field + \result.field_range ≤ num_fields;
   @
   @ behavior well_formed:
   @  assumes ∀ integer j; 0 ≤ j < num_fields ==> tags[j].bits > 7;
@@ -170,6 +172,7 @@ static inline struct ppb_lexn_ret ppb_lexn_with_hard_limit(struct ppb_buf *__res
   @ assigns g_initial_buf, *buf, fields[0..num_fields - 1];
   @ ensures buf_valid(*buf);
   @ ensures ∀ integer j; 0 ≤ j < num_fields ==> fields[j].m ≡ \old(fields[j].m);
+  @ ensures \result.first_field + \result.field_range ≤ num_fields;
   @
   @ behavior well_formed:
   @  assumes ∀ integer j; 0 ≤ j < num_fields ==> tags[j].bits > 7;
@@ -516,6 +519,7 @@ ppb_prescan_impl(const struct ppb_buf buf, const size_t num_fields,
   @ assigns g_initial_buf, *buf, fields[0..num_fields - 1];
   @ admit ensures buf_valid(*buf);  // WP has trouble seeing through the final *buf = ...; copy
   @ ensures ∀ integer j; 0 ≤ j < num_fields ==> fields[j].m ≡ \old(fields[j].m);
+  @ ensures \result.first_field + \result.field_range ≤ num_fields;
   @
   @ behavior well_formed:
   @  assumes ∀ integer j; 0 ≤ j < num_fields ==> tags[j].bits > 7;
@@ -565,6 +569,8 @@ ppb_lexn_impl(struct ppb_buf *restrict const buf, const size_t num_fields,
       @ loop invariant buf_valid(src);
       @ loop invariant error ≡ PPB_OK;
       @ loop invariant prev_tag_monotonic: prev_tag ≥ \at(prev_tag, LoopCurrent) ≥ 7;
+      @ loop invariant last_field ≡ 0 ∨ 0 ≤ last_field < num_fields;
+      @ loop invariant num_fields ≡ 0 ==> first_field ≡ SIZE_MAX;
       @ loop invariant ∀ integer j; 0 ≤ j < num_fields ==> fields[j].m ≡ \at(fields[j].m, Pre);
       @ loop invariant consumed_after_first: i ≡ 0 ∨ ghost_consumed > 0;
       @ loop invariant consumed_link: src.size + ghost_consumed ≤ \at(src.size, LoopEntry);
