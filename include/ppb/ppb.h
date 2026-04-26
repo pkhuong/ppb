@@ -9,6 +9,28 @@
  * formal verification for lack of undefined behavior, memory unsafety
  * or logic bugs.
  *
+ * Public API surface, in expected order of use:
+ *   - `ppb_validate_tags`: call once on each static tag array; the
+ *     remaining functions assume tags are valid.
+ *   - `ppb_prescan` (and `_with_hard_limit` / `_with_soft_limit`):
+ *     validate the message and accumulate per-field metadata.
+ *   - `ppb_lexn` (and `_with_hard_limit` / `_with_soft_limit`): walk
+ *     the message in batches of strictly monotonically-increasing
+ *     known fields; call in a loop.
+ *   - `PPB_TAG(-1, wire_type)`: catch-all entry that matches any
+ *     field of that wire type not listed individually.
+ *   - Helpers: `ppb_zag` (zigzag), `ppb_decode_varint`.
+ *
+ * Decoding quirks:
+ *   - Varints may span up to 10 bytes, and may contain redundant
+ *     bytes; for the 10th byte, only the bottom bit contributes to
+ *     the result, and bits [6:1] are silently discarded.
+ *   - Wire types 3, 4 (legacy groups) and 6, 7 (reserved) are rejected
+ *     with `PPB_ERROR_CORRUPT_TAG`.
+ *   - Fields are matched on both field number and encoding type; an
+ *     encoded field that matches only on the field number is treated
+ *     like an unknown field (skipped or passed to catch-all).
+ *
  * An initial `ppb_prescan` validates the input message and gathers
  * statistics about all the toplevel fields in the message.  With the
  * number of occurrences for each field, as well as the total, min and
@@ -18,38 +40,36 @@
  *
  * The library is trivially thread-safe and reentrant, since it
  * doesn't have any global state.  It should be safe to call the
- * library on any `ppb_buf` inputs; for the other (trusted) inputs,
- * the *goal* is that invalid trusted inputs only results in
- * surprising results, not undefined behavior or undefined behavior
- * (but we don't have formal checks for that last goal).
+ * library on any `ppb_buf` inputs; the other (trusted) inputs may
+ * also be invalid (e.g., an unsorted tag array or non-zero-initialized
+ * `fields[]`) and at worst result in surprising results or, in builds
+ * with assertions enabled, assertion failures -- never memory
+ * unsafety, undefined behavior, non-termination, or successful return
+ * without progress (for `lexn`).  Frama-C's WP discharges memory
+ * safety, termination, and progress (`ppb_lexn` always consumes at
+ * least one byte or errors) regardless of the contents of input
+ * buffers and arrays (trusted or otherwise); see `SECURITY.md` for
+ * the full two-tier breakdown of trusted-input preconditions.
  *
- * The runtime complexity of `ppb_prescan` is `\Theta(n log m)`,
- * where `n` is the number of toplevel fields and `m` the number of
- * `ppb_fields`, regardless of the actual size of the encoded bytes;
- * that's what makes it reasonble to "lex" toplevel fields only, and
- * recursively handle nested messages separately.
+ * Both `ppb_prescan` and `ppb_lexn` run in `\Theta(n log m)` time,
+ * where `n` is the number of toplevel fields consumed and `m` the
+ * number of `ppb_field`s, independent of the encoded payload size.
+ * That linearity in the number of *toplevel fields* makes recursive
+ * descent on nested submessages practical, and motivates the
+ * prescan-before-lexing structure: the statistics should suffice to
+ * preallocate the current message, including its variable-length
+ * members, in an arena before lexing the message and recursively
+ * decoding submessages.
  *
  * The `ppb_lexn` function gives the caller access to every single
- * field in the message... but, in the common case of a message with
- * at most once occurrence of every field, and fields emitted in
- * strictly ascending order, `ppb_lexn` does that in a single call:
+ * field in the message... but, in the common case of a message that
+ * contains only known fields emitted in strictly ascending order with
+ * at most one occurrence each, `ppb_lexn` does that in a single call:
  * `ppb_lexn` returns a range of indices in an array of `ppb_field`s,
  * where the indices bracket all fields that were decoded and matched
  * to a `ppb_field`.  That range is encoded as the index in that array
  * of the first lexed (and not skipped) field, and the width of that
  * range (or UINT32_MAX if unknown).
- *
- * The runtime complexity of `ppb_lexn` is also `\Theta(n log m)`, where
- * `n` is the number of toplevel fields decoded in the call and `m` the
- * number of `ppb_field`s.
- *
- * The complexity of both `ppb_prescan` and `ppb_lexn`, linear in the number
- * of *toplevel fields* but otherwise independent of the input buffer size,
- * is key to the simplistic zero-copy lexing approach: it's reasonable for the
- * caller to recursively lex nested submessages.  The prescan before lexing
- * structure was designed for arena allocation: the statistics should suffice
- * to preallocate the current message, including its variable-length members,
- * before lexing the message and recursively decoding submessages in the arena.
  */
 
 /*
@@ -60,7 +80,8 @@ enum ppb_error
 {
     PPB_OK = 0,
     PPB_ERROR_UNSORTED_FIELD_ARR = -1,  /* tags[].bits not strictly ascending */
-    PPB_ERROR_SENTINEL_FIELD_ARR = -2,  /* tags[].bits includes < 8 (index 0 is invalid in protobuf) */
+    PPB_ERROR_SENTINEL_FIELD_ARR =
+        -2,  /* tags[].bits includes < 8 (field number 0 is forbidden by the protobuf spec) */
     PPB_ERROR_TRUNCATED_DATA = -3,  /* message cut short at the end of the `ppb_buf` */
     PPB_ERROR_CORRUPT_VARINT = -4,  /* invalid varint encoding (overlong) */
     PPB_ERROR_CORRUPT_TAG = -5,  /* invalid tag encoding (zero, overlong, or unsupported wire type) */
@@ -85,6 +106,11 @@ struct ppb_buf
 
 /*
  * Protobuf wire encoding types.
+ *
+ * Wire types 3 (legacy SGROUP) and 4 (legacy EGROUP) are not
+ * supported; the parser returns `PPB_ERROR_CORRUPT_TAG` on either.
+ * Wire types 6 and 7 are reserved by the protobuf spec and also
+ * rejected.
  */
 enum ppb_wire_type
 {
@@ -109,10 +135,8 @@ enum ppb_wire_type
 
 /*
  * Encodes a (field_number, wire_type) pair into the encoded_tag
- * format expected by ppb_field.  For positive field numbers, the
- * result is the varint-encoded tag in little endian (matching the
- * internal representation used by ppb_lexn).  Both `FIELD_NUMBER`
- * and `WIRE_TYPE` must be safe for multiple evaluation.
+ * format expected by ppb_field.  Both `FIELD_NUMBER` and `WIRE_TYPE`
+ * must be safe for multiple evaluation.
  *
  * Field number 0 is forbidden by the protobuf spec.
  * Field number -1 (UINT64_MAX when unsigned) is reserved for
@@ -154,28 +178,44 @@ struct ppb_field_meta
  * When PPB doesn't encounter the field, its value is left untouched;
  * usually, that means 0-initialized, or at its previous value.
  *
- * This means we can save the `ppb_buf::buf` pointer and compare it
- * with `ptr`: a field value has `ptr >= old_buf` iff it was decoded
- * in the most recent call to `ppb_prescan` / `ppb_lexn`.
+ * To detect whether a field was decoded:
+ *   - After a one-shot `ppb_prescan` on a freshly zero-initialized
+ *     `fields[]`, `field.v.ptr != NULL` iff the field was matched.
+ *   - In a `ppb_lexn` loop, save `buf.buf` as `old_buf` before the
+ *     call; afterwards, the field was decoded in this call iff
+ *         old_buf <= field.v.ptr < buf.buf
+ *     (the call advances `buf.buf` past everything it consumed).
  */
 struct ppb_field_value
 {
-    /* Pointer to the field's tag, populated only by `ppb_lexn`. */
+    /*
+     * Pointer to the field's tag byte in the input buffer.  Both
+     * `ppb_prescan` and `ppb_lexn` set `ptr` after a successful
+     * match (retaining the *last* occurrence per call for repeated
+     * fields) and leave `ptr == NULL` otherwise.  A `NULL` ptr can
+     * mean the field was never encountered (still zero-initialized),
+     * but it could also be zeroed after a decoding failure.
+     */
     const void *ptr;
-    /* Varint or i64/f64/i32/f32 field */
 
     /*
      * Decoded value for numeric fields.
      *
      * `u64` holds the value in native host order: a decoded varint,
      * the raw bits of a fixed64 reinterpreted as a uint64, or the
-     * zero-extended bits of a fixed32.  `b[]`, `d`, `u32`, and `f`
-     * are typed views of the same bits; the big-endian block below
-     * places `u32`/`f` at offset 4 so they always alias the low half
-     * of `u64` regardless of host endianness.
+     * zero-extended bits of a fixed32.  `b[]`, `d`, `i64`, `u32`,
+     * `i32`, and `f` are typed views of the same bits; the
+     * big-endian block below places `u32`/`i32`/`f` at an offset
+     * so they always alias the low half of `u64` regardless of
+     * host endianness.
      *
      * N.B., `b[]` is the host-byte-order layout of the assembled
      * `u64`, not its protobuf wire encoding.
+     *
+     * The non-`u64` members are hidden from Frama-C: they would
+     * force WP to reason about union punning, which is not always
+     * dischargeable.  Library users compiling normal builds are
+     * unaffected, and PPB itself only accesses `u64`.
      */
     union
     {
@@ -242,12 +282,18 @@ ppb_zag(uint64_t x)
  *
  * Confirm whether there was an error by looking at `error` (initially
  * zero): it will be strictly negative on error, and zero on success.
+ *
+ * `*error` is sticky: if `*error` is already non-zero on entry the
+ * function still consumes input and returns the decoded varint, but
+ * `*error` is left unchanged.  Most callers should ensure `error`
+ * is zero-initialized on entry.
  */
 uint64_t ppb_decode_varint(struct ppb_buf *__restrict buf, enum ppb_error *__restrict error);
 
 /*
- * Validates a tag array: checks that all entries have `.bits > 7` (field number 0
- * is forbidden in protobuf) and that the array is strictly sorted ascending.
+ * Validates a tag array: checks that all entries have `.bits > 7`
+ * (field number 0 is forbidden in protobuf) and that the array is
+ * strictly sorted ascending.
  *
  * N.B., the encoding sticks the wire type in the low bits of the tag,
  * so a list of encoded tags with strictly ascending, strict positive,
@@ -255,11 +301,16 @@ uint64_t ppb_decode_varint(struct ppb_buf *__restrict buf, enum ppb_error *__res
  * with the same field number (e.g., for catch-alls with -1), the types
  * must follow the order in `enum ppb_wire_type`.
  *
- * Call once on any static tag array before passing it to `ppb_prescan` or
- * `ppb_lexn`.  Passing an unvalidated array to prescan or lexn does not cause
- * undefined behaviour, but may produce incorrect results.
+ * Call once on any static tag array before passing it to `ppb_prescan`
+ * or `ppb_lexn`.  Passing an unvalidated array to prescan or lexn does
+ * not cause undefined behaviour but may produce incorrect results or
+ * trigger assertion failures when PPB is built with assertions.
  *
- * Returns `PPB_OK` on success, or the first error found.
+ * Returns `PPB_OK` on success, or the first error found.  The empty
+ * tag array (`num_fields == 0`, `tags == NULL` allowed) returns
+ * `PPB_OK`; the matching prescan / lexn calls then accept any
+ * well-formed message and decode no fields, useful for
+ * validate-only call sites.
  */
 enum ppb_error ppb_validate_tags(size_t num_fields, const struct ppb_encoded_tag *tags);
 
@@ -282,6 +333,16 @@ enum ppb_error ppb_validate_tags(size_t num_fields, const struct ppb_encoded_tag
  * Updates `fields[].m` with aggregate metadata for all the fields
  * seen, and populates `fields[].v` with the last value seen for each
  * field, if any.
+ *
+ * Tags must be pre-validated with `ppb_validate_tags`; skipping
+ * validation does not cause undefined behaviour but may produce
+ * incorrect results or trigger assertion failures when PPB is built
+ * with assertions.
+ *
+ * `max_lexed_fields` caps the number of toplevel decoding iterations,
+ * including unknown fields that get skipped (so a `max_lexed_fields`
+ * of 10 may decode only 1 known field if 9 unknowns appear first).
+ * Passing `max_lexed_fields == 0` is a valid no-op.
  */
 ptrdiff_t ppb_prescan_impl(struct ppb_buf buf, size_t num_fields,
     const struct ppb_encoded_tag *__restrict tags, struct ppb_field *__restrict fields,
@@ -293,10 +354,18 @@ ptrdiff_t ppb_prescan_impl(struct ppb_buf buf, size_t num_fields,
  * include indices for irrelevant fields), and an error code or
  * `PPB_OK`.
  *
- * The range is `fields[first_field .. first_field + field_range)`
- * with `first_field + field_range <= num_fields`, and `field_range`
- * saturating at `UINT32_MAX`: when `field_range == UINT32_MAX`, the
- * range is instead `fields[first_field .. num_fields)`.
+ * The range is `fields[first_field .. first_field + field_range)`,
+ * with `field_range <= num_fields` and `first_field + field_range <=
+ * num_fields`.  `field_range` saturates at `UINT32_MAX`: when
+ * `field_range == UINT32_MAX`, the actual width is unknown, so treat
+ * the range as `fields[first_field .. num_fields)`.  Saturation is
+ * unreachable for any reasonable `num_fields <= UINT32_MAX`, including
+ * every valid protobuf schema (field numbers fit in 29 bits).
+ *
+ * The reported range may include indices the call did not match
+ * (only one contiguous range is reported, even when the call decoded
+ * a sparse subset).  Always filter with `field.v.ptr` to recover the
+ * indices actually touched in the current call.
  */
 struct ppb_lexn_ret
 {
@@ -331,8 +400,16 @@ struct ppb_lexn_ret
  * first tag or payload byte; the exact position is an implementation
  * detail), but always after all successfully decoded fields.
  *
- * Assumes the tags are sorted and valid (no zero tag);
- * ppb_prescan_impl checks for that.
+ * Tags must be pre-validated with `ppb_validate_tags`; skipping
+ * validation does not cause undefined behaviour but may produce
+ * incorrect results or trigger assertion failures when PPB is built
+ * with assertions.
+ *
+ * `max_lexed_fields` caps the number of toplevel decoding iterations,
+ * including unknown fields that get skipped (so a `max_lexed_fields`
+ * of 10 may decode only 1 known field if 9 unknowns appear first).
+ * Passing `max_lexed_fields == 0` is a valid no-op: `*buf` and
+ * `fields[]` are left unchanged.
  */
 struct ppb_lexn_ret ppb_lexn_impl(struct ppb_buf *__restrict buf, size_t num_fields,
     const struct ppb_encoded_tag *__restrict tags, struct ppb_field *__restrict fields,
@@ -340,8 +417,9 @@ struct ppb_lexn_ret ppb_lexn_impl(struct ppb_buf *__restrict buf, size_t num_fie
 
 /*
  * Traverses `buf` scanning all toplevel fields (up to `max_lexed_fields`).
- * Tags must be pre-validated with `ppb_validate_tags`; passing invalid tags
- * may cause incorrect decoding.
+ * Tags must be pre-validated with `ppb_validate_tags`; skipping validation
+ * does not cause undefined behaviour but may produce incorrect results or
+ * trigger assertion failures when PPB is built with assertions.
  *
  * Returns the number of bytes traversed (equals `buf.size` on success),
  * or a negative `ppb_error`.
@@ -356,7 +434,10 @@ ppb_prescan(struct ppb_buf buf, size_t num_fields, const struct ppb_encoded_tag 
 /*
  * Like `ppb_prescan`, but stops at the first field boundary where bytes
  * consumed >= `limit`.  If consumed bytes exceed `limit`, returns
- * `PPB_ERROR_LIMIT_EXCEEDED`.  Tags must be pre-validated.
+ * `PPB_ERROR_LIMIT_EXCEEDED`.  Tags must be pre-validated with
+ * `ppb_validate_tags`; skipping validation does not cause undefined
+ * behaviour but may produce incorrect results or trigger assertion
+ * failures when PPB is built with assertions.
  */
 static inline ptrdiff_t
 ppb_prescan_with_hard_limit(struct ppb_buf buf, size_t limit, size_t num_fields,
@@ -369,9 +450,9 @@ ppb_prescan_with_hard_limit(struct ppb_buf buf, size_t limit, size_t num_fields,
 /*
  * Like `ppb_prescan`, but stops at the first field boundary where bytes
  * consumed >= `limit`.  Consuming more than `limit` bytes is not an error.
- * Tags must be pre-validated with `ppb_validate_tags`; skipping
- * validation does not cause undefined behaviour but may produce
- * incorrect results.
+ * Tags must be pre-validated with `ppb_validate_tags`; skipping validation
+ * does not cause undefined behaviour but may produce incorrect results or
+ * trigger assertion failures when PPB is built with assertions.
  */
 static inline ptrdiff_t
 ppb_prescan_with_soft_limit(struct ppb_buf buf, size_t limit, size_t num_fields,
@@ -385,7 +466,8 @@ ppb_prescan_with_soft_limit(struct ppb_buf buf, size_t limit, size_t num_fields,
  * Consumes from `buf` up to `max_lexed_fields` toplevel fields in
  * strictly ascending order.  Returns the decoded field range and status.
  * Tags must be pre-validated with `ppb_validate_tags`; skipping validation
- * does not cause undefined behaviour but may produce incorrect results.
+ * does not cause undefined behaviour but may produce incorrect results or
+ * trigger assertion failures when PPB is built with assertions.
  */
 static inline struct ppb_lexn_ret
 ppb_lexn(struct ppb_buf *__restrict buf, size_t num_fields, const struct ppb_encoded_tag *__restrict tags,
@@ -399,7 +481,8 @@ ppb_lexn(struct ppb_buf *__restrict buf, size_t num_fields, const struct ppb_enc
  * consumed >= `limit`.  If consumed bytes exceed `limit`, the returned
  * `status` is `PPB_ERROR_LIMIT_EXCEEDED`.  Tags must be pre-validated with
  * `ppb_validate_tags`; skipping validation does not cause undefined behaviour
- * but may produce incorrect results.
+ * but may produce incorrect results or trigger assertion failures when PPB
+ * is built with assertions.
  */
 static inline struct ppb_lexn_ret
 ppb_lexn_with_hard_limit(struct ppb_buf *__restrict buf, size_t limit, size_t num_fields,
@@ -413,7 +496,8 @@ ppb_lexn_with_hard_limit(struct ppb_buf *__restrict buf, size_t limit, size_t nu
  * Like `ppb_lexn`, but stops at the first field boundary where bytes
  * consumed >= `limit`.  Consuming more than `limit` bytes is not an error.
  * Tags must be pre-validated with `ppb_validate_tags`; skipping validation
- * does not cause undefined behaviour but may produce incorrect results.
+ * does not cause undefined behaviour but may produce incorrect results or
+ * trigger assertion failures when PPB is built with assertions.
  */
 static inline struct ppb_lexn_ret
 ppb_lexn_with_soft_limit(struct ppb_buf *__restrict buf, size_t limit, size_t num_fields,

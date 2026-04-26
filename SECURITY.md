@@ -38,9 +38,8 @@ as long as:
 - `ppb_buf.size ≤ PTRDIFF_MAX`. Objects larger than `PTRDIFF_MAX`
   introduce well known UB; see [Pascal Cuoq's writeup](https://www.trust-in-soft.com/resources/blogs/2016-05-20-objects-larger-than-ptrdiff_max-bytes).
 
-N.B., when building with assertions enabled, invalid (that satisfy
-this subsection but not the next) trusted input *may* result in
-assertion failures.
+N.B., trusted input that satisfies this subsection but not the next
+*may* trigger assertion failures when PPB is built with assertions.
 
 ### Trusted (required for correct results, but not for UB-freedom)
 
@@ -56,17 +55,18 @@ wrong output, **not UB**.  It may result in an assertion failure,
 when PPB is built with assertions enabled.
 
 The libFuzzer harness `fuzz_invalid_tags` in `fuzz/fuzz_ppb.c`
-deliberately skips `ppb_validate_tags`, runs the public API on
+deliberately skips `ppb_validate_tags` and runs the public API on
 adversarial tag arrays under ASan + UBSan.
 
-This tiering of preconditions is also checked statically by
+The two-tier split between UB-freedom preconditions and correctness
+preconditions is also checked statically by
 [Frama-C's WP](https://www.frama-c.com/fc-plugins/wp.html), via
 behaviors in the ACSL contracts.
 
 ### Progress guarantees even when trust is broken
 
 `ppb_lexn` and its variants always make progress (always consume at
-least one byte or return an error, unless then input is empty) even
+least one byte or return an error, unless the input is empty) even
 when passed an invalid `tags[]` array.  This is asserted as the
 `progress` ACSL `behavior` clause on each `ppb_lexn*` and dynamically
 checked in `fuzz_invalid_tags`.
@@ -96,7 +96,7 @@ When parsing untrusted input, callers also have to wield PPB safely.
 1. **Cap nesting depth across submessages.** PPB is iterative within a
    single message level; submessages require recursive descent in
    caller code. Unbounded recursion is a constant source of CVEs
-   for protobuf libraries (see CVE-2024-7254, CVE-2026-0994)
+   for protobuf libraries (see CVE-2024-7254, CVE-2026-0994).
 2. **Choose budgets explicitly.** `max_lexed_fields` and the
    `_with_hard_limit` / `_with_soft_limit` byte caps are correctness /
    policy knobs. They are *not* memory-safety constraints: the input
