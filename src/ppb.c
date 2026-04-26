@@ -284,8 +284,7 @@ find_tag(const size_t num_fields, const struct ppb_encoded_tag *__restrict tags,
  * Always updates the `dst->v` field, but updates `dst->m` only when
  * `update_metadata` is set.
  */
-/*@ requires valid_tag: tag > 7;
-  @ requires \valid(dst);
+/*@ requires \valid(dst);
   @ requires \valid(src);
   @ requires buf_valid(*src);
   @ requires \valid(error);
@@ -295,6 +294,7 @@ find_tag(const size_t num_fields, const struct ppb_encoded_tag *__restrict tags,
   @ ensures buf_valid(*src);
   @ ensures src->size ≤ \old(src->size);
   @ behavior well_formed:
+  @  assumes valid_tag: tag > 7;
   @  assumes *error ≡ PPB_OK;
   @  ensures *error ≤ 0;
   @  ensures \result ≡ *error;
@@ -401,12 +401,12 @@ handle_field(uint64_t tag, struct ppb_field *restrict dst, struct ppb_buf *restr
   @ terminates \true;
   @ assigns g_initial_buf, fields[0..num_fields - 1];
   @ behavior well_formed:
-  @  assumes ∀ integer j; 0 ≤ j < num_fields ==> tags[j].bits > 7;
-  @  assumes (int)limit_error ≤ 0;
+  @  assumes ∀ integer j; 0 ≤ j < num_fields ==> tags[j].bits > 7;  // needed for admits.
+  @  assumes limit_error ≤ 0;
   @  ensures \result ≥ 0 ==> \result ≤ buf.size;
   @ behavior hard_limit:
   @  assumes ∀ integer j; 0 ≤ j < num_fields ==> tags[j].bits > 7;
-  @  assumes (int)limit_error < 0;
+  @  assumes limit_error < 0;
   @  ensures \result ≥ 0 ==> \result ≤ limit;
   @*/
 ptrdiff_t
@@ -431,12 +431,12 @@ ppb_prescan_impl(const struct ppb_buf buf, const size_t num_fields,
       @ loop invariant 0 ≤ i ≤ max_lexed_fields;
       @ loop invariant buf_valid(src);
       @ loop invariant src.size ≤ buf.size;
-      @ loop invariant error ≡ PPB_OK;
+      @ for well_formed, hard_limit: loop invariant error ≡ PPB_OK;
       @ loop variant max_lexed_fields - i;
       @*/
     for (size_t i = 0; i < max_lexed_fields; i++)
     {
-        /*@ assert error ≡ PPB_OK; */
+        /*@ for well_formed: assert error ≡ PPB_OK; */
         assert(error == PPB_OK && "loop invariant");
 
         if (unlikely(src.size <= break_size))
@@ -447,15 +447,15 @@ ppb_prescan_impl(const struct ppb_buf buf, const size_t num_fields,
         const void *ptr = src.buf;
         uint64_t tag = decode_tag(&src, &error);
         size_t field_idx = find_tag(num_fields, tags, tag);
-        /*@ assert error ≢ PPB_OK ==> tag ≡ 0; */
+        /*@ for well_formed: assert error ≢ PPB_OK ==> tag ≡ 0; */
         /*
          * All encoded_tags are > 7: fields[0].tag.bits > 7 and the
          * array is strictly sorted, so each element > 7.
          * find_tag postcondition: field_idx < num_fields ==> tags[field_idx].bits ≡ tag.
          * Together: field_idx < num_fields ==> tag > 7.
          */
-        /*@ admit zero_absent: tag < 8 ==> field_idx ≥ num_fields; */
-        /*@ assert field_idx < num_fields ==> tag > 7; */
+        /*@ for well_formed: admit zero_absent: tag < 8 ==> field_idx ≥ num_fields; */
+        /*@ for well_formed: assert field_idx < num_fields ==> tag > 7; */
 
         if (unlikely(field_idx >= num_fields)) /* -1UL for missing, so mutant-ok: '>=' -> '>' */
         {
@@ -477,7 +477,7 @@ ppb_prescan_impl(const struct ppb_buf buf, const size_t num_fields,
         struct ppb_field *dst = (field_idx < num_fields) ? fields + field_idx : &dummy;
         dst->v = (struct ppb_field_value) { .ptr = NULL };
 
-        /*@ admit tag > 7; // precondition: tags[k] > 7; and tag < 8 returns early */
+        /*@ for well_formed: admit tag > 7; // precondition: tags[k] > 7; and tag < 8 returns early */
         int rc = handle_field(tag, dst, &src, /*update_metadata=*/true, &error);
         if (unlikely(rc != 0))
         {
@@ -498,10 +498,10 @@ ppb_prescan_impl(const struct ppb_buf buf, const size_t num_fields,
         }
     }
 
-    /*@ assert (int)limit_error < 0 ==> src.size ≥ break_size; */
+    /*@ assert limit_error < 0 ==> src.size ≥ break_size; */
     /*@ assert limit ≤ buf.size ==> break_size ≡ buf.size - limit; */
     /*@ assert limit > buf.size ==> break_size ≡ 0; */
-    /*@ assert (int)limit_error < 0 ==> consumed ≤ limit; */
+    /*@ assert limit_error < 0 ==> consumed ≤ limit; */
 
     return consumed;
 }
@@ -519,11 +519,11 @@ ppb_prescan_impl(const struct ppb_buf buf, const size_t num_fields,
   @
   @ behavior well_formed:
   @  assumes ∀ integer j; 0 ≤ j < num_fields ==> tags[j].bits > 7;
-  @  assumes (int)limit_error ≤ 0;
+  @  assumes limit_error ≤ 0;
   @ behavior hard_limit:
   @  // When a hard limit is in force and the call succeeds, bytes consumed ≤ limit.
   @  assumes ∀ integer j; 0 ≤ j < num_fields ==> tags[j].bits > 7;
-  @  assumes (int)limit_error < 0;
+  @  assumes limit_error < 0;
   @  ensures \result.status ≡ PPB_OK ==> \old(buf->size) - buf->size ≤ limit;
   @ behavior progress:
   @  // either consume at least one byte, or flag an error
