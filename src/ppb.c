@@ -124,11 +124,11 @@ static inline ptrdiff_t ppb_prescan_with_soft_limit(struct ppb_buf buf, size_t l
   @ terminates \true;
   @ assigns g_initial_buf, *buf, fields[0..num_fields - 1];
   @ ensures buf_valid(*buf);
+  @ ensures ∀ integer j; 0 ≤ j < num_fields ==> fields[j].m ≡ \old(fields[j].m);
+  @
   @ behavior well_formed:
   @  assumes ∀ integer j; 0 ≤ j < num_fields ==> tags[j].bits > 7;
-  @  ensures ∀ integer j; 0 ≤ j < num_fields ==> fields[j].m ≡ \old(fields[j].m);
   @ behavior progress:
-  @  assumes ∀ integer j; 0 ≤ j < num_fields ==> tags[j].bits > 7;
   @  assumes buf->size > 0 ∧ max_lexed_fields > 0;
   @  ensures \result.status ≢ PPB_OK ∨ buf->size < \old(buf->size);
   @*/
@@ -145,14 +145,14 @@ static inline struct ppb_lexn_ret ppb_lexn(struct ppb_buf *__restrict buf, size_
   @ terminates \true;
   @ assigns g_initial_buf, *buf, fields[0..num_fields - 1];
   @ ensures buf_valid(*buf);
+  @ ensures ∀ integer j; 0 ≤ j < num_fields ==> fields[j].m ≡ \old(fields[j].m);
+  @
   @ behavior well_formed:
   @  assumes ∀ integer j; 0 ≤ j < num_fields ==> tags[j].bits > 7;
-  @  ensures ∀ integer j; 0 ≤ j < num_fields ==> fields[j].m ≡ \old(fields[j].m);
   @ behavior hard_limit:
   @  assumes ∀ integer j; 0 ≤ j < num_fields ==> tags[j].bits > 7;
   @  ensures \result.status ≡ PPB_OK ==> \old(buf->size) - buf->size ≤ limit;
   @ behavior progress:
-  @  assumes ∀ integer j; 0 ≤ j < num_fields ==> tags[j].bits > 7;
   @  assumes buf->size > 0 ∧ max_lexed_fields > 0 ∧ limit > 0;
   @  ensures \result.status ≢ PPB_OK ∨ buf->size < \old(buf->size);
   @*/
@@ -169,11 +169,11 @@ static inline struct ppb_lexn_ret ppb_lexn_with_hard_limit(struct ppb_buf *__res
   @ terminates \true;
   @ assigns g_initial_buf, *buf, fields[0..num_fields - 1];
   @ ensures buf_valid(*buf);
+  @ ensures ∀ integer j; 0 ≤ j < num_fields ==> fields[j].m ≡ \old(fields[j].m);
+  @
   @ behavior well_formed:
   @  assumes ∀ integer j; 0 ≤ j < num_fields ==> tags[j].bits > 7;
-  @  ensures ∀ integer j; 0 ≤ j < num_fields ==> fields[j].m ≡ \old(fields[j].m);
   @ behavior progress:
-  @  assumes ∀ integer j; 0 ≤ j < num_fields ==> tags[j].bits > 7;
   @  assumes buf->size > 0 ∧ max_lexed_fields > 0 ∧ limit > 0;
   @  ensures \result.status ≢ PPB_OK ∨ buf->size < \old(buf->size);
   @*/
