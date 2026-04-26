@@ -531,7 +531,7 @@ disassemble(struct ppb_buf buf, const char *end_of_input, size_t indent)
             fprintf(stderr,
                 "picoscope: prescan/lexn mismatch: wire type %zu "
                 "num_occurrences prescan=%zu lexn=%zu\n",
-                i, prescan_m[i].num_occurrences, lexn_m[i].num_occurrences);
+                i, (size_t)prescan_m[i].num_occurrences, (size_t)lexn_m[i].num_occurrences);
             return 1;
         }
 
@@ -580,14 +580,14 @@ disassemble(struct ppb_buf buf, const char *end_of_input, size_t indent)
         if (i == FIELD_I32 && prescan_m[i].total_bytes != 4 * prescan_m[i].num_occurrences)
         {
             fprintf(stderr, "picoscope: I32 total_bytes wrong: got %zu, expected %zu\n",
-                prescan_m[i].total_bytes, 4 * prescan_m[i].num_occurrences);
+                prescan_m[i].total_bytes, 4 * (size_t)prescan_m[i].num_occurrences);
             return 1;
         }
 
         if (i == FIELD_I64 && prescan_m[i].total_bytes != 8 * prescan_m[i].num_occurrences)
         {
             fprintf(stderr, "picoscope: I64 total_bytes wrong: got %zu, expected %zu\n",
-                prescan_m[i].total_bytes, 8 * prescan_m[i].num_occurrences);
+                prescan_m[i].total_bytes, 8 * (size_t)prescan_m[i].num_occurrences);
             return 1;
         }
 
@@ -603,7 +603,7 @@ disassemble(struct ppb_buf buf, const char *end_of_input, size_t indent)
             if (prescan_m[i].total_bytes > 10 * prescan_m[i].num_occurrences)
             {
                 fprintf(stderr, "picoscope: varint total_bytes too large: %zu > 10 * %zu\n",
-                    prescan_m[i].total_bytes, prescan_m[i].num_occurrences);
+                    prescan_m[i].total_bytes, (size_t)prescan_m[i].num_occurrences);
                 return 1;
             }
         }
