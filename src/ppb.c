@@ -314,20 +314,20 @@ handle_field(uint64_t tag, struct ppb_field *restrict dst, struct ppb_buf *restr
     enum ppb_error *restrict error)
 {
     size_t num_bytes;
+    uint64_t new_value;  /* update for v.u64 */
 
     switch (tag % 8)
     {
     case PPB_WIRE_VARINT:
     {
         const char *initial = src->buf;
-        uint64_t varint = decode_varint(src, error, /*on_error=*/0);
+        new_value = decode_varint(src, error, /*on_error=*/0);
         if (unlikely(*error != PPB_OK))
         {
             return *error;
         }
 
         num_bytes = (size_t)((const char *)src->buf - initial);
-        dst->v.u64 = varint;
         break;
     }
 
@@ -339,7 +339,7 @@ handle_field(uint64_t tag, struct ppb_field *restrict dst, struct ppb_buf *restr
         }
 
         num_bytes = 8;
-        dst->v.u64 = buf_peek64(*src);
+        new_value = buf_peek64(*src);
         buf_advance(src, sizeof(uint64_t));
         break;
     }
@@ -356,6 +356,7 @@ handle_field(uint64_t tag, struct ppb_field *restrict dst, struct ppb_buf *restr
 
         /*@ assert len ≤ src->size ≤ SIZE_MAX; */
         num_bytes = (size_t)len;
+        new_value = 0;
         dst->v.payload.buf = src->buf;
         dst->v.payload.size = num_bytes;
         /*@ assert buf_valid_range(dst->v.payload); */
@@ -371,7 +372,7 @@ handle_field(uint64_t tag, struct ppb_field *restrict dst, struct ppb_buf *restr
         }
 
         num_bytes = 4;
-        dst->v.u64 = buf_peek32(*src);
+        new_value = buf_peek32(*src);
         buf_advance(src, sizeof(uint32_t));
         break;
     }
@@ -382,6 +383,8 @@ handle_field(uint64_t tag, struct ppb_field *restrict dst, struct ppb_buf *restr
         /*@ for well_formed: assert *error ≡ 0; */
         return error_set(error, PPB_ERROR_CORRUPT_TAG);
     }
+
+    dst->v.u64 = new_value;
 
     /*@ for well_formed: assert *error ≡ PPB_OK; */
     if (update_metadata)
