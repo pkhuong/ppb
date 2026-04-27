@@ -139,7 +139,7 @@ enum ppb_error
 /*
  * Traverses `buf` scanning all toplevel fields (up to `max_lexed_fields`).
  * Tags must be pre-validated with `ppb_validate_tags`; skipping validation
- * does not cause undefined behaviour but may produce incorrect results or
+ * does not cause undefined behavior but may produce incorrect results or
  * trigger assertion failures when PPB is built with assertions.
  *
  * Returns the number of bytes traversed (equals `buf.size` on success),
@@ -157,7 +157,7 @@ ppb_prescan(struct ppb_buf buf, size_t num_fields, const struct ppb_encoded_tag 
  * consumed >= `limit`.  If consumed bytes exceed `limit`, returns
  * `PPB_ERROR_LIMIT_EXCEEDED`.  Tags must be pre-validated with
  * `ppb_validate_tags`; skipping validation does not cause undefined
- * behaviour but may produce incorrect results or trigger assertion
+ * behavior but may produce incorrect results or trigger assertion
  * failures when PPB is built with assertions.
  */
 static inline ptrdiff_t
@@ -172,7 +172,7 @@ ppb_prescan_with_hard_limit(struct ppb_buf buf, size_t limit, size_t num_fields,
  * Like `ppb_prescan`, but stops at the first field boundary where bytes
  * consumed >= `limit`.  Consuming more than `limit` bytes is not an error.
  * Tags must be pre-validated with `ppb_validate_tags`; skipping validation
- * does not cause undefined behaviour but may produce incorrect results or
+ * does not cause undefined behavior but may produce incorrect results or
  * trigger assertion failures when PPB is built with assertions.
  */
 static inline ptrdiff_t
@@ -187,7 +187,7 @@ ppb_prescan_with_soft_limit(struct ppb_buf buf, size_t limit, size_t num_fields,
  * Consumes from `buf` up to `max_lexed_fields` toplevel fields in
  * strictly ascending order.  Returns the decoded field range and status.
  * Tags must be pre-validated with `ppb_validate_tags`; skipping validation
- * does not cause undefined behaviour but may produce incorrect results or
+ * does not cause undefined behavior but may produce incorrect results or
  * trigger assertion failures when PPB is built with assertions.
  */
 static inline struct ppb_lexn_ret
@@ -201,7 +201,7 @@ ppb_lexn(struct ppb_buf *__restrict buf, size_t num_fields, const struct ppb_enc
  * Like `ppb_lexn`, but stops at the first field boundary where bytes
  * consumed >= `limit`.  If consumed bytes exceed `limit`, the returned
  * `status` is `PPB_ERROR_LIMIT_EXCEEDED`.  Tags must be pre-validated with
- * `ppb_validate_tags`; skipping validation does not cause undefined behaviour
+ * `ppb_validate_tags`; skipping validation does not cause undefined behavior
  * but may produce incorrect results or trigger assertion failures when PPB
  * is built with assertions.
  */
@@ -217,7 +217,7 @@ ppb_lexn_with_hard_limit(struct ppb_buf *__restrict buf, size_t limit, size_t nu
  * Like `ppb_lexn`, but stops at the first field boundary where bytes
  * consumed >= `limit`.  Consuming more than `limit` bytes is not an error.
  * Tags must be pre-validated with `ppb_validate_tags`; skipping validation
- * does not cause undefined behaviour but may produce incorrect results or
+ * does not cause undefined behavior but may produce incorrect results or
  * trigger assertion failures when PPB is built with assertions.
  */
 static inline struct ppb_lexn_ret
@@ -267,7 +267,7 @@ uint64_t ppb_decode_varint(struct ppb_buf *__restrict buf, enum ppb_error *__res
  *
  * Call once on any static tag array before passing it to `ppb_prescan`
  * or `ppb_lexn`.  Passing an unvalidated array to prescan or lexn does
- * not cause undefined behaviour but may produce incorrect results or
+ * not cause undefined behavior but may produce incorrect results or
  * trigger assertion failures when PPB is built with assertions.
  *
  * Returns `PPB_OK` on success, or the first error found.  The empty
@@ -618,7 +618,7 @@ uses `clang-format-20`.
 The ACSL annotations include `admit`ted properties; we try to confirm
 them with unit tests and annotations. The fuzz tests in particular
 dynamically test ACSL-proven postconditions, in addition to the usual
-property that UBSan and ASan must not flag undefined behaviour or
+property that UBSan and ASan must not flag undefined behavior or
 memory safety issues.
 
 Validate the test suite with `mutants.py`: the script mutates the code
