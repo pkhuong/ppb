@@ -26,7 +26,9 @@ progress (for `lexn`).  [Frama-C's WP](https://www.frama-c.com/fc-plugins/wp.htm
 discharges memory safety, termination, and progress regardless of the
 contents of input buffers and arrays (trusted or otherwise).  See
 [SECURITY.md](SECURITY.md) for the full two-tier breakdown of
-trusted-input preconditions and what's considered out of scope.
+trusted-input preconditions and what's considered out of scope, and
+[AUDITING.md](AUDITING.md) for the verification recipes a skeptical
+reader can run against each claim independently.
 
 The core pattern is: call `ppb_validate_tags` to confirm the array of
 tags to parse has a valid structure, call `ppb_prescan` once to

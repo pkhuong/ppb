@@ -6,6 +6,9 @@ describes what that means concretely: the threat model, what is
 verified, what readers can re-verify themselves, what callers are
 responsible for, and what is out of scope.
 
+See [AUDITING.md](AUDITING.md) for hints on auditing the code base
+to confirm it provides the guarantees described in this document.
+
 ## Threat model
 
 PPB distinguishes between **untrusted** input data and **trusted**
