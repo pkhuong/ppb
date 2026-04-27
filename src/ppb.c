@@ -49,6 +49,17 @@ static_assert(PPB_ENCODE_VARINT((1ULL << 56) - 1) == 0x7FFFFFFFFFFFFFFFULL,
 static_assert(PPB_TAG_BITS(-1, PPB_WIRE_VARINT) == ((UINT64_MAX << 3) | 0), "catch-all, varint");
 static_assert(PPB_TAG_BITS(-1, PPB_WIRE_I32) == ((UINT64_MAX << 3) | 5), "catch-all, I32");
 
+static_assert(PTRDIFF_MAX <= SIZE_MAX / 2,
+    "we rely on this inequality to steal one bit from ppb_field_meta::num_occurrences");
+
+/* no-op, only used to hide values from the compiler. */
+#define ASM(...) __asm__("" : __VA_ARGS__)
+
+#ifdef __FRAMAC__
+#undef ASM
+#define ASM(...)  /* empty asm isn't supported by frama-c */
+#endif
+
 /*
  * Bitwise OR is monotone: OR can only set bits, never clear them.
  * WP lacks a built-in axiom for this, so we admit it globally.
@@ -356,7 +367,7 @@ handle_field(uint64_t tag, struct ppb_field *restrict dst, struct ppb_buf *restr
 
         /*@ assert len ≤ src->size ≤ SIZE_MAX; */
         num_bytes = (size_t)len;
-        new_value = 0;
+        new_value = 0; /* mutant-skip: delete is UB, but passes tests; -Wmaybe-uninitialized flags anyway. */
         dst->v.payload.buf = src->buf;
         dst->v.payload.size = num_bytes;
         /*@ assert buf_valid_range(dst->v.payload); */
@@ -384,14 +395,24 @@ handle_field(uint64_t tag, struct ppb_field *restrict dst, struct ppb_buf *restr
         return error_set(error, PPB_ERROR_CORRUPT_TAG);
     }
 
+    uint64_t old_value = dst->v.u64;
     dst->v.u64 = new_value;
 
     /*@ for well_formed: assert *error ≡ PPB_OK; */
     if (update_metadata)
     {
+        /* check for diff only on subsequent hits, first one isn't a diff */
+        old_value = dst->m.num_occurrences > 0 ? old_value : new_value;
+        ASM("+r"(old_value)); /* mutant-skip: opaque no-op to prevent if/if conversion (we want cmov + if) */
+
         dst->m.num_occurrences++;
+        if (unlikely(old_value != new_value))
+        {
+            dst->m.lost_distinct_u64 = 1;
+        }
+
         dst->m.total_bytes += num_bytes;
-        /* subtract one one both sides to map 0 to SIZE_MAX. */
+        /* subtract one on both sides to map 0 to SIZE_MAX. */
         dst->m.min_nonzero_bytes = ((num_bytes - 1 < dst->m.min_nonzero_bytes - 1) ?
                 num_bytes :
                 dst->m.min_nonzero_bytes);

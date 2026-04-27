@@ -108,6 +108,18 @@ per call.  The caller owns the `struct ppb_field[]` array, which is
 passed alongside (but separately from) the `tags` array (field `i`
 matches tag `i`).
 
+For atomic wire types (VARINT, I32, I64), `field.m.lost_distinct_u64`
+reports whether `ppb_prescan` lost a distinct prior value to
+last-write-wins: it is set when two or more occurrences had different
+`v.u64` bits, so callers can tell whether `ppb_lexn` is needed to
+recover the lost data.  The flag is never set for LEN fields, since
+length-prefixed payloads aren't tracked through `v.u64`.  Catch-all
+entries (`PPB_TAG(-1, ...)`) aggregate every unknown field of a given
+wire type into one bucket, so the flag fires whenever any two such
+fields had distinct `v.u64` bits -- e.g., one VARINT at field 12 and
+one VARINT at field 99 with different values will set it even though
+neither field number repeats.  The flag is useless for catch-alls.
+
 API (include/ppb/ppb.h)
 -----------------------
 

@@ -239,7 +239,7 @@ satisfy all of the following.
 
 ## Admit ledger
 
-PPB's ACSL annotations include nine `admit` clauses that WP cannot
+PPB's ACSL annotations include ten `admit` clauses that WP cannot
 discharge but which are sound by inspection. Many are paired with a
 runtime check (a unit test or a fuzz postcondition) so the property
 fails loudly if it stops holding. The table is exhaustive: any `admit`
@@ -263,11 +263,12 @@ grep -nEA2 'admit\b.*\b<name>\b' src/ppb.c src/varint.h
 | 5 | `zero_absent` | `src/ppb.c` (`well_formed` clause of `ppb_prescan_impl`) | `tag < 8 ⇒ field_idx ≥ num_fields` | `well_formed` assumes `∀ j. tags[j].bits > 7`. `find_tag`'s postcondition states `field_idx < num_fields ⇒ tags[field_idx].bits ≡ tag`. Contrapositive: if `tag < 8`, no `tags[j]` matches, so `field_idx ≥ num_fields`. | Implicit: the prescan loop returns `PPB_ERROR_CORRUPT_TAG` for `tag < 8`. Unit test `test_prescan_zero_tag` and golden master test `testdata/invalid/tag-zero.hex` confirm the detection. |
 | 6 | `tag_above_seven_after_match` | `src/ppb.c` (`well_formed` clause of `ppb_prescan_impl`) | `tag > 7` at the call to `handle_field` | The tags array only has values `> 7`; a hit can only be for a `tag > 7`. | |
 | 7 | `lexn_buf_valid_after_copy` | `src/ppb.c` (`ppb_lexn_impl` ensures) | After the function returns, `buf_valid(*buf)` holds | The loop invariant maintains `buf_valid(src)`. The final statement is `*buf = src;`. WP has trouble with the struct copy. | `fuzz/fuzz_ppb.c::check_buf_valid` re-checks the invariant after every `ppb_lexn*` call: `buf.size <= input_size` and `buf.buf + buf.size == input + input_size`. A regression would trap. |
-| 8 | `lexn_meta_unchanged_in_loop` | `src/ppb.c` (`ppb_lexn_impl` loop body) | `∀ j. fields[j].m ≡ \at(fields[j].m, Pre)` after `handle_field` with `update_metadata=false` | `handle_field` has a `nometa` behavior whose `assigns dst->v, *src, *error;` clause excludes `dst->m`. The loop only touches metadata via `dst` pointers, so unrelated `fields[j].m` are untouched. WP has trouble with the indirection through the `dst` pointer. | `fuzz/fuzz_ppb.c::do_lexn_call` (and the hard / soft variants) snapshots `fields[].m` before each call and re-checks equality after via `check_lexn_postconds`. |
-| 9 | `peek_tag_fits_63` | `src/varint.h` (`peek_tag` ensures) | On success, `*OUT_tag < 2⁶³` | The fast path reads ≤ 8 bytes with `limb_width = 8`. If there's no stop bit in the first 8 bytes, we return an error. Otherwise the worst case is only the eighth byte has its stop bit clear, so it contributes at most 7 bits in positions [62:56]. All 8 bytes together yield at most 63 bits. | `tests/test_ppb.c::test_peek_tag_range` checks the boundary case directly. |
+| 8 | `lexn_meta_unchanged_in_loop` | `src/ppb.c` (`ppb_lexn_impl` loop body) | `∀ j. fields[j].m ≡ \at(fields[j].m, Pre)` after `handle_field` with `update_metadata=false` | With `update_metadata=false`, `handle_field`'s `nometa` behavior assigns only `dst->v`, `*src`, and `*error` -- never any `fields[j].m`. WP has trouble carrying that exclusion through the `dst`-pointer indirection. | `fuzz/fuzz_ppb.c::do_lexn_call` (and the hard / soft variants) snapshots `fields[].m` before each call and re-checks equality after via `check_lexn_postconds`. |
+| 9 | `lexn_meta_unchanged_in_loop_again` | `src/ppb.c` (`ppb_lexn_impl` loop body, error-break path) | Same property as #8, re-stated after the `dst->v = (struct ppb_field_value) { .ptr = NULL };` zero-fill on the error path | The zero-fill assigns through `dst->v` only; the `m` field of `*dst` (and every other `fields[j].m`) is untouched. Together with #8 this preserves the metadata invariant across the error `break`. WP cannot see that the struct-literal write to `dst->v` definitely doesn't bleed into any `.m` field, so the property must be re-admitted. | Covered by the same `fuzz/fuzz_ppb.c::do_lexn_call` snapshot/check as #8. Fuzzing exercises the error path whenever the input is malformed mid-buffer. |
+| 10 | `peek_tag_fits_63` | `src/varint.h` (`peek_tag` ensures) | On success, `*OUT_tag < 2⁶³` | The fast path reads ≤ 8 bytes with `limb_width = 8`. If there's no stop bit in the first 8 bytes, we return an error. Otherwise the worst case is only the eighth byte has its stop bit clear, so it contributes at most 7 bits in positions [62:56]. All 8 bytes together yield at most 63 bits. | `tests/test_ppb.c::test_peek_tag_range` checks the boundary case directly. |
 
 A surviving admit means: WP's automated provers failed to discharge
-the proof obligation. The nine admitted assertions above are basic
+the proof obligation. The ten admitted assertions above are basic
 arithmetic identities that SMT solvers have trouble with, simple
 induction over bounded arrays, or structural facts about pointer
 aliasing that are hard to verify with the typed memory model's

@@ -1,4 +1,5 @@
 #pragma once
+#include <limits.h>
 #include <stddef.h>
 #include <stdint.h>
 
@@ -170,10 +171,31 @@ struct ppb_encoded_tag
  * For each field, we always count the total number of hits for the
  * field id, and, for length-prefixed values, the total/min/max number
  * of bytes for the payload.
+ *
+ * Stealing one bit from `num_occurrences` is safe from overflow since
+ * any encoded occurrence needs at least two bytes on the wire (one
+ * tag byte + one payload byte), and the maximum buffer is
+ * PTRDIFF_MAX, half of SIZE_MAX on the platforms we care about.
+ * That's room for *two* stolen bits; we only take one (and
+ * static_assert that we can in ppb.c).
+ *
+ * The `lost_distinct_u64` flag tells us whether `ppb_prescan` lost a
+ * distinct prior `v.u64` to last-write-wins.  Since each
+ * `ppb_encoded_tag` specifies the wire type, the flag's meaning is
+ * unambiguous for each field:
+ *
+ *   - VARINT: two or more occurrences had distinct decoded values
+ *   - I64 / I32: two or more occurrences had distinct bit patterns
+ *   - LEN: flag is never set
+ *
+ * Rarely useful for catch-all entries (`PPB_TAG(-1, ...)`): a
+ * catch-all aggregates distinct field numbers, so the flag may fire
+ * even when no individual field number repeats.
  */
 struct ppb_field_meta
 {
-    size_t num_occurrences;
+    size_t lost_distinct_u64 : 1;
+    size_t num_occurrences : CHAR_BIT * sizeof(size_t) - 1;
     size_t total_bytes;
     size_t min_nonzero_bytes;
     size_t max_bytes;
