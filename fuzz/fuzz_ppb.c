@@ -498,8 +498,10 @@ fuzz_prescan_then_lexn(const uint8_t *data, size_t size, size_t num_fields,
         if (ret.field_range == 0)
             continue;
 
-        /* Scan decoded fields in index order: once we see a catch-all,
-         * no higher-indexed field in this batch may have been decoded. */
+        /*
+         * Scan decoded fields in index order: once we see a catch-all,
+         * no higher-indexed field in this batch may have been decoded.
+         */
         size_t end = ret.first_field + (size_t)ret.field_range;
 
         bool past_catchall = false;

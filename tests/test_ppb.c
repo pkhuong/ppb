@@ -791,8 +791,10 @@ test_validate_tags_sentinel_first(void)
 {
     printf("test_validate_tags_sentinel_first\n");
 
-    /* bits=0 is a sentinel, and the second entry would also be unsorted.
-     * Sentinel error must be returned, not UNSORTED. */
+    /*
+     * bits=0 is a sentinel, and the second entry would also be unsorted.
+     * Sentinel error must be returned, not UNSORTED.
+     */
     struct ppb_encoded_tag tags[2] = { { .bits = 0 }, { .bits = 0 } };
     CHECK(ppb_validate_tags(2, tags) == PPB_ERROR_SENTINEL_FIELD_ARR);
 
@@ -2282,8 +2284,10 @@ test_cross_check_meta(void)
     struct ppb_field_meta lexn_m[4];
     memset(lexn_m, 0, sizeof(lexn_m));
 
-    /* Per-field record of the previous occurrence's u64, mirroring
-     * what handle_field uses to compute had_distinct_u64. */
+    /*
+     * Per-field record of the previous occurrence's u64, mirroring
+     * what handle_field uses to compute lost_distinct_u64.
+     */
     uint64_t prev_u64[4] = { 0 };
 
     buf = make_buf(four_field_wire, sizeof(four_field_wire));
