@@ -9,6 +9,13 @@
  * formal verification for lack of undefined behavior, memory unsafety
  * or logic bugs.
  *
+ * PPB only consumes protobuf bytes; it does not produce them.  The
+ * wire format is well specified, so it's fine to use Google's
+ * official protobuf libraries for encoding (or decoding, when you
+ * don't need PPB's guarantees).  When the producer side also cares
+ * about allocations and copies, ProtoZero (https://perfetto.dev/docs/design-docs/protozero)
+ * pairs well with PPB.
+ *
  * Public API surface, in expected order of use:
  *   - `ppb_validate_tags`: call once on each static tag array; the
  *     remaining functions assume tags are valid.
