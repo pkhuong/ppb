@@ -480,7 +480,7 @@ ppb_prescan_impl(const struct ppb_buf buf, const size_t num_fields,
         }
 
         struct ppb_field *dst = (field_idx < num_fields) ? fields + field_idx : &dummy;
-        dst->v = (struct ppb_field_value) { .ptr = NULL };
+        dst->v.ptr = ptr;
 
         /*@ for well_formed:  // precondition: tags[k] > 7; and tag < 8 returns early
           @    admit tag_above_seven_after_match: tag > 7;
@@ -488,10 +488,9 @@ ppb_prescan_impl(const struct ppb_buf buf, const size_t num_fields,
         int rc = handle_field(tag, dst, &src, /*update_metadata=*/true, &error);
         if (unlikely(rc != 0))
         {
+            dst->v = (struct ppb_field_value) { .ptr = NULL };
             return (ptrdiff_t)error;
         }
-
-        dst->v.ptr = ptr;
     }
 
     size_t uconsumed = buf.size - src.size; /* safe since src.size ≤ buf.size (loop invariant) */
@@ -649,7 +648,7 @@ ppb_lexn_impl(struct ppb_buf *restrict const buf, const size_t num_fields,
             dst = fields + field_idx;
         }
 
-        dst->v = (struct ppb_field_value) { .ptr = NULL };
+        dst->v.ptr = ptr;
         /*@ assert tag > 7; */
         int rc = handle_field(tag, dst, &src, false, &error);
 
@@ -663,11 +662,15 @@ ppb_lexn_impl(struct ppb_buf *restrict const buf, const size_t num_fields,
 
         if (unlikely(rc != 0))
         {
+            dst->v = (struct ppb_field_value) { .ptr = NULL };
+            /*@ admit lexn_meta_unchanged_in_loop_again:
+              @    ∀ integer j; 0 ≤ j < num_fields ==> fields[j].m ≡ \at(fields[j].m, Pre);
+              @*/
             break;
         }
-
-        dst->v.ptr = ptr;
     }
+
+    /*@ assert ∀ integer j; 0 ≤ j < num_fields ==> fields[j].m ≡ \at(fields[j].m, Pre); @*/
 
     /*
      * Signal the limit error (if any) if the final field ended
