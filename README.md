@@ -14,6 +14,14 @@ with `PPB_ERROR_CORRUPT_VARINT`.  The PPB interface requires the
 entire serialized message to be in a contiguous read-only buffer, and
 decodes values to 64-bit values, or as subslices in that buffer.
 
+PPB only *consumes* protobuf bytes; it does not produce them. The
+protobuf wire format is publicly specified, so the obvious choice for
+encoding (and for decoding in programs that don't have PPB's
+constraints) is Google's own protobuf libraries.  When the producer
+side also cares about allocations and copies,
+[ProtoZero](https://perfetto.dev/docs/design-docs/protozero) pairs
+well with PPB.
+
 The contents of the input buffer are untrusted and validated as
 needed; other inputs to the library must be zero-initialized on
 allocations, except for the `ppb_encoded_tag` arrays, which are
@@ -404,6 +412,93 @@ silently treated as an unknown field: the tag misses the specific
 entry, and is either routed to a catch-all of the wire type actually
 on the wire or skipped.  Callers that need strict wire-type checking
 must enforce it themselves, probably through catch-alls.
+
+Strict wire-type checking
+-------------------------
+
+A stricter caller can treat any catch-all hit as an error by
+installing one catch-all per wire type and rejecting messages that
+land on any of them.
+
+```c
+#include "ppb/ppb.h"
+
+enum {
+    F_NAME,                 /* string name = 1 */
+    F_ID,                   /* uint64 id   = 2 */
+    F_DATA,                 /* bytes  data = 5 */
+    F_CATCH_VARINT,         /* anything-else of wire type VARINT */
+    F_CATCH_I64,            /* ... I64 */
+    F_CATCH_LEN,            /* ... LEN */
+    F_CATCH_I32,            /* ... I32 */
+    NUM_FIELDS,
+};
+
+/*
+ * Catch-alls sort after every specific tag, and within the catch-all
+ * block the order follows enum ppb_wire_type (VARINT=0, I64=1, LEN=2,
+ * I32=5).  The order below is what ppb_validate_tags accepts.
+ */
+static const struct ppb_encoded_tag tags[NUM_FIELDS] = {
+    [F_NAME]         = PPB_TAG(1,  PPB_WIRE_LEN),
+    [F_ID]           = PPB_TAG(2,  PPB_WIRE_VARINT),
+    [F_DATA]         = PPB_TAG(5,  PPB_WIRE_LEN),
+    [F_CATCH_VARINT] = PPB_TAG(-1, PPB_WIRE_VARINT),
+    [F_CATCH_I64]    = PPB_TAG(-1, PPB_WIRE_I64),
+    [F_CATCH_LEN]    = PPB_TAG(-1, PPB_WIRE_LEN),
+    [F_CATCH_I32]    = PPB_TAG(-1, PPB_WIRE_I32),
+};
+
+int decode_strict(const void *wire_bytes, size_t wire_len)
+{
+    if (ppb_validate_tags(NUM_FIELDS, tags) != PPB_OK)
+        return -1;
+
+    struct ppb_field fields[NUM_FIELDS] = { 0 };
+    struct ppb_buf msg = { .buf = wire_bytes, .size = wire_len };
+
+    /*
+     * Prescan validates the wire format and populates fields[].m.
+     * Any unknown tag (or wire-type mismatch on a known field
+     * number) lands on one of the F_CATCH_* slots.
+     */
+    if (ppb_prescan(msg, NUM_FIELDS, tags, fields, SIZE_MAX) < 0)
+        return -1;
+
+    for (size_t i = F_CATCH_VARINT; i < NUM_FIELDS; i++)
+    {
+        if (fields[i].m.num_occurrences != 0)
+            return -1;  /* unknown field or wire-type mismatch */
+    }
+
+    /*
+     * No catch-all hit: every wire-format tag matched a specific
+     * entry with the right wire type.  Continue with the lexn loop
+     * as in the earlier worked example, ignoring the F_CATCH_*
+     * indices (they're guaranteed to be empty).
+     */
+    return 0;
+}
+```
+
+Note that this rejects *any* unknown field, not just wire-type
+mismatches on known field numbers: catch-alls fire on both, and PPB
+has no way to distinguish the two cases.  That gives up the usual
+protobuf forward-compatibility property (newer producers extending
+the schema will be rejected by older consumers), and is the
+trade-off baked into this style of strict checking.
+
+A catch-all match also terminates the current `ppb_lexn` call, so
+the strict check can be made per-occurrence in the lexn loop rather
+than as a single wholesale check after prescan: any populated
+`F_CATCH_*` slot ends the parse early, and `field.v.ptr` points at
+the offending tag byte, so the caller can re-decode the field number
+and decide case by case whether to treat it as an unknown field
+(forward compatibility) or a wire-type mismatch on a known number (a
+real schema violation).
+
+The prescan hack above is simpler when we must look for unexpected
+wire types and giving up forward compatibility is acceptable.
 
 **Value fields** in `struct ppb_field_value`:
 - `u64` / `i64`: full 64 bits, host byte order (the assembled value:
