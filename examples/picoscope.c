@@ -446,6 +446,8 @@ disassemble(struct ppb_buf buf, const char *end_of_input, size_t indent)
 
     /* Accumulate per-field counts observed by ppb_lexn for comparison. */
     struct ppb_field_meta lexn_m[NUM_FIELDS] = { 0 };
+    /* Track the previous occurrence's u64 to recompute lost_distinct_u64. */
+    uint64_t lexn_prev_u64[NUM_FIELDS] = { 0 };
 
     /* Lower bound on total varint value bytes, computed from decoded values. */
     size_t varint_lower_bound = 0;
@@ -477,13 +479,7 @@ disassemble(struct ppb_buf buf, const char *end_of_input, size_t indent)
         size_t idx = ret.first_field;
         struct ppb_field_value *v = &fields[idx].v;
 
-        lexn_m[idx].num_occurrences++;
-        if (idx == FIELD_VARINT)
-        {
-            uint64_t val = v->u64;
-            varint_lower_bound += (val == 0) ? 1 : (size_t)(1 + __builtin_ctzll(val) / 7);
-        }
-
+        bool first_occurrence = lexn_m[idx].num_occurrences == 0;
         if (idx == FIELD_LEN)
         {
             size_t sz = v->payload.size;
@@ -497,6 +493,24 @@ disassemble(struct ppb_buf buf, const char *end_of_input, size_t indent)
                 lexn_m[idx].max_bytes = sz;
             }
         }
+        else
+        {
+            uint64_t val = v->u64;
+
+            if (!first_occurrence && val != lexn_prev_u64[idx])
+            {
+                lexn_m[idx].lost_distinct_u64 = 1;
+            }
+
+            lexn_prev_u64[idx] = val;
+
+            if (idx == FIELD_VARINT)
+            {
+                varint_lower_bound += (val == 0) ? 1 : (size_t)(1 + __builtin_ctzll(val) / 7);
+            }
+        }
+
+        lexn_m[idx].num_occurrences++;
 
         /* Recover field number by re-decoding the tag varint at v->ptr. */
         struct ppb_buf tag_buf = {
@@ -537,6 +551,23 @@ disassemble(struct ppb_buf buf, const char *end_of_input, size_t indent)
 
         assert(prescan_m[i].num_occurrences == fields[i].m.num_occurrences &&
             "fields[i].m.num_occurrences must match prescan after lexn");
+
+        if (prescan_m[i].lost_distinct_u64 != lexn_m[i].lost_distinct_u64)
+        {
+            fprintf(stderr,
+                "picoscope: prescan/lexn mismatch: wire type %zu "
+                "lost_distinct_u64 prescan=%zu lexn=%zu\n",
+                i, (size_t)prescan_m[i].lost_distinct_u64, (size_t)lexn_m[i].lost_distinct_u64);
+            return 1;
+        }
+
+        /* LEN never sets the flag, regardless of payload sizes. */
+        if (i == FIELD_LEN && prescan_m[i].lost_distinct_u64 != 0)
+        {
+            fprintf(stderr, "picoscope: LEN lost_distinct_u64 must be 0, got %zu\n",
+                (size_t)prescan_m[i].lost_distinct_u64);
+            return 1;
+        }
 
         if (i == FIELD_LEN)
         {

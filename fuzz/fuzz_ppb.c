@@ -100,12 +100,16 @@ wire_type_of(const struct ppb_encoded_tag *tags, size_t idx)
 /*
  * Accumulate per-field stats from a single lexn-decoded field,
  * for cross-validation against prescan metadata.
+ *
+ * `prev_u64` tracks the previous occurrence's u64 (one entry per
+ * field index) so we can recompute `lost_distinct_u64` on the lexn
+ * side and compare against prescan's value, mirroring handle_field.
  */
 static void
-accumulate_field(struct ppb_field_meta *acc, const struct ppb_field *fields,
+accumulate_field(struct ppb_field_meta *acc, uint64_t *prev_u64, const struct ppb_field *fields,
     const struct ppb_encoded_tag *tags, size_t idx)
 {
-    acc[idx].num_occurrences++;
+    bool first = acc[idx].num_occurrences == 0;
     if (wire_type_of(tags, idx) == PPB_WIRE_LEN)
     {
         size_t sz = fields[idx].v.payload.size;
@@ -115,6 +119,17 @@ accumulate_field(struct ppb_field_meta *acc, const struct ppb_field *fields,
         if (sz > acc[idx].max_bytes)
             acc[idx].max_bytes = sz;
     }
+    else
+    {
+        uint64_t v = fields[idx].v.u64;
+
+        if (!first && v != prev_u64[idx])
+            acc[idx].lost_distinct_u64 = 1;
+
+        prev_u64[idx] = v;
+    }
+
+    acc[idx].num_occurrences++;
 }
 
 /* Cross-validate prescan metadata against lexn-accumulated per-field stats. */
@@ -125,6 +140,7 @@ cross_validate_meta(size_t num_fields, const struct ppb_encoded_tag *tags,
     for (size_t i = 0; i < num_fields; i++)
     {
         POSTCOND(prescan_m[i].num_occurrences == lexn_m[i].num_occurrences);
+        POSTCOND(prescan_m[i].lost_distinct_u64 == lexn_m[i].lost_distinct_u64);
 
         unsigned wt = wire_type_of(tags, i);
 
@@ -133,6 +149,8 @@ cross_validate_meta(size_t num_fields, const struct ppb_encoded_tag *tags,
             POSTCOND(prescan_m[i].total_bytes == lexn_m[i].total_bytes);
             POSTCOND(prescan_m[i].min_nonzero_bytes == lexn_m[i].min_nonzero_bytes);
             POSTCOND(prescan_m[i].max_bytes == lexn_m[i].max_bytes);
+            /* LEN never sets the flag, regardless of length variation. */
+            POSTCOND(prescan_m[i].lost_distinct_u64 == 0);
         }
 
         if (wt == PPB_WIRE_I32)
@@ -412,6 +430,7 @@ fuzz_prescan_then_lexn(const uint8_t *data, size_t size, size_t num_fields,
     /* Lex one field at a time, accumulating stats for cross-validation. */
     struct ppb_field_meta lexn_m[MAX_FIELDS];
     memset(lexn_m, 0, num_fields * sizeof(lexn_m[0]));
+    uint64_t lexn_prev_u64[MAX_FIELDS] = { 0 };
 
     buf = (struct ppb_buf) { data, size };
     while (buf.size > 0)
@@ -426,7 +445,7 @@ fuzz_prescan_then_lexn(const uint8_t *data, size_t size, size_t num_fields,
         {
             POSTCOND(ret.first_field < num_fields);
             POSTCOND(fields[ret.first_field].v.ptr >= old_buf);
-            accumulate_field(lexn_m, fields, tags, ret.first_field);
+            accumulate_field(lexn_m, lexn_prev_u64, fields, tags, ret.first_field);
         }
     }
 

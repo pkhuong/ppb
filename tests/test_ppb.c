@@ -565,6 +565,7 @@ test_prescan_repeated_fields(void)
     CHECK(fields[0].m.total_bytes == 4);
     CHECK(fields[0].m.min_nonzero_bytes == 1);
     CHECK(fields[0].m.max_bytes == 2);
+    CHECK(fields[0].m.lost_distinct_u64 == 1); /* values 1, 150, 1 -> distinct */
     CHECK(fields[0].v.u64 == 1); /* last value seen */
 }
 
@@ -592,6 +593,151 @@ test_prescan_repeated_len(void)
     CHECK(fields[0].m.total_bytes == 5);
     CHECK(fields[0].m.min_nonzero_bytes == 2);
     CHECK(fields[0].m.max_bytes == 3);
+    CHECK(fields[0].m.lost_distinct_u64 == 0); /* LEN never sets the flag */
+    CHECK(fields[0].v.u64 == 0); /* because LEN always sets v.u64 = 0. */
+}
+
+/*
+ * Exhaustive lost_distinct_u64 coverage: single-occurrence (never
+ * flagged), equal-repeated atomic values (not flagged), distinct
+ * atomic values (flagged), sticky-after-set, and LEN repeated with
+ * distinct lengths (still not flagged: LEN is excluded by design).
+ */
+static void
+test_prescan_lost_distinct_u64(void)
+{
+    printf("test_prescan_lost_distinct_u64\n");
+
+    /* Single occurrence per wire type: lost_distinct_u64 stays 0. */
+    {
+        struct ppb_encoded_tag tags[4];
+        init_four_tags(tags);
+        struct ppb_field fields[4];
+        zero_fields(4, fields);
+        struct ppb_buf buf = make_buf(four_field_wire, sizeof(four_field_wire));
+        ptrdiff_t ret = ppb_prescan(buf, 4, tags, fields, SIZE_MAX);
+        CHECK(ret == (ptrdiff_t)sizeof(four_field_wire));
+
+        for (size_t i = 0; i < 4; i++)
+        {
+            CHECK(fields[i].m.num_occurrences == 1);
+            CHECK(fields[i].m.lost_distinct_u64 == 0);
+        }
+    }
+
+    /* Two equal varint occurrences -> not flagged. */
+    {
+        static const uint8_t wire[] = {
+            0x08, 0x07,  /* field 1 varint 7 */
+            0x08, 0x07,  /* field 1 varint 7 */
+        };
+        struct ppb_encoded_tag tags[1] = { PPB_TAG(1, PPB_WIRE_VARINT) };
+        struct ppb_field fields[1];
+        zero_fields(1, fields);
+        ptrdiff_t ret = ppb_prescan(make_buf(wire, sizeof(wire)), 1, tags, fields, SIZE_MAX);
+
+        CHECK(ret == (ptrdiff_t)sizeof(wire));
+        CHECK(fields[0].m.num_occurrences == 2);
+        CHECK(fields[0].m.lost_distinct_u64 == 0);
+    }
+
+    /* Two distinct varint occurrences -> flagged. */
+    {
+        static const uint8_t wire[] = {
+            0x08, 0x07,  /* field 1 varint 7 */
+            0x08, 0x08,  /* field 1 varint 8 */
+        };
+        struct ppb_encoded_tag tags[1] = { PPB_TAG(1, PPB_WIRE_VARINT) };
+        struct ppb_field fields[1];
+        zero_fields(1, fields);
+        ptrdiff_t ret = ppb_prescan(make_buf(wire, sizeof(wire)), 1, tags, fields, SIZE_MAX);
+
+        CHECK(ret == (ptrdiff_t)sizeof(wire));
+        CHECK(fields[0].m.num_occurrences == 2);
+        CHECK(fields[0].m.lost_distinct_u64 == 1);
+    }
+
+    /* Equal-then-distinct varint: flag flips to 1 and stays set across a third equal occurrence. */
+    {
+        static const uint8_t wire[] = {
+            0x08, 0x07,  /* 7 */
+            0x08, 0x09,  /* 9 (different)  -> set flag */
+            0x08, 0x09,  /* 9 (same again) -> still flagged */
+        };
+        struct ppb_encoded_tag tags[1] = { PPB_TAG(1, PPB_WIRE_VARINT) };
+        struct ppb_field fields[1];
+        zero_fields(1, fields);
+        ptrdiff_t ret = ppb_prescan(make_buf(wire, sizeof(wire)), 1, tags, fields, SIZE_MAX);
+
+        CHECK(ret == (ptrdiff_t)sizeof(wire));
+        CHECK(fields[0].m.num_occurrences == 3);
+        CHECK(fields[0].m.lost_distinct_u64 == 1);
+    }
+
+    /* I64: equal vs distinct bit patterns. */
+    {
+        static const uint8_t wire_eq[] = {
+            0x11, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,  /* 1i64 */
+            0x11, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,  /* 1i64 */
+        };
+        static const uint8_t wire_ne[] = {
+            0x11, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,  /* 1i64 */
+            0x11, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,  /* 2i64 */
+        };
+        struct ppb_encoded_tag tags[1] = { PPB_TAG(2, PPB_WIRE_I64) };
+        struct ppb_field fields[1];
+
+        zero_fields(1, fields);
+        CHECK(ppb_prescan(make_buf(wire_eq, sizeof(wire_eq)), 1, tags, fields, SIZE_MAX) ==
+            (ptrdiff_t)sizeof(wire_eq));
+        CHECK(fields[0].m.lost_distinct_u64 == 0);
+
+        zero_fields(1, fields);
+        CHECK(ppb_prescan(make_buf(wire_ne, sizeof(wire_ne)), 1, tags, fields, SIZE_MAX) ==
+            (ptrdiff_t)sizeof(wire_ne));
+        CHECK(fields[0].m.lost_distinct_u64 == 1);
+    }
+
+    /* I32: equal vs distinct bit patterns. */
+    {
+        static const uint8_t wire_eq[] = {
+            0x25, 0x2a, 0x00, 0x00, 0x00,  /* 42i32 */
+            0x25, 0x2a, 0x00, 0x00, 0x00,  /* 42i32 */
+        };
+        static const uint8_t wire_ne[] = {
+            0x25, 0x2a, 0x00, 0x00, 0x00,  /* 42i32 */
+            0x25, 0x2b, 0x00, 0x00, 0x00,  /* 43i32 */
+        };
+        struct ppb_encoded_tag tags[1] = { PPB_TAG(4, PPB_WIRE_I32) };
+        struct ppb_field fields[1];
+
+        zero_fields(1, fields);
+        CHECK(ppb_prescan(make_buf(wire_eq, sizeof(wire_eq)), 1, tags, fields, SIZE_MAX) ==
+            (ptrdiff_t)sizeof(wire_eq));
+        CHECK(fields[0].m.lost_distinct_u64 == 0);
+
+        zero_fields(1, fields);
+        CHECK(ppb_prescan(make_buf(wire_ne, sizeof(wire_ne)), 1, tags, fields, SIZE_MAX) ==
+            (ptrdiff_t)sizeof(wire_ne));
+        CHECK(fields[0].m.lost_distinct_u64 == 1);
+    }
+
+    /* LEN: the flag is always 0 (u64 is always zero). */
+    {
+        static const uint8_t wire[] = {
+            0x0a, 0x00,                                /* len 0 */
+            0x0a, 0x05, 0x68, 0x65, 0x6c, 0x6c, 0x6f,  /* len 5 "hello" */
+        };
+        struct ppb_encoded_tag tags[1] = { PPB_TAG(1, PPB_WIRE_LEN) };
+        struct ppb_field fields[1];
+        zero_fields(1, fields);
+        ptrdiff_t ret = ppb_prescan(make_buf(wire, sizeof(wire)), 1, tags, fields, SIZE_MAX);
+
+        CHECK(ret == (ptrdiff_t)sizeof(wire));
+        CHECK(fields[0].m.num_occurrences == 2);
+        CHECK(fields[0].m.lost_distinct_u64 == 0);
+        CHECK(fields[0].v.u64 == 0);
+    }
 }
 
 static void
@@ -2136,6 +2282,10 @@ test_cross_check_meta(void)
     struct ppb_field_meta lexn_m[4];
     memset(lexn_m, 0, sizeof(lexn_m));
 
+    /* Per-field record of the previous occurrence's u64, mirroring
+     * what handle_field uses to compute had_distinct_u64. */
+    uint64_t prev_u64[4] = { 0 };
+
     buf = make_buf(four_field_wire, sizeof(four_field_wire));
     zero_fields(4, fields);
 
@@ -2147,7 +2297,7 @@ test_cross_check_meta(void)
         {
             size_t i = ret.first_field;
             unsigned wt = (unsigned)(tags[i].bits & 7);
-            lexn_m[i].num_occurrences++;
+            bool first = lexn_m[i].num_occurrences == 0;
             if (wt == PPB_WIRE_LEN)
             {
                 size_t sz = fields[i].v.payload.size;
@@ -2157,12 +2307,24 @@ test_cross_check_meta(void)
                 if (sz > lexn_m[i].max_bytes)
                     lexn_m[i].max_bytes = sz;
             }
+            else
+            {
+                uint64_t v = fields[i].v.u64;
+
+                if (!first && v != prev_u64[i])
+                    lexn_m[i].lost_distinct_u64 = 1;
+
+                prev_u64[i] = v;
+            }
+
+            lexn_m[i].num_occurrences++;
         }
     }
 
     for (size_t i = 0; i < 4; i++)
     {
         CHECK(prescan_m[i].num_occurrences == lexn_m[i].num_occurrences);
+        CHECK(prescan_m[i].lost_distinct_u64 == lexn_m[i].lost_distinct_u64);
 
         unsigned wt = (unsigned)(tags[i].bits & 7);
 
@@ -2225,6 +2387,7 @@ main(void)
     test_prescan_known_fields();
     test_prescan_repeated_fields();
     test_prescan_repeated_len();
+    test_prescan_lost_distinct_u64();
     test_validate_tags();
     test_validate_tags_sentinel_first();
     test_prescan_unknown_fields();
