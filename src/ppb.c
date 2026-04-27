@@ -60,7 +60,7 @@ static_assert(PPB_TAG_BITS(-1, PPB_WIRE_I32) == ((UINT64_MAX << 3) | 5), "catch-
   @ behavior sint32:
   @  assumes 0 ≤ x < (1 << 32);
   @  // Tested by test_zag() boundary cases in tests/test_ppb.c.
-  @  admit ensures  (-1 << 31) ≤ \result < (1 << 31);
+  @  admit ensures sint32_in_range: (-1 << 31) ≤ \result < (1 << 31);
   @ behavior sint64:
   @  assumes x ≥ (1 << 32);
   @  ensures (-1 << 63) ≤ \result < (1 << 63);
@@ -229,7 +229,9 @@ ppb_validate_tags(size_t num_fields, const struct ppb_encoded_tag *tags)
      * (sort check above), so every element exceeds the previous and all are > 7.
      * WP cannot prove the universally-quantified induction automatically.
      */
-    /*@ admit ∀ integer j; 0 ≤ j < num_fields ==> tags[j].bits > 7; */
+    /*@ admit tags_above_seven_induction:
+      @    ∀ integer j; 0 ≤ j < num_fields ==> tags[j].bits > 7;
+      @*/
 
     return PPB_OK;
 }
@@ -268,7 +270,7 @@ find_tag(const size_t num_fields, const struct ppb_encoded_tag *__restrict tags,
         size_t pivot = len / 2;
 
         /* Sortedness: if the pivot exceeds tag, so do all elements after it. */
-        /*@ for well_formed: admit tags[lo + pivot].bits > tag ==>
+        /*@ for well_formed: admit pivot_dominates_suffix: tags[lo + pivot].bits > tag ==>
           @    ∀ integer i; lo + pivot ≤ i < num_fields ==> tags[i].bits > tag;
           @*/
         lo += tags[lo + pivot].bits > tag ? 0 : pivot;
@@ -480,7 +482,9 @@ ppb_prescan_impl(const struct ppb_buf buf, const size_t num_fields,
         struct ppb_field *dst = (field_idx < num_fields) ? fields + field_idx : &dummy;
         dst->v = (struct ppb_field_value) { .ptr = NULL };
 
-        /*@ for well_formed: admit tag > 7; // precondition: tags[k] > 7; and tag < 8 returns early */
+        /*@ for well_formed:  // precondition: tags[k] > 7; and tag < 8 returns early
+          @    admit tag_above_seven_after_match: tag > 7;
+          @*/
         int rc = handle_field(tag, dst, &src, /*update_metadata=*/true, &error);
         if (unlikely(rc != 0))
         {
@@ -517,7 +521,8 @@ ppb_prescan_impl(const struct ppb_buf buf, const size_t num_fields,
   @ requires \separated(tags + (0..num_fields - 1), fields + (0..num_fields - 1));
   @ terminates \true;
   @ assigns g_initial_buf, *buf, fields[0..num_fields - 1];
-  @ admit ensures buf_valid(*buf);  // WP has trouble seeing through the final *buf = ...; copy
+  @ admit ensures lexn_buf_valid_after_copy:
+  @    buf_valid(*buf);  // WP has trouble seeing through the final *buf = ...; copy
   @ ensures ∀ integer j; 0 ≤ j < num_fields ==> fields[j].m ≡ \old(fields[j].m);
   @ ensures \result.first_field + \result.field_range ≤ num_fields;
   @
@@ -652,7 +657,9 @@ ppb_lexn_impl(struct ppb_buf *restrict const buf, const size_t num_fields,
          * handle_field with update_metadata=false ensures dst->m ≡ \old(dst->m),
          * (see nometa behavior), but the prover can't reason through the pointers.
          */
-        /*@ admit ∀ integer j; 0 ≤ j < num_fields ==> fields[j].m ≡ \at(fields[j].m, Pre); */
+        /*@ admit lexn_meta_unchanged_in_loop:
+          @    ∀ integer j; 0 ≤ j < num_fields ==> fields[j].m ≡ \at(fields[j].m, Pre);
+          @*/
 
         if (unlikely(rc != 0))
         {
