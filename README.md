@@ -7,12 +7,24 @@ PPB: Pico Protobuf
 </a>
 
 PPB is an allocation-free non-recursive lexer for protobuf binary
-encoding (v2/v3, no groups); like many protobuf implementations, it
-silently discards bits 1-6 of byte 10 in 10-byte varints (only bit 0
-of byte 10 reaches bit 63 of the result) and rejects longer varints
+encoding (v2/v3, no groups); like [many protobuf implementations](https://github.com/protocolbuffers/protobuf/blob/a06e1d39528ef6e549153528b80365903ff12a3e/src/google/protobuf/varint_shuffle.h#L119-L122),
+it silently discards bits 1-6 of byte 10 in 10-byte varints (only bit
+0 of byte 10 reaches bit 63 of the result) and rejects longer varints
 with `PPB_ERROR_CORRUPT_VARINT`.  The PPB interface requires the
 entire serialized message to be in a contiguous read-only buffer, and
 decodes values to 64-bit values, or as subslices in that buffer.
+
+This library is designed for applications that require predictable
+performance more than maximum average throughput, and reliability,
+even in the face of adversarially corrupt "protobuf" bytes, even at
+the expense of ease of use.  The library itself doesn't allocate
+memory (and has a maximum stack footprint < 400B on gcc 12/x86-64),
+and the "prescan" interface is designed to support right-sizing a bulk
+allocation before fully decoding a message.  While the correctness of
+the lexing is merely tested, the safety of the code (i.e., progress
+guarantees and lack of undefined behavior or out-of-bound accesses) is
+tested, fuzzed, and verified with [Frama-C's WP](https://www.frama-c.com/fc-plugins/wp.html)
+plugin.
 
 PPB only *consumes* protobuf bytes; it does not produce them. The
 protobuf wire format is publicly specified, so the obvious choice for
