@@ -96,6 +96,7 @@ enum ppb_error
     PPB_ERROR_CORRUPT_VARINT = -4,  /* invalid varint encoding (overlong) */
     PPB_ERROR_CORRUPT_TAG = -5,  /* invalid tag encoding (zero, overlong, or unsupported wire type) */
     PPB_ERROR_LIMIT_EXCEEDED = -6,  /* consumed bytes exceeded hard limit */
+    PPB_ERROR_DEPTH_EXCEEDED = -7,  /* recursion depth budget exhausted (reserved for client code) */
 };
 
 /*
@@ -171,8 +172,12 @@ struct ppb_encoded_tag
 
 /*
  * For each field, we always count the total number of hits for the
- * field id, and, for length-prefixed values, the total/min/max number
- * of bytes for the payload.
+ * field id, and the total/min/max number of value bytes.
+ *
+ * `total_bytes`, `min_nonzero_bytes`, and `max_bytes` are tracked for
+ * every wire type: for VARINT, that's the varint's encoding length in
+ * bytes for each occurrence; for I32/I64, each occurrence contributes
+ * 4 or 8 bytes respectively; for LEN, the length-prefixed payload size.
  *
  * Stealing one bit from `num_occurrences` is safe from overflow since
  * any encoded occurrence needs at least two bytes on the wire (one
