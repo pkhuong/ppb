@@ -434,9 +434,10 @@ disassemble(struct ppb_buf buf, const char *end_of_input, size_t indent)
         .size = (size_t)((const char *)end_of_input - (const char *)buf.buf),
     };
 
-    ptrdiff_t scanned = ppb_prescan_with_hard_limit(wider, msg_size, NUM_FIELDS, catchall_tags, fields,
+    const ptrdiff_t scanned = ppb_prescan_with_hard_limit(wider, msg_size, NUM_FIELDS, catchall_tags, fields,
         SIZE_MAX);
     assert((size_t)scanned == msg_size && "redundant prescan must succeed");
+    (void)scanned;
 
     struct ppb_field_meta prescan_m[NUM_FIELDS] = { 0 };
     for (size_t i = 0; i < NUM_FIELDS; i++)
@@ -457,7 +458,9 @@ disassemble(struct ppb_buf buf, const char *end_of_input, size_t indent)
      * declared message boundary, even though the buffer extends beyond.
      */
     size_t end_size = wider.size - msg_size; /* bytes in wider after the message */
-    const char *lex_start = wider.buf;
+    const char *const lex_start = wider.buf;
+    (void)lex_start; /* only used in assertions */
+
     buf = wider; /* lex from the wider buffer so the limit mechanism is active */
     while (buf.size > end_size)
     {
