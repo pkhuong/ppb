@@ -36,8 +36,10 @@ protobuf wire format is publicly specified, so the obvious choice for
 encoding (and for decoding in programs that don't have PPB's
 constraints) is Google's own protobuf libraries.  When the producer
 side also cares about allocations and copies,
-[ProtoZero](https://perfetto.dev/docs/design-docs/protozero) pairs
-well with PPB.
+[ProtoZero](https://perfetto.dev/docs/design-docs/protozero) (the one
+at <https://github.com/google/perfetto/tree/main/include/perfetto/protozero>,
+not to be confused the [mapbox project of the same name](https://github.com/mapbox/protozero/))
+pairs well with PPB.
 
 The contents of the input buffer are untrusted and validated as
 needed; other inputs to the library must be zero-initialized on

@@ -14,7 +14,9 @@
  * wire format is well specified, so it's fine to use Google's
  * official protobuf libraries for encoding (or decoding, when you
  * don't need PPB's guarantees).  When the producer side also cares
- * about allocations and copies, ProtoZero (https://perfetto.dev/docs/design-docs/protozero)
+ * about allocations and copies, ProtoZero
+ * (https://perfetto.dev/docs/design-docs/protozero,
+ * https://github.com/google/perfetto/tree/main/include/perfetto/protozero)
  * pairs well with PPB.
  *
  * Public API surface, in expected order of use:
