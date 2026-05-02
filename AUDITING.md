@@ -146,6 +146,26 @@ mismatch traps via `__builtin_trap()`. See the admit ledger for which
 fuzz check covers which admit. See [Pinned-revision workflow](#pinned-revision-workflow)
 for the override knobs.
 
+**LEN payload readability is formally verified.** WP discharges the
+`/*@ assert buf_valid_range(dst->v.payload); */` in `handle_field`
+(see wp.csv).  Every decoded `field.v.payload` is therefore a readable
+subrange of the input buffer.
+
+The fuzz harness and `picoscope` dynamically check stronger placement
+properties not expressed in ACSL:
+
+- **`field.v.ptr` within consumed input.**
+  `check_prescan_fields_in_range` asserts all non-null `v.ptr` lie in
+  `[data, data + returned_byte_count)`;
+  `check_lexn_fields_in_range` asserts `buf_before <= v.ptr < buf_after`
+  (`buf->buf` before/after the call).
+- **LEN payload within consumed input.** The same helpers bound
+  `payload.buf` and `payload.buf + payload.size` by that range.
+- **Payload after tag byte.** The dynamic checks assert
+  `payload.buf > v.ptr` on every decoded LEN field.
+
+Any regression traps immediately, regardless of sanitizers.
+
 ## Frama-C coverage
 
 The Docker image is pinned to Frama-C 32.0 (codename

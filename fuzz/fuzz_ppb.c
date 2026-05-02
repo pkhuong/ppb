@@ -98,6 +98,59 @@ wire_type_of(const struct ppb_encoded_tag *tags, size_t idx)
 }
 
 /*
+ * Verify that every field decoded by ppb_prescan has its ptr and payload
+ * within the scanned slice [data, scan_end).  `fields[]` is always freshly
+ * zeroed before each prescan call, so any non-NULL ptr was set by prescan.
+ */
+static inline void
+check_prescan_fields_in_range(const uint8_t *data, const uint8_t *scan_end, size_t num_fields,
+    const struct ppb_encoded_tag *tags, const struct ppb_field *fields)
+{
+    for (size_t i = 0; i < num_fields; i++)
+    {
+        const struct ppb_field_value *v = &fields[i].v;
+        if (v->ptr == NULL)
+            continue;
+
+        POSTCOND((const uint8_t *)v->ptr >= data);
+        POSTCOND((const uint8_t *)v->ptr < scan_end);
+        if (wire_type_of(tags, i) == PPB_WIRE_LEN)
+        {
+            POSTCOND((const uint8_t *)v->payload.buf > (const uint8_t *)v->ptr);
+            POSTCOND((const uint8_t *)v->payload.buf >= data);
+            POSTCOND((const uint8_t *)v->payload.buf + v->payload.size <= scan_end);
+        }
+    }
+}
+
+/*
+ * Verify that every field decoded in the current ppb_lexn* call has its
+ * payload within the consumed slice `[buf_before, buf_after)`.
+ *
+ * `buf_before = buf->buf` before the call; `buf_after = buf->buf after`.
+ */
+static inline void
+check_lexn_fields_in_range(const void *buf_before, const void *buf_after, size_t num_fields,
+    const struct ppb_encoded_tag *tags, const struct ppb_field *fields)
+{
+    for (size_t i = 0; i < num_fields; i++)
+    {
+        const struct ppb_field_value *v = &fields[i].v;
+        if (v->ptr == NULL || (const uint8_t *)v->ptr < (const uint8_t *)buf_before ||
+            (const uint8_t *)v->ptr >= (const uint8_t *)buf_after)
+            continue;
+
+        /* ptr in [buf_before, buf_after) — field was decoded in this call. */
+        if (wire_type_of(tags, i) == PPB_WIRE_LEN)
+        {
+            POSTCOND((const uint8_t *)v->payload.buf > (const uint8_t *)v->ptr);
+            POSTCOND((const uint8_t *)v->payload.buf >= (const uint8_t *)buf_before);
+            POSTCOND((const uint8_t *)v->payload.buf + v->payload.size <= (const uint8_t *)buf_after);
+        }
+    }
+}
+
+/*
  * Accumulate per-field stats from a single lexn-decoded field,
  * for cross-validation against prescan metadata.
  *
@@ -224,6 +277,9 @@ do_prescan(const uint8_t *data, size_t size, size_t num_fields, const struct ppb
             POSTCOND((size_t)full_r <= size);
             POSTCOND(num_fields == 0 || tags[0].bits > 7);
         }
+
+        check_prescan_fields_in_range(data, data + (full_r >= 0 ? (size_t)full_r : size), num_fields, tags,
+            fields);
     }
 
     {
@@ -234,6 +290,8 @@ do_prescan(const uint8_t *data, size_t size, size_t num_fields, const struct ppb
         {
             POSTCOND((size_t)r <= size);
         }
+
+        check_prescan_fields_in_range(data, data + (r >= 0 ? (size_t)r : size), num_fields, tags, fields);
     }
 
     size_t limits[] = { 0, size / 2, size, SIZE_MAX };
@@ -253,6 +311,8 @@ do_prescan(const uint8_t *data, size_t size, size_t num_fields, const struct ppb
             POSTCOND(num_fields == 0 || tags[0].bits > 7);
         }
 
+        check_prescan_fields_in_range(data, data + (hr >= 0 ? (size_t)hr : size), num_fields, tags, fields);
+
         struct ppb_field_meta hard_m[MAX_FIELDS];
         for (size_t i = 0; i < num_fields; i++)
             hard_m[i] = fields[i].m;
@@ -267,6 +327,8 @@ do_prescan(const uint8_t *data, size_t size, size_t num_fields, const struct ppb
             POSTCOND((size_t)sr <= size);
             POSTCOND(num_fields == 0 || tags[0].bits > 7);
         }
+
+        check_prescan_fields_in_range(data, data + (sr >= 0 ? (size_t)sr : size), num_fields, tags, fields);
 
         /*
          * Cross-check hard vs soft limit: hard returns LIMIT_EXCEEDED
@@ -324,11 +386,13 @@ do_lexn_call(struct ppb_buf *buf, size_t num_fields, const struct ppb_encoded_ta
     for (size_t i = 0; i < num_fields; i++)
         meta_snapshot[i] = fields[i].m;
     size_t old_size = buf->size;
+    const void *buf_before = buf->buf;
 
     struct ppb_lexn_ret ret = ppb_lexn(buf, num_fields, tags, fields, max_lexed_fields);
 
     check_lexn_postconds(ret, *buf, num_fields, meta_snapshot, fields, old_size, max_lexed_fields,
         /*limit=*/SIZE_MAX, data, /*buf_size=*/size);
+    check_lexn_fields_in_range(buf_before, buf->buf, num_fields, tags, fields);
     return ret;
 }
 
@@ -340,6 +404,7 @@ do_lexn_hard(struct ppb_buf *buf, size_t limit, size_t num_fields, const struct 
     for (size_t i = 0; i < num_fields; i++)
         meta_snapshot[i] = fields[i].m;
     size_t old_size = buf->size;
+    const void *buf_before = buf->buf;
 
     struct ppb_lexn_ret ret = ppb_lexn_with_hard_limit(buf, /*limit=*/limit, num_fields, tags, fields,
         max_lexed_fields);
@@ -348,6 +413,8 @@ do_lexn_hard(struct ppb_buf *buf, size_t limit, size_t num_fields, const struct 
         /*limit=*/limit, data, /*buf_size=*/size);
     if (ret.status == PPB_OK)
         POSTCOND(old_size - buf->size <= limit);
+
+    check_lexn_fields_in_range(buf_before, buf->buf, num_fields, tags, fields);
     return ret;
 }
 
@@ -359,12 +426,14 @@ do_lexn_soft(struct ppb_buf *buf, size_t limit, size_t num_fields, const struct 
     for (size_t i = 0; i < num_fields; i++)
         meta_snapshot[i] = fields[i].m;
     size_t old_size = buf->size;
+    const void *buf_before = buf->buf;
 
     struct ppb_lexn_ret ret = ppb_lexn_with_soft_limit(buf, /*limit=*/limit, num_fields, tags, fields,
         max_lexed_fields);
 
     check_lexn_postconds(ret, *buf, num_fields, meta_snapshot, fields, old_size, max_lexed_fields,
         /*limit=*/limit, data, /*buf_size=*/size);
+    check_lexn_fields_in_range(buf_before, buf->buf, num_fields, tags, fields);
     return ret;
 }
 

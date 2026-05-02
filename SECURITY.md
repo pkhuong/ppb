@@ -88,6 +88,22 @@ memory-safety, termination, and behavioral goal except:
   lack definitions.  We just have to trust that their contracts
   correctly model gcc's interpretation.
 
+For LEN fields, WP fully discharges
+`/*@ assert buf_valid_range(dst->v.payload); */` in `handle_field`:
+every decoded `field.v.payload` is a readable subrange of the input
+buffer, so PPB never produces a payload that points outside the input.
+
+The following stronger placement properties are checked dynamically by
+the libFuzzer harness (`fuzz/fuzz_ppb.c`) and `picoscope`:
+
+- `field.v.ptr` lies within the bytes consumed by the call:
+  `[data, data + bytes_consumed)` for `ppb_prescan`,
+  `[old_buf, new_buf)` for `ppb_lexn`.
+- For LEN fields, `payload.buf` and `payload.buf + payload.size`
+  fall within that same csonumed range.
+- `payload.buf > field.v.ptr`: the payload starts strictly after
+  the tag byte (the tag plus length-varint occupy at least 2 bytes).
+
 All unit, golden, and fuzz tests additionally run under ASan + UBSan
 in CI on gcc and clang, on x86-64 (with BMI2 fast path), aarch64, i686
 (`-m32`), and s390x (for big-endian coverage via QEMU, UBSan-only).

@@ -22,9 +22,14 @@ memory (and has a maximum stack footprint < 400B on gcc 12/x86-64),
 and the "prescan" interface is designed to support right-sizing a bulk
 allocation before fully decoding a message.  While the correctness of
 the lexing is merely tested, the safety of the code (i.e., progress
-guarantees and lack of undefined behavior or out-of-bound accesses) is
-tested, fuzzed, and verified with [Frama-C's WP](https://www.frama-c.com/fc-plugins/wp.html)
-plugin.
+guarantees and lack of undefined behavior or out-of-bound accesses)
+is tested, fuzzed, and verified with
+[Frama-C's WP](https://www.frama-c.com/fc-plugins/wp.html) plugin.
+For LEN fields, WP also statically confirms that `field.v.payload` is
+a readable subrange of the input buffer.  Stronger properties
+(`field.v.ptr` and `field.v.payload` fall within the bytes consumed by
+the call, and `payload.buf` sits strictly after the tag byte) are
+checked dynamically by the fuzz harness and `picoscope`.
 
 PPB only *consumes* protobuf bytes; it does not produce them. The
 protobuf wire format is publicly specified, so the obvious choice for
@@ -643,7 +648,12 @@ The ACSL annotations include `admit`ted properties; we try to confirm
 them with unit tests and annotations. The fuzz tests in particular
 dynamically test ACSL-proven postconditions, in addition to the usual
 property that UBSan and ASan must not flag undefined behavior or
-memory safety issues.
+memory safety issues. While WP merely checks that LEN
+`field.v.payload` are readable subranges of the input buffer (via the
+`buf_valid_range` assertion in `handle_field`), the fuzz harness and
+`picoscope` additionally check that `field.v.ptr` and the payload
+slice fall within the call's consumed bytes and that `payload.buf >
+ptr`.
 
 Validate the test suite with `mutants.py`: the script mutates the code
 and checks whether the mutation is detected by the test suite.

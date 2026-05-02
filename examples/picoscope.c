@@ -457,6 +457,7 @@ disassemble(struct ppb_buf buf, const char *end_of_input, size_t indent)
      * declared message boundary, even though the buffer extends beyond.
      */
     size_t end_size = wider.size - msg_size; /* bytes in wider after the message */
+    const char *lex_start = wider.buf;
     buf = wider; /* lex from the wider buffer so the limit mechanism is active */
     while (buf.size > end_size)
     {
@@ -478,6 +479,14 @@ disassemble(struct ppb_buf buf, const char *end_of_input, size_t indent)
 
         size_t idx = ret.first_field;
         struct ppb_field_value *v = &fields[idx].v;
+
+        assert((const char *)v->ptr >= lex_start && (const char *)v->ptr < (const char *)buf.buf);
+        if (idx == FIELD_LEN)
+        {
+            assert((const char *)v->payload.buf > (const char *)v->ptr);
+            assert((const char *)v->payload.buf >= lex_start);
+            assert((const char *)v->payload.buf + v->payload.size <= (const char *)buf.buf);
+        }
 
         bool first_occurrence = lexn_m[idx].num_occurrences == 0;
         if (idx == FIELD_LEN)
