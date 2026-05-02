@@ -120,8 +120,8 @@ duplicates are rejected by `ppb_validate_tags` with
 
 **`struct ppb_field`**: mutable per-call state for one decoded field.
 After a call to `ppb_prescan`, `field.m` holds aggregate metadata
-(occurrence count, total/min/max payload bytes for length-prefixed
-fields) and `field.v` holds the last decoded value.  Use `ppb_lexn` to
+(occurrence count, total/min/max value bytes for all wire types)
+and `field.v` holds the last decoded value.  Use `ppb_lexn` to
 observe every field occurrence: it updates each `field.v` at most once
 per call.  The caller owns the `struct ppb_field[]` array, which is
 passed alongside (but separately from) the `tags` array (field `i`
@@ -165,6 +165,7 @@ enum ppb_error
     PPB_ERROR_CORRUPT_VARINT = -4,  /* invalid varint encoding (overlong) */
     PPB_ERROR_CORRUPT_TAG = -5,  /* invalid tag encoding (zero, overlong, or unsupported wire type) */
     PPB_ERROR_LIMIT_EXCEEDED = -6,  /* consumed bytes exceeded hard limit */
+    PPB_ERROR_DEPTH_EXCEEDED = -7,  /* recursion depth budget exhausted (reserved for client code) */
 };
 
 /*
