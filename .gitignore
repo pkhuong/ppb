@@ -14,6 +14,7 @@
 !/include/
 !/include/ppb/
 !/include/ppb/*.h
+!/include/ppb/*.hpp
 
 !/src/
 !/src/*.c
@@ -33,6 +34,8 @@
 
 !/tests/
 !/tests/*.c
+!/tests/*.cc
+!/tests/*.py
 
 !/testdata/
 !/testdata/*.hex

@@ -3,7 +3,11 @@ EXTRA_FLAGS :=
 COMMON_FLAGS := -O2 -Iinclude/ -Wall -Wextra -Wpedantic -Wshadow -Wconversion -Wsign-conversion -ggdb $(EXTRA_FLAGS)
 CFLAGS := -std=c11 $(COMMON_FLAGS)
 
+CXX := ccache g++
+CXXFLAGS := -std=c++20 $(COMMON_FLAGS)
+
 C_SRCS := src/ppb.c
+CPP_HEADERS := include/ppb/ppb.hpp include/ppb/ppb_detail.hpp
 
 STATIC_DIR := build/static
 SHARED_DIR := build/shared
@@ -16,7 +20,7 @@ SHARED_OBJS := $(SHARED_C_OBJS)
 
 PROTOSCOPE ?= protoscope
 
-.PHONY: all clean format unit test regen_test fuzz fuzz-corpus FORCE
+.PHONY: all clean format unit unit_cpp test regen_test fuzz fuzz-corpus compile_fail FORCE
 
 all: build/libppb.a build/libppb.so build/picoscope build/ubench
 
@@ -26,10 +30,14 @@ clean:
 	rm -rf build/ wp.csv eva.csv
 
 format:
-	clang-format-20 -i include/ppb/ppb.h src/*.[ch] examples/*.c tests/*.c fuzz/*.c
+	clang-format-20 -i include/ppb/ppb.h include/ppb/*.hpp src/*.[ch] examples/*.c tests/*.c tests/*.cc fuzz/*.c
 
 unit: build/test_ppb
 	build/test_ppb
+
+unit_cpp: build/test_ppb_cpp build/test_ppb_cpp_static compile_fail
+	build/test_ppb_cpp
+	build/test_ppb_cpp_static
 
 test: build/picoscope build/test_ppb
 	build/test_ppb
@@ -56,6 +64,17 @@ build/ubench: examples/ubench.c build/libppb.a FORCE
 build/test_ppb: tests/test_ppb.c FORCE
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -I. -o $@ tests/test_ppb.c src/ppb.c
+
+build/test_ppb_cpp: tests/test_ppb_cpp.cc $(CPP_HEADERS) build/libppb.a FORCE
+	@mkdir -p $(dir $@)
+	$(CXX) $(CXXFLAGS) -I. -o $@ tests/test_ppb_cpp.cc build/libppb.a
+
+build/test_ppb_cpp_static: tests/test_ppb_cpp_static.cc $(CPP_HEADERS) build/libppb.a FORCE
+	@mkdir -p $(dir $@)
+	$(CXX) $(CXXFLAGS) -I. -o $@ tests/test_ppb_cpp_static.cc build/libppb.a
+
+compile_fail: $(CPP_HEADERS) tests/test_ppb_cpp_compile_fail.cc tests/compile_fail.py
+	python3 tests/compile_fail.py "$(CXX)" "$(CXXFLAGS) -I." tests/test_ppb_cpp_compile_fail.cc
 
 $(STATIC_DIR)/%.o: src/%.c FORCE
 	@mkdir -p $(dir $@)
