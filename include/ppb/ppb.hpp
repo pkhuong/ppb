@@ -7,6 +7,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <optional>
 #include <span>
 #include <type_traits>
 
@@ -21,6 +22,8 @@ enum class wire_type : uint8_t
     i64 = PPB_WIRE_I64,
     len = PPB_WIRE_LEN,
     i32 = PPB_WIRE_I32,
+
+    any = 255,  // sentinel value for meta<>
 };
 
 // PPB field descriptors all inherit from `field_base<K, T>`, which is-a
@@ -77,6 +80,10 @@ public:
     }
 
     static constexpr std::array<ppb_encoded_tag, num_fields()> s_encoded_tags = impl::encoded_tags();
+
+    // implementation details for reader<>.
+    using impl::find_field_range;
+    using typename impl::field_range;
 };
 
 // Limit on the number of fields processed at a time, and hard/soft
@@ -193,6 +200,31 @@ template <typename... Fs> struct reader<schema<Fs...>>
         {
             m_error = ppb_error(ret);
             return m_error;
+        }
+
+        return ret;
+    }
+
+    // Returns the metadata associated with `key`.
+    //
+    // Errors at compile-time if there is no such key (or key/wire
+    // type pair) in the schema.
+    //
+    // By default, merges the metadata for all wire types associated
+    // with `key`; specify a `wire` type to avoid merging and return
+    // only the exact hit.
+    template <Schema::Key key, wire_type wire = wire_type::any> constexpr ppb_field_meta meta() const noexcept
+    {
+        constexpr typename Schema::field_range range = Schema::find_field_range(key, wire);
+
+        static_assert(range.count > 0, "Key not found in schema");
+        static_assert(range.begin < Schema::num_fields(), "range (lo) must be in bounds");
+        static_assert(Schema::num_fields() - range.begin >= range.count, "range (hi) must be in bounds");
+
+        ppb_field_meta ret = m_fields[range.begin].m;
+        for (size_t idx = 1; idx < range.count; idx++)
+        {
+            detail::merge_meta(ret, m_fields[range.begin + idx].m);
         }
 
         return ret;
