@@ -31,6 +31,28 @@ static_assert(sizeof(ppb::field_base<1, ppb::wire_type::i64>) > 0);
 static_assert(sizeof(ppb::field_base<1, ppb::wire_type::len>) > 0);
 static_assert(sizeof(ppb::field_base<1, ppb::wire_type::i32>) > 0);
 
+// Schema validation: valid schemas (counterpart to _SCHEMA_* negative tests)
+static_assert(sizeof(ppb::schema<ppb::varint<1>>) > 0);
+static_assert(sizeof(ppb::schema<ppb::varint<1>, ppb::i64<2>>) > 0);
+static_assert(sizeof(ppb::schema<ppb::varint<1>, ppb::i64<2>, ppb::len<3>, ppb::i32<4>>) > 0);
+// Same field number, different wire types are distinct fields
+// with distinct encoded tag bits, so ascending wire type order is valid.
+static_assert(sizeof(ppb::schema<ppb::varint<1>, ppb::i64<1>>) > 0);
+
+// Schema public API: num_fields()
+static_assert(ppb::schema<ppb::varint<1>>::num_fields() == 1);
+static_assert(ppb::schema<ppb::varint<1>, ppb::i64<2>>::num_fields() == 2);
+static_assert(ppb::schema<ppb::varint<1>, ppb::i64<2>, ppb::len<3>>::num_fields() == 3);
+
+// Schema public API: s_encoded_tags
+namespace test_encoded_tags
+{
+constexpr auto &tags = ppb::schema<ppb::varint<1>, ppb::i64<2>>::s_encoded_tags;
+static_assert(tags.size() == 2);
+static_assert(tags[0].bits == PPB_TAG_BITS(1, PPB_WIRE_VARINT));
+static_assert(tags[1].bits == PPB_TAG_BITS(2, PPB_WIRE_I64));
+}  // namespace test_encoded_tags
+
 int
 main()
 {

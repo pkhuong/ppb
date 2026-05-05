@@ -44,5 +44,50 @@ template <auto K> struct i32 : public field_base<K, wire_type::i32>
 
 namespace detail
 {
+
+template <typename...> struct key_of
+{
+    using type = int;
+};
+template <typename First, typename... Rest> struct key_of<First, Rest...>
+{
+    using type = typename First::Key;
+};
+
+template <typename... Fs> struct schema_impl
+{
+    using Key = typename key_of<Fs...>::type;
+
+    static constexpr size_t num_fields() { return sizeof...(Fs); }
+
+    static consteval bool fields_non_empty() { return num_fields() > 0; }
+
+    static consteval bool fields_are_fields() { return (std::is_base_of_v<field_generic_base, Fs> && ...); }
+
+    static consteval bool fields_have_same_key_type()
+    {
+        return (std::is_same_v<typename Fs::Key, Key> && ...);
+    }
+
+    static consteval std::array<ppb_encoded_tag, sizeof...(Fs)> encoded_tags()
+    {
+        return { Fs::encoded_tag()... };
+    }
+
+    static consteval bool tags_are_in_order()
+    {
+        if constexpr (num_fields() <= 1)
+            return true;
+
+        constexpr auto tags = encoded_tags();
+        for (size_t i = 1; i < tags.size(); i++)
+        {
+            if (tags[i - 1].bits >= tags[i].bits)
+                return false;
+        }
+        return true;
+    }
+};
+
 }  // namespace detail
 }  // namespace ppb

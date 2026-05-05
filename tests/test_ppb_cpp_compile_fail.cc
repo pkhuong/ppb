@@ -63,3 +63,35 @@ static_assert(sizeof(ppb::field_base<1, static_cast<ppb::wire_type>(7)>) > 0);
 #ifdef PPB_FAIL_WIRE_TYPE_255
 static_assert(sizeof(ppb::field_base<1, static_cast<ppb::wire_type>(255)>) > 0);
 #endif
+
+// Schema validation tests
+
+/* expect-error: schema must include at least one field */
+#ifdef PPB_FAIL_SCHEMA_EMPTY
+static_assert(sizeof(ppb::schema<>) > 0);
+#endif
+
+/* expect-error: schema template arguments must be field_generic_base */
+#ifdef PPB_FAIL_SCHEMA_NOT_A_FIELD
+static_assert(sizeof(ppb::schema<int>) > 0);
+#endif
+
+/* expect-error: schema fields must all have the same Key type */
+#ifdef PPB_FAIL_SCHEMA_DIFFERENT_KEYS
+static_assert(sizeof(ppb::schema<ppb::varint<1>, ppb::varint<1L>>) > 0);
+#endif
+
+/* expect-error: schema fields must be listed in strictly ascending order */
+#ifdef PPB_FAIL_SCHEMA_UNORDERED
+static_assert(sizeof(ppb::schema<ppb::varint<2>, ppb::i64<1>>) > 0);
+#endif
+
+/* expect-error: schema fields must be listed in strictly ascending order */
+#ifdef PPB_FAIL_SCHEMA_DUPLICATE_TAGS
+static_assert(sizeof(ppb::schema<ppb::varint<1>, ppb::varint<1>>) > 0);
+#endif
+
+/* expect-error: schema fields must be listed in strictly ascending order */
+#ifdef PPB_FAIL_SCHEMA_SAME_FIELD_WRONG_WIRE_ORDER
+static_assert(sizeof(ppb::schema<ppb::i32<1>, ppb::varint<1>>) > 0);
+#endif
