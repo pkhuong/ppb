@@ -10,6 +10,7 @@
 #include <optional>
 #include <span>
 #include <type_traits>
+#include <utility>
 
 static_assert(std::endian::native == std::endian::little, "ppb.hpp currently requires a little-endian host");
 

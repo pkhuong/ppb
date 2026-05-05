@@ -148,5 +148,96 @@ merge_meta(ppb_field_meta &acc, ppb_field_meta upd) noexcept
     acc.max_bytes = (acc.max_bytes < upd.max_bytes) ? upd.max_bytes : acc.max_bytes;
 }
 
+template <typename Fn>
+[[gnu::always_inline]] constexpr bool
+dispatch_16(size_t begin, Fn &&handler)
+{
+#define PPB_DETAIL_DISPATCH(N)                                \
+    case (N):                                                 \
+        if (!handler(std::integral_constant<size_t, (N)> {})) \
+            return false;                                     \
+        [[fallthrough]]
+
+    switch (begin)
+    {
+        PPB_DETAIL_DISPATCH(0);
+        PPB_DETAIL_DISPATCH(1);
+        PPB_DETAIL_DISPATCH(2);
+        PPB_DETAIL_DISPATCH(3);
+        PPB_DETAIL_DISPATCH(4);
+        PPB_DETAIL_DISPATCH(5);
+        PPB_DETAIL_DISPATCH(6);
+        PPB_DETAIL_DISPATCH(7);
+        PPB_DETAIL_DISPATCH(8);
+        PPB_DETAIL_DISPATCH(9);
+        PPB_DETAIL_DISPATCH(10);
+        PPB_DETAIL_DISPATCH(11);
+        PPB_DETAIL_DISPATCH(12);
+        PPB_DETAIL_DISPATCH(13);
+        PPB_DETAIL_DISPATCH(14);
+        PPB_DETAIL_DISPATCH(15);
+
+    default:
+        break;
+    }
+
+#undef PPB_DETAIL_DISPATCH
+
+    return true;
+}
+
+template <size_t limit, typename Fn>
+[[gnu::always_inline]] constexpr bool
+dispatch(size_t begin, size_t end, Fn &&handler)
+{
+    constexpr size_t num_blocks = (limit + 15) / 16;
+
+    auto handle_block = [&]<size_t base>(std::integral_constant<size_t, base>) -> bool
+    {
+        constexpr size_t local_limit = limit < base + 16 ? limit : base + 16;
+        // `base >= end` short-circuits the outer fold: every later
+        // block has a strictly larger base, so they're all past `end`.
+        if (base >= end) [[unlikely]]
+            return false;
+
+        if (begin >= local_limit) [[unlikely]]
+            return true;
+
+        size_t local = (begin > base) ? begin - base : 0;
+        auto wrapped = [&handler, end]<size_t I>(std::integral_constant<size_t, I>) -> bool
+        {
+            if constexpr (base + I < limit)
+            {
+                // Runtime upper bound: stop once we reach `end`.
+                if (base + I >= end) [[unlikely]]
+                    return false;
+
+                bool ret = handler(std::integral_constant<size_t, base + I> {});
+                if constexpr (base + I + 1 == limit)
+                {
+                    // Always stop after the last static case.
+                    return false;
+                }
+                else
+                {
+                    return ret;
+                }
+            }
+            else
+            {
+                return false;
+            }
+        };
+
+        return dispatch_16(local, wrapped);
+    };
+
+    bool ok = true;
+    [&]<size_t... Bs>(std::index_sequence<Bs...>)
+    { ((ok = ok && handle_block(std::integral_constant<size_t, Bs * 16> {})), ...); }(
+        std::make_index_sequence<num_blocks> {});
+
+    return ok;
+}
 }  // namespace detail
 }  // namespace ppb
