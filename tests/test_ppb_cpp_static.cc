@@ -53,6 +53,15 @@ static_assert(tags[0].bits == PPB_TAG_BITS(1, PPB_WIRE_VARINT));
 static_assert(tags[1].bits == PPB_TAG_BITS(2, PPB_WIRE_I64));
 }  // namespace test_encoded_tags
 
+// limit factories are constexpr
+static_assert(ppb::limit::max_fields(5).fields() == 5);
+static_assert(ppb::limit::hard(100).bytes() == 100);
+static_assert(ppb::limit::hard(100).error_on_bytes() == PPB_ERROR_LIMIT_EXCEEDED);
+static_assert(ppb::limit::soft(100).error_on_bytes() == PPB_OK);
+
+// reader is instantiable with valid schemas
+static_assert(sizeof(ppb::reader<ppb::schema<ppb::varint<1>>>) > 0);
+
 int
 main()
 {
