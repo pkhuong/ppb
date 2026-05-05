@@ -95,3 +95,17 @@ static_assert(sizeof(ppb::schema<ppb::varint<1>, ppb::varint<1>>) > 0);
 #ifdef PPB_FAIL_SCHEMA_SAME_FIELD_WRONG_WIRE_ORDER
 static_assert(sizeof(ppb::schema<ppb::i32<1>, ppb::varint<1>>) > 0);
 #endif
+
+// meta() with a key absent from the schema
+
+/* expect-error: Key not found in schema */
+#ifdef PPB_FAIL_META_KEY_NOT_FOUND
+constexpr ppb_field_meta bad = ppb::reader<ppb::schema<ppb::varint<1>>> {}.meta<2>();
+#endif
+
+// meta() with a key present in the schema, but a wire type not associated with it
+
+/* expect-error: Key not found in schema */
+#ifdef PPB_FAIL_META_WIRE_TYPE_NOT_FOUND
+constexpr ppb_field_meta bad = ppb::reader<ppb::schema<ppb::varint<1>>> {}.meta<1, ppb::wire_type::len>();
+#endif

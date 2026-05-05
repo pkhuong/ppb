@@ -62,6 +62,36 @@ static_assert(ppb::limit::soft(100).error_on_bytes() == PPB_OK);
 // reader is instantiable with valid schemas
 static_assert(sizeof(ppb::reader<ppb::schema<ppb::varint<1>>>) > 0);
 
+// meta() before prescan: zero-filled metadata, demonstrable at compile time
+namespace test_meta_before_prescan
+{
+constexpr ppb::reader<ppb::schema<ppb::varint<1>>> r;
+constexpr ppb_field_meta m = r.meta<1>();
+static_assert(m.num_occurrences == 0);
+static_assert(m.total_bytes == 0);
+static_assert(m.min_nonzero_bytes == 0);
+static_assert(m.max_bytes == 0);
+static_assert(m.lost_distinct_u64 == 0);
+}  // namespace test_meta_before_prescan
+
+// Merged schema (same key, different wire types): meta() is also zero before prescan.
+namespace test_meta_merged_before_prescan
+{
+using Merged = ppb::schema<ppb::varint<1>, ppb::len<1>>;
+constexpr ppb::reader<Merged> r;
+constexpr ppb_field_meta m = r.meta<1>();
+static_assert(m.num_occurrences == 0);
+static_assert(m.total_bytes == 0);
+static_assert(m.lost_distinct_u64 == 0);
+}  // namespace test_meta_merged_before_prescan
+
+// meta() with a key present in the schema (counterpart to PPB_FAIL_META_KEY_NOT_FOUND)
+namespace test_meta_key_found
+{
+constexpr ppb_field_meta m = ppb::reader<ppb::schema<ppb::varint<1>>> {}.meta<1>();
+static_assert(m.num_occurrences == 0);
+}  // namespace test_meta_key_found
+
 int
 main()
 {

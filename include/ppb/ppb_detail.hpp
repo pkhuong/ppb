@@ -87,7 +87,66 @@ template <typename... Fs> struct schema_impl
         }
         return true;
     }
+
+    struct field_range
+    {
+        size_t begin = 0;
+        size_t count = 0;
+    };
+
+    // returns a field_range for the tags that match `k`.
+    static consteval field_range find_field_range(Key k, wire_type wire)
+    {
+        uint64_t wanted = PPB_TAG_BITS(static_cast<uint64_t>(k), 0) / 8;  // drop wire type
+        const auto haystack = encoded_tags();
+
+        field_range ret;
+
+        for (size_t idx = 0; idx < haystack.size(); idx++)
+        {
+            uint64_t got = haystack[idx].bits / 8;
+            uint64_t got_wire = haystack[idx].bits % 8;
+
+            if (got > wanted)
+                break;
+
+            if (got != wanted)
+                continue;
+
+            if (wire != wire_type::any && got_wire != uint64_t(wire))
+                continue;
+
+            if (ret.count == 0)
+            {
+                ret.begin = idx;
+            }
+
+            ret.count++;
+        }
+
+        return ret;
+    }
 };
+
+constexpr void
+merge_meta(ppb_field_meta &acc, ppb_field_meta upd) noexcept
+{
+    if (acc.num_occurrences == 0)
+    {
+        acc = upd;
+        return;
+    }
+
+    if (upd.num_occurrences == 0)
+        return;
+
+    acc.num_occurrences += upd.num_occurrences;
+    acc.lost_distinct_u64 = true;
+    acc.total_bytes += upd.total_bytes;
+    acc.min_nonzero_bytes = (acc.min_nonzero_bytes - 1 > upd.min_nonzero_bytes - 1) ? upd.min_nonzero_bytes :
+                                                                                      acc.min_nonzero_bytes;
+    acc.max_bytes = (acc.max_bytes < upd.max_bytes) ? upd.max_bytes : acc.max_bytes;
+}
 
 }  // namespace detail
 }  // namespace ppb
