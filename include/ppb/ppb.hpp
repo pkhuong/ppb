@@ -245,6 +245,24 @@ private:
     ppb_error m_error_on_bytes = PPB_OK;
 };
 
+// Wraps a function as a field handler for the Key, and potentially
+// for the wire type.
+//
+// The `reader`'s `parse` method (as well as the lower level
+// `prescan`, `lexn`, and `dispatch` methods) invokes the handler when
+// it matches a decoded field.
+//
+// Each handler is invoked with a `const ppb_field &`, and returns a
+// `enum ppb_error`; non-zero errors are piped back to the reader and
+// stop the lexing loop, if necessary (handlers for the same lexn
+// batch are still invoked).
+template <auto Key, wire_type wire = wire_type::any, typename Fn>
+[[nodiscard]] constexpr detail::value_handler<Key, wire, std::decay_t<Fn>>
+on(Fn &&handler)
+{
+    return detail::value_handler<Key, wire, std::decay_t<Fn>> { std::forward<Fn>(handler) };
+}
+
 // Stateful reader for a schema / span.
 template <typename Schema> struct reader;
 template <typename... Fs> struct reader<schema<Fs...>>
@@ -297,116 +315,7 @@ template <typename... Fs> struct reader<schema<Fs...>>
     // *Consumes* from the input span once `init` returns success!
     // Call `reset_fields` after `parse` to prepare for the next message.
     template <typename Init, typename... Hs>
-    [[nodiscard]] ppb_error parse(Init &&init, limit bounds = {}, Hs &&...handlers)
-    {
-        if (m_error != PPB_OK) [[unlikely]]
-            return m_error;
-
-        ppb_buf buf = make_ppb_buf();
-
-        ptrdiff_t num_bytes = ppb_prescan_impl(buf, m_fields.size(), Schema::s_encoded_tags.data(),
-            m_fields.data(), bounds.fields(), bounds.bytes(), bounds.error_on_bytes());
-
-        if (num_bytes <= 0) [[unlikely]]
-        {
-            m_error = ppb_error(num_bytes);
-            return m_error;
-        }
-
-        // Check field semantics: error fields that appeared on the wire
-        // are an immediate failure.  Also determine whether any field
-        // forces a lexn pass.
-        bool has_error = false;
-        bool need_lexn = false;
-        [&]<size_t... Is>(std::index_sequence<Is...>)
-        {
-            auto scan = [&]<size_t I>(std::integral_constant<size_t, I>)
-            {
-                using Field = decltype(Schema::template field<I>());
-                const field_semantics semantics = Field::semantics();
-                const auto &meta = m_fields[I].m;
-
-                if constexpr (semantics == field_semantics::error)
-                {
-                    if (meta.num_occurrences > 0)
-                    {
-                        has_error = true;
-                        m_error_field = static_cast<uint32_t>(Field::tag()) * 8 +
-                            static_cast<uint32_t>(Field::wire());
-                    }
-
-                    return;
-                }
-
-                if constexpr (semantics == field_semantics::always_lexn)
-                {
-                    need_lexn |= meta.num_occurrences > 0;
-                    return;
-                }
-
-                if (meta.num_occurrences <= 1)
-                    return;  // single-occurrence never forces lexn
-
-                if constexpr (semantics == field_semantics::repeated)
-                {
-                    need_lexn = true;
-                    return;
-                }
-
-                if constexpr (semantics == field_semantics::singular)
-                {
-                    if (Field::wire() == wire_type::len || meta.lost_distinct_u64)
-                        need_lexn = true;
-                }
-
-                // last_write_wins: never forces lexn
-            };
-            (scan(std::integral_constant<size_t, Is> {}), ...);
-        }(std::make_index_sequence<Schema::num_fields()> {});
-
-        if (has_error) [[unlikely]]
-        {
-            m_error = PPB_ERROR_CORRUPT_TAG;
-            return m_error;
-        }
-
-        std::tuple<std::decay_t<Hs>...> tup(std::forward<Hs>(handlers)...);
-
-        m_error = init(std::as_const(*this));
-        if (m_error != PPB_OK) [[unlikely]]
-            return m_error;
-
-        if (!need_lexn) [[likely]]
-        {
-            run_handlers(tup, reinterpret_cast<uintptr_t>(m_input.data()), size_t(num_bytes));
-            m_input = m_input.subspan(size_t(num_bytes));
-            return m_error;
-        }
-
-        const std::byte *const logical_end = m_input.data() + num_bytes;
-        const std::byte *base;
-        while ((base = reinterpret_cast<const std::byte *>(buf.buf)) < logical_end)
-        {
-            ppb_lexn_ret ret = ppb_lexn_with_hard_limit(&buf, size_t(logical_end - base), m_fields.size(),
-                Schema::s_encoded_tags.data(), m_fields.data(), std::numeric_limits<size_t>::max());
-
-            size_t range_size = size_t(reinterpret_cast<const std::byte *>(buf.buf) - base);
-            // empty range happens only on error or empty input
-            if (ret.status != PPB_OK || range_size == 0) [[unlikely]]
-            {
-                m_error = ret.status;
-                break;
-            }
-
-            run_handlers(tup, reinterpret_cast<uintptr_t>(base), range_size - 1, ret.first_field,
-                ret.first_field + ret.field_range);
-            if (m_error != PPB_OK) [[unlikely]]
-                break;
-        }
-
-        m_input = std::span(reinterpret_cast<const std::byte *>(buf.buf), buf.size);
-        return m_error;
-    }
+    [[nodiscard]] ppb_error parse(Init &&init, limit bounds = {}, Hs &&...handlers);
 
     // Runs prescan (subject to `bounds`) on the input span.  When any `on()`
     // handlers are passed, dispatches to them after a successful prescan.
@@ -417,23 +326,7 @@ template <typename... Fs> struct reader<schema<Fs...>>
     //
     // Returns a ppb_error (negative value) on error, or a non-negative
     // number of bytes read by the `prescan` call.
-    template <typename... Hs> [[nodiscard]] ptrdiff_t prescan(limit bounds = {}, Hs &&...handlers)
-    {
-        if (m_error != PPB_OK) [[unlikely]]
-            return m_error;
-
-        ptrdiff_t ret = ppb_prescan_impl(make_ppb_buf(), m_fields.size(), Schema::s_encoded_tags.data(),
-            m_fields.data(), bounds.fields(), bounds.bytes(), bounds.error_on_bytes());
-
-        if (ret <= 0) [[unlikely]]
-        {
-            m_error = ppb_error(ret);
-            return m_error;
-        }
-
-        ppb_error err = dispatch(std::forward<Hs>(handlers)...);
-        return int(err) < 0 ? ptrdiff_t(err) : ret;
-    }
+    template <typename... Hs> [[nodiscard]] ptrdiff_t prescan(limit bounds = {}, Hs &&...handlers);
 
     // Returns the metadata associated with `key`.
     //
@@ -443,22 +336,8 @@ template <typename... Fs> struct reader<schema<Fs...>>
     // By default, merges the metadata for all wire types associated
     // with `key`; specify a `wire` type to avoid merging and return
     // only the exact hit.
-    template <Schema::Key key, wire_type wire = wire_type::any> constexpr ppb_field_meta meta() const noexcept
-    {
-        constexpr typename Schema::field_range range = Schema::find_field_range(key, wire);
-
-        static_assert(range.count > 0, "Key not found in schema");
-        static_assert(range.begin < Schema::num_fields(), "range (lo) must be in bounds");
-        static_assert(Schema::num_fields() - range.begin >= range.count, "range (hi) must be in bounds");
-
-        ppb_field_meta ret = m_fields[range.begin].m;
-        for (size_t idx = 1; idx < range.count; idx++)
-        {
-            detail::merge_meta(ret, m_fields[range.begin + idx].m);
-        }
-
-        return ret;
-    }
+    template <typename Schema::Key key, wire_type wire = wire_type::any>
+    constexpr ppb_field_meta meta() const noexcept;
 
     // Runs `lexn` *once* subject to bounds on the input span.  When
     // any `on()` handlers are passed, dispatches to them each
@@ -469,56 +348,12 @@ template <typename... Fs> struct reader<schema<Fs...>>
     // all handlers are invoked).
     //
     // *Consumes* from the input span!
-    template <typename... Hs> [[nodiscard]] ppb_error lexn(limit bounds = {}, Hs &&...handlers)
-    {
-        if (m_error != PPB_OK) [[unlikely]]
-            return m_error;
-
-        std::tuple<std::decay_t<Hs>...> tup(std::forward<Hs>(handlers)...);
-
-        const auto base = reinterpret_cast<uintptr_t>(m_input.data());
-
-        ppb_buf buf = make_ppb_buf();
-        const ppb_lexn_ret ret = ppb_lexn_impl(&buf, m_fields.size(), Schema::s_encoded_tags.data(),
-            m_fields.data(), bounds.fields(), bounds.bytes(), bounds.error_on_bytes());
-
-        m_error = ret.status;
-        m_input = std::span(reinterpret_cast<const std::byte *>(buf.buf), buf.size);
-
-        size_t range_size = reinterpret_cast<uintptr_t>(buf.buf) - base;
-        if constexpr (sizeof...(Hs) == 0)
-        {
-            return m_error;
-        }
-
-        // range_size == 0 should only happen on empty input (or maybe on error).
-        if (m_error != PPB_OK || range_size == 0) [[unlikely]]
-        {
-            return m_error;
-        }
-
-        run_handlers(tup, base, range_size - 1, ret.first_field, ret.first_field + ret.field_range);
-        return m_error;
-    }
+    template <typename... Hs> [[nodiscard]] ppb_error lexn(limit bounds = {}, Hs &&...handlers);
 
     // Runs `on()` handlers on entries for which we found a value.
-    template <typename... Hs> ppb_error dispatch(Hs &&...handlers)
-    {
-        std::tuple<std::decay_t<Hs>...> tup(std::forward<Hs>(handlers)...);
-        return dispatch_tuple(tup);
-    }
+    template <typename... Hs> ppb_error dispatch(Hs &&...handlers);
 
-    template <typename... Hs> ppb_error dispatch_tuple(std::tuple<Hs...> &handlers)
-    {
-        if constexpr (sizeof...(Hs) == 0)
-            return m_error;
-
-        if (m_error != PPB_OK) [[unlikely]]
-            return m_error;
-
-        run_handlers(handlers, 1, std::numeric_limits<uintptr_t>::max() - 1);
-        return m_error;
-    }
+    template <typename... Hs> ppb_error dispatch_tuple(std::tuple<Hs...> &handlers);
 
 private:
     constexpr ppb_buf make_ppb_buf() const noexcept
@@ -531,41 +366,11 @@ private:
 
     template <typename... Hs>
     [[gnu::noinline]] void run_handlers(std::tuple<Hs...> &handlers, uintptr_t lower_bound,
-        uintptr_t range_size_inclusive, size_t begin = 0, size_t end = Schema::num_fields())
-    {
-        detail::dispatch<Schema::num_fields()>(begin, end,
-            [&]<size_t I>(std::integral_constant<size_t, I>)
-            {
-                run_handler_for_idx<I>(handlers, lower_bound, range_size_inclusive);
-                return true;
-            });
-    }
+        uintptr_t range_size_inclusive, size_t begin = 0, size_t end = Schema::num_fields());
 
     template <size_t idx, typename... Hs>
-    [[gnu::always_inline]] void run_handler_for_idx(std::tuple<Hs...> &handlers, uintptr_t lower_bound,
-        uintptr_t range_size_inclusive)
-    {
-        const ppb_field &field = m_fields[idx];
-
-        // Find a handler for the schema field.
-        using Field = decltype(Schema::template field<idx>());
-        constexpr std::optional<size_t> handler_idx = detail::find_value_handler<Field::tag(), Field::wire(),
-            decltype(Field::extract_value(field, &m_error)), Hs...>();
-        if constexpr (handler_idx.has_value())
-        {
-            auto field_addr = reinterpret_cast<uintptr_t>(field.v.ptr);
-
-            if (field_addr - lower_bound <= range_size_inclusive) [[likely]]
-            {
-                enum ppb_error result = std::get<handler_idx.value()>(handlers).handler(
-                    Field::extract_value(field, &m_error));
-                if (result != PPB_OK) [[unlikely]]
-                {
-                    m_error = (m_error == PPB_OK) ? result : m_error;
-                }
-            }
-        }
-    }
+    [[gnu::always_inline]] inline void run_handler_for_idx(std::tuple<Hs...> &handlers, uintptr_t lower_bound,
+        uintptr_t range_size_inclusive);
 
     std::span<const std::byte> m_input;
     ppb_error m_error = PPB_OK;
@@ -573,22 +378,264 @@ private:
     std::array<ppb_field, Schema::num_fields()> m_fields = {};
 };
 
-// Wraps a function as a field handler for the Key, and potentially
-// for the wire type.
-//
-// The `reader`'s `parse` method (as well as the lower level
-// `prescan`, `lexn`, and `dispatch` methods) invokes the handler when
-// it matches a decoded field.
-//
-// Each handler is invoked with a `const ppb_field &`, and returns a
-// `enum ppb_error`; non-zero errors are piped back to the reader and
-// stop the lexing loop, if necessary (handlers for the same lexn
-// batch are still invoked).
-template <auto Key, wire_type wire = wire_type::any, typename Fn>
-[[nodiscard]] constexpr detail::value_handler<Key, wire, std::decay_t<Fn>>
-on(Fn &&handler)
+/*
+ * End of public interface.  Out-of-line definitions follow.
+ */
+
+template <typename... Fs>
+template <typename Init, typename... Hs>
+[[nodiscard]] ppb_error
+reader<schema<Fs...>>::parse(Init &&init, limit bounds, Hs &&...handlers)
 {
-    return detail::value_handler<Key, wire, std::decay_t<Fn>> { std::forward<Fn>(handler) };
+    if (m_error != PPB_OK) [[unlikely]]
+        return m_error;
+
+    ppb_buf buf = make_ppb_buf();
+
+    ptrdiff_t num_bytes = ppb_prescan_impl(buf, m_fields.size(), Schema::s_encoded_tags.data(),
+        m_fields.data(), bounds.fields(), bounds.bytes(), bounds.error_on_bytes());
+
+    if (num_bytes <= 0) [[unlikely]]
+    {
+        m_error = ppb_error(num_bytes);
+        return m_error;
+    }
+
+    // Check field semantics: error fields that appeared on the wire
+    // are an immediate failure.  Also determine whether any field
+    // forces a lexn pass.
+    bool has_error = false;
+    bool need_lexn = false;
+    [&]<size_t... Is>(std::index_sequence<Is...>)
+    {
+        auto scan = [&]<size_t I>(std::integral_constant<size_t, I>)
+        {
+            using Field = decltype(Schema::template field<I>());
+            const field_semantics semantics = Field::semantics();
+            const auto &meta = m_fields[I].m;
+
+            if constexpr (semantics == field_semantics::error)
+            {
+                if (meta.num_occurrences > 0)
+                {
+                    has_error = true;
+                    m_error_field = static_cast<uint32_t>(Field::tag()) * 8 +
+                        static_cast<uint32_t>(Field::wire());
+                }
+
+                return;
+            }
+
+            if constexpr (semantics == field_semantics::always_lexn)
+            {
+                need_lexn |= meta.num_occurrences > 0;
+                return;
+            }
+
+            if (meta.num_occurrences <= 1)
+                return;  // single-occurrence never forces lexn
+
+            if constexpr (semantics == field_semantics::repeated)
+            {
+                need_lexn = true;
+                return;
+            }
+
+            if constexpr (semantics == field_semantics::singular)
+            {
+                if (Field::wire() == wire_type::len || meta.lost_distinct_u64)
+                    need_lexn = true;
+            }
+
+            // last_write_wins: never forces lexn
+        };
+        (scan(std::integral_constant<size_t, Is> {}), ...);
+    }(std::make_index_sequence<Schema::num_fields()> {});
+
+    if (has_error) [[unlikely]]
+    {
+        m_error = PPB_ERROR_CORRUPT_TAG;
+        return m_error;
+    }
+
+    std::tuple<std::decay_t<Hs>...> tup(std::forward<Hs>(handlers)...);
+
+    m_error = init(std::as_const(*this));
+    if (m_error != PPB_OK || num_bytes == 0) [[unlikely]]
+        return m_error;
+
+    if (!need_lexn) [[likely]]
+    {
+        run_handlers(tup, reinterpret_cast<uintptr_t>(m_input.data()), size_t(num_bytes) - 1);
+        m_input = m_input.subspan(size_t(num_bytes));
+        return m_error;
+    }
+
+    const std::byte *const logical_end = m_input.data() + num_bytes;
+    const std::byte *base;
+
+    while ((base = reinterpret_cast<const std::byte *>(buf.buf)) < logical_end)
+    {
+        ppb_lexn_ret ret = ppb_lexn_with_hard_limit(&buf, size_t(logical_end - base), m_fields.size(),
+            Schema::s_encoded_tags.data(), m_fields.data(), std::numeric_limits<size_t>::max());
+
+        size_t range_size = size_t(reinterpret_cast<const std::byte *>(buf.buf) - base);
+        if (ret.status != PPB_OK || range_size == 0) [[unlikely]]
+        {
+            m_error = ret.status;
+            break;
+        }
+
+        run_handlers(tup, reinterpret_cast<uintptr_t>(base), range_size - 1, ret.first_field,
+            ret.first_field + ret.field_range);
+        if (m_error != PPB_OK) [[unlikely]]
+            break;
+    }
+
+    m_input = std::span(reinterpret_cast<const std::byte *>(buf.buf), buf.size);
+    return m_error;
+}
+
+template <typename... Fs>
+template <typename... Hs>
+[[nodiscard]] ptrdiff_t
+reader<schema<Fs...>>::prescan(limit bounds, Hs &&...handlers)
+{
+    if (m_error != PPB_OK) [[unlikely]]
+        return m_error;
+
+    ptrdiff_t ret = ppb_prescan_impl(make_ppb_buf(), m_fields.size(), Schema::s_encoded_tags.data(),
+        m_fields.data(), bounds.fields(), bounds.bytes(), bounds.error_on_bytes());
+
+    if (ret <= 0) [[unlikely]]
+    {
+        m_error = ppb_error(ret);
+        return m_error;
+    }
+
+    ppb_error err = dispatch(std::forward<Hs>(handlers)...);
+    return int(err) < 0 ? ptrdiff_t(err) : ret;
+}
+
+template <typename... Fs>
+template <typename schema<Fs...>::Key key, wire_type wire>
+constexpr ppb_field_meta
+reader<schema<Fs...>>::meta() const noexcept
+{
+    constexpr typename Schema::field_range range = Schema::find_field_range(key, wire);
+
+    static_assert(range.count > 0, "Key not found in schema");
+    static_assert(range.begin < Schema::num_fields(), "range (lo) must be in bounds");
+    static_assert(Schema::num_fields() - range.begin >= range.count, "range (hi) must be in bounds");
+
+    ppb_field_meta ret = m_fields[range.begin].m;
+    for (size_t idx = 1; idx < range.count; idx++)
+    {
+        detail::merge_meta(ret, m_fields[range.begin + idx].m);
+    }
+
+    return ret;
+}
+
+template <typename... Fs>
+template <typename... Hs>
+[[nodiscard]] ppb_error
+reader<schema<Fs...>>::lexn(limit bounds, Hs &&...handlers)
+{
+    if (m_error != PPB_OK) [[unlikely]]
+        return m_error;
+
+    std::tuple<std::decay_t<Hs>...> tup(std::forward<Hs>(handlers)...);
+
+    const auto base = reinterpret_cast<uintptr_t>(m_input.data());
+
+    ppb_buf buf = make_ppb_buf();
+    const ppb_lexn_ret ret = ppb_lexn_impl(&buf, m_fields.size(), Schema::s_encoded_tags.data(),
+        m_fields.data(), bounds.fields(), bounds.bytes(), bounds.error_on_bytes());
+
+    m_error = ret.status;
+    m_input = std::span(reinterpret_cast<const std::byte *>(buf.buf), buf.size);
+
+    size_t range_size = reinterpret_cast<uintptr_t>(buf.buf) - base;
+    if constexpr (sizeof...(Hs) == 0)
+    {
+        return m_error;
+    }
+
+    // range_size == 0 should only happen on error or empty input.
+    if (m_error != PPB_OK || range_size == 0) [[unlikely]]
+    {
+        return m_error;
+    }
+
+    run_handlers(tup, base, range_size - 1, ret.first_field, ret.first_field + ret.field_range);
+    return m_error;
+}
+
+template <typename... Fs>
+template <typename... Hs>
+ppb_error
+reader<schema<Fs...>>::dispatch(Hs &&...handlers)
+{
+    std::tuple<std::decay_t<Hs>...> tup(std::forward<Hs>(handlers)...);
+    return dispatch_tuple(tup);
+}
+
+template <typename... Fs>
+template <typename... Hs>
+ppb_error
+reader<schema<Fs...>>::dispatch_tuple(std::tuple<Hs...> &handlers)
+{
+    if constexpr (sizeof...(Hs) == 0)
+        return m_error;
+
+    if (m_error != PPB_OK) [[unlikely]]
+        return m_error;
+
+    run_handlers(handlers, 1, std::numeric_limits<uintptr_t>::max() - 1);
+    return m_error;
+}
+
+template <typename... Fs>
+template <typename... Hs>
+[[gnu::noinline]] void
+reader<schema<Fs...>>::run_handlers(std::tuple<Hs...> &handlers, uintptr_t lower_bound,
+    uintptr_t range_size_inclusive, size_t begin, size_t end)
+{
+    detail::dispatch<Schema::num_fields()>(begin, end,
+        [&]<size_t I>(std::integral_constant<size_t, I>)
+        {
+            run_handler_for_idx<I>(handlers, lower_bound, range_size_inclusive);
+            return true;
+        });
+}
+
+template <typename... Fs>
+template <size_t idx, typename... Hs>
+[[gnu::always_inline]] void
+reader<schema<Fs...>>::run_handler_for_idx(std::tuple<Hs...> &handlers, uintptr_t lower_bound,
+    uintptr_t range_size_inclusive)
+{
+    const ppb_field &field = m_fields[idx];
+
+    // Find a handler for the schema field.
+    using Field = decltype(Schema::template field<idx>());
+    constexpr std::optional<size_t> handler_idx = detail::find_value_handler<Field::tag(), Field::wire(),
+        decltype(Field::extract_value(field, &m_error)), Hs...>();
+    if constexpr (handler_idx.has_value())
+    {
+        auto field_addr = reinterpret_cast<uintptr_t>(field.v.ptr);
+
+        if (field_addr - lower_bound <= range_size_inclusive) [[likely]]
+        {
+            enum ppb_error result = std::get<handler_idx.value()>(handlers).handler(
+                Field::extract_value(field, &m_error));
+            if (result != PPB_OK) [[unlikely]]
+            {
+                m_error = (m_error == PPB_OK) ? result : m_error;
+            }
+        }
+    }
 }
 
 }  // namespace ppb
