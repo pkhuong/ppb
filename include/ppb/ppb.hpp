@@ -6,14 +6,15 @@
 #include <bit>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
+#include <iterator>
 #include <limits>
 #include <optional>
 #include <span>
+#include <string_view>
 #include <tuple>
 #include <type_traits>
 #include <utility>
-
-static_assert(std::endian::native == std::endian::little, "ppb.hpp currently requires a little-endian host");
 
 namespace ppb
 {
@@ -51,6 +52,86 @@ template <auto K, field_semantics sem = field_semantics::repeated> struct i64;
 template <auto K, field_semantics sem = field_semantics::repeated> struct len;
 // An i32-encoded field
 template <auto K, field_semantics sem = field_semantics::repeated> struct i32;
+
+// Varint-backed scalar field types
+template <auto K, field_semantics sem = field_semantics::singular> struct int32;
+template <auto K, field_semantics sem = field_semantics::singular> struct int64;
+template <auto K, field_semantics sem = field_semantics::singular> struct sint32;
+template <auto K, field_semantics sem = field_semantics::singular> struct sint64;
+template <auto K, field_semantics sem = field_semantics::singular> struct uint32;
+template <auto K, field_semantics sem = field_semantics::singular> struct uint64;
+template <auto K, field_semantics sem = field_semantics::singular> struct boolean;
+template <auto K, typename Enum, field_semantics sem = field_semantics::singular,
+    typename UnderlyingType = std::underlying_type_t<Enum>>
+struct enumerated;
+
+// I32-backed scalar field types
+template <auto K, field_semantics sem = field_semantics::singular> struct fixed32;
+template <auto K, field_semantics sem = field_semantics::singular> struct sfixed32;
+template <auto K, field_semantics sem = field_semantics::singular> struct f32;
+
+// I64-backed scalar field types
+template <auto K, field_semantics sem = field_semantics::singular> struct fixed64;
+template <auto K, field_semantics sem = field_semantics::singular> struct sfixed64;
+template <auto K, field_semantics sem = field_semantics::singular> struct f64;
+
+// LEN-backed scalar field types
+template <auto K, field_semantics sem = field_semantics::singular> struct utf8string;
+template <auto K, typename Element = std::byte, field_semantics sem = field_semantics::singular> struct bytes;
+
+/*
+ * Wraps a fixed-width value stored as little-endian, unaligned bytes
+ * (the protobuf wire format for fixed32/sfixed32/fixed64/sfixed64/float/double).
+ * The conversion to `T` returns the host-order value, byte-swapping if
+ * the host is big-endian.
+ */
+template <typename T> struct [[gnu::packed]] le_packed
+{
+    static_assert(std::is_trivially_copyable_v<T>,
+        "ppb::le_packed requires a trivially copyable element type");
+    static_assert(sizeof(T) == 4 || sizeof(T) == 8, "ppb::le_packed only supports 4- or 8-byte values");
+
+    T value() const;
+    [[gnu::always_inline]] operator T() const { return value(); }
+
+private:
+    T x;
+};
+
+// Packed repeated field types
+template <auto K> struct packed_int32;
+template <auto K> struct packed_int64;
+template <auto K> struct packed_sint32;
+template <auto K> struct packed_sint64;
+template <auto K> struct packed_uint32;
+template <auto K> struct packed_uint64;
+template <auto K> struct packed_boolean;
+template <auto K, typename Enum, typename UnderlyingType = std::underlying_type_t<Enum>>
+struct packed_enumerated;
+template <auto K> struct packed_fixed32;
+template <auto K> struct packed_sfixed32;
+template <auto K> struct packed_f32;
+template <auto K> struct packed_fixed64;
+template <auto K> struct packed_sfixed64;
+template <auto K> struct packed_f64;
+
+// Unpacked repeated field types
+template <auto K> using unpacked_int32 = int32<K, field_semantics::repeated>;
+template <auto K> using unpacked_int64 = int64<K, field_semantics::repeated>;
+template <auto K> using unpacked_sint32 = sint32<K, field_semantics::repeated>;
+template <auto K> using unpacked_sint64 = sint64<K, field_semantics::repeated>;
+template <auto K> using unpacked_uint32 = uint32<K, field_semantics::repeated>;
+template <auto K> using unpacked_uint64 = uint64<K, field_semantics::repeated>;
+template <auto K> using unpacked_boolean = boolean<K, field_semantics::repeated>;
+template <auto K, typename E> using unpacked_enumerated = enumerated<K, E, field_semantics::repeated>;
+template <auto K> using unpacked_fixed32 = fixed32<K, field_semantics::repeated>;
+template <auto K> using unpacked_sfixed32 = sfixed32<K, field_semantics::repeated>;
+template <auto K> using unpacked_f32 = f32<K, field_semantics::repeated>;
+template <auto K> using unpacked_fixed64 = fixed64<K, field_semantics::repeated>;
+template <auto K> using unpacked_sfixed64 = sfixed64<K, field_semantics::repeated>;
+template <auto K> using unpacked_f64 = f64<K, field_semantics::repeated>;
+template <auto K> using unpacked_utf8string = utf8string<K, field_semantics::repeated>;
+template <auto K, typename Element> using unpacked_bytes = bytes<K, Element, field_semantics::repeated>;
 
 }  // namespace ppb
 
