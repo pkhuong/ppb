@@ -14,6 +14,8 @@ jobs:
         run: make CC=gcc CXX=g++ EXTRA_FLAGS=-mbmi2 test unit_cpp
       - name: build and test (sanitizers)
         run: make CC=clang CXX=clang++ EXTRA_FLAGS="-mbmi2 -fsanitize=address,undefined -fno-omit-frame-pointer" test unit_cpp
+      - name: build and test (msan)
+        run: make CC=clang CXX=clang++ EXTRA_FLAGS="-mbmi2 -fsanitize=memory -fno-omit-frame-pointer" test unit_cpp
       - name: gather coverage
         run: export EXTRA_FLAGS=-mbmi2 ; ./coverage.sh
       - name: Upload coverage to Codecov
@@ -46,6 +48,8 @@ jobs:
         run: make CC=gcc CXX=g++ test unit_cpp
       - name: build and test (sanitizers)
         run: make CC=clang CXX=clang++ EXTRA_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer" test unit_cpp
+      - name: build and test (msan)
+        run: make CC=clang CXX=clang++ EXTRA_FLAGS="-fsanitize=memory -fno-omit-frame-pointer" test unit_cpp
       - name: gather coverage
         run: ./coverage.sh
       - name: Upload coverage to Codecov
