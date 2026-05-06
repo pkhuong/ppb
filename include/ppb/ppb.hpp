@@ -189,6 +189,69 @@ template <typename... Fs> struct reader<schema<Fs...>>
     [[nodiscard]] constexpr size_t size() const noexcept { return m_input.size(); }
     [[nodiscard]] constexpr bool empty() const noexcept { return m_input.empty(); }
 
+    // Zero-initialized the fields array. This does not reset `error`
+    // or `error_field`.  Create a fresh reader from `reader::span()`
+    // to reset the sticky error state.
+    constexpr void reset_fields() noexcept { m_fields = {}; }
+
+    // Runs `prescan` with `bounds`, then invokes `init` with a const
+    // reference to `this` (use `reader::meta()` to gather metadata
+    // and preallocate the destination), and finally runs `lexn` on
+    // the input read by `prescan` (disregarding bounds), while
+    // invoking the handlers.
+    //
+    // Exits early when prescan reads 0 bytes.
+    //
+    // *Consumes* from the input span once `init` returns success!
+    // Call `reset_fields` after `parse` to prepare for the next message.
+    template <typename Init, typename... Hs>
+    [[nodiscard]] ppb_error parse(Init &&init, limit bounds = {}, Hs &&...handlers)
+    {
+        if (m_error != PPB_OK) [[unlikely]]
+            return m_error;
+
+        ppb_buf buf = make_ppb_buf();
+
+        ptrdiff_t num_bytes = ppb_prescan_impl(buf, m_fields.size(), Schema::s_encoded_tags.data(),
+            m_fields.data(), bounds.fields(), bounds.bytes(), bounds.error_on_bytes());
+
+        if (num_bytes <= 0) [[unlikely]]
+        {
+            m_error = ppb_error(num_bytes);
+            return m_error;
+        }
+
+        m_error = init(std::as_const(*this));
+        if (m_error != PPB_OK) [[unlikely]]
+            return m_error;
+
+        std::tuple<std::decay_t<Hs>...> tup(std::forward<Hs>(handlers)...);
+
+        const std::byte *const logical_end = m_input.data() + num_bytes;
+        const std::byte *base;
+        while ((base = reinterpret_cast<const std::byte *>(buf.buf)) < logical_end)
+        {
+            ppb_lexn_ret ret = ppb_lexn_with_hard_limit(&buf, size_t(logical_end - base), m_fields.size(),
+                Schema::s_encoded_tags.data(), m_fields.data(), std::numeric_limits<size_t>::max());
+
+            size_t range_size = size_t(reinterpret_cast<const std::byte *>(buf.buf) - base);
+            // empty range happens only on error or empty input
+            if (ret.status != PPB_OK || range_size == 0) [[unlikely]]
+            {
+                m_error = ret.status;
+                break;
+            }
+
+            run_handlers(tup, reinterpret_cast<uintptr_t>(base), range_size - 1, ret.first_field,
+                ret.first_field + ret.field_range);
+            if (m_error != PPB_OK) [[unlikely]]
+                break;
+        }
+
+        m_input = std::span(reinterpret_cast<const std::byte *>(buf.buf), buf.size);
+        return m_error;
+    }
+
     // Runs prescan (subject to `bounds`) on the input span.  When any `on()`
     // handlers are passed, dispatches to them after a successful prescan.
     // Each handler that matches a field we found on the wire is invoked with
@@ -352,6 +415,17 @@ private:
     std::array<ppb_field, Schema::num_fields()> m_fields = {};
 };
 
+// Wraps a function as a field handler for the Key, and potentially
+// for the wire type.
+//
+// The `reader`'s `parse` method (as well as the lower level
+// `prescan`, `lexn`, and `dispatch` methods) invokes the handler when
+// it matches a decoded field.
+//
+// Each handler is invoked with a `const ppb_field &`, and returns a
+// `enum ppb_error`; non-zero errors are piped back to the reader and
+// stop the lexing loop, if necessary (handlers for the same lexn
+// batch are still invoked).
 template <auto Key, wire_type wire = wire_type::any, typename Fn>
 [[nodiscard]] constexpr detail::value_handler<Key, wire, std::decay_t<Fn>>
 on(Fn &&handler)
