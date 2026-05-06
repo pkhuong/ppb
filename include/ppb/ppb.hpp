@@ -28,19 +28,29 @@ enum class wire_type : uint8_t
     any = 255,  // sentinel value for meta<>
 };
 
+// field semantics for `reader::parse`.
+enum class field_semantics : int8_t
+{
+    always_lexn = -1,  // always force lexn, even for a single occurrence
+    repeated = 0,  // we want to see everything
+    singular = 1,  // it's ok to do LWW if all the squashed values are equivalent
+    last_write_wins = 2,  // we only want to see the last value (regular proto semantics)
+    error = 127,  // just report a PPB_ERROR_CORRUPT_TAG if we see this
+};
+
 // PPB field descriptors all inherit from `field_base<K, T>`, which is-a
 // `field_generic_base`.
 struct field_generic_base;
 template <auto K, wire_type type> struct field_base;
 
 // A varint-encoded field
-template <auto K> struct varint;
+template <auto K, field_semantics sem = field_semantics::repeated> struct varint;
 // An i64-encoded field
-template <auto K> struct i64;
+template <auto K, field_semantics sem = field_semantics::repeated> struct i64;
 // A length-prefixed field
-template <auto K> struct len;
+template <auto K, field_semantics sem = field_semantics::repeated> struct len;
 // An i32-encoded field
-template <auto K> struct i32;
+template <auto K, field_semantics sem = field_semantics::repeated> struct i32;
 
 }  // namespace ppb
 
@@ -188,6 +198,7 @@ template <typename... Fs> struct reader<schema<Fs...>>
     [[nodiscard]] constexpr std::span<const std::byte> input() const noexcept { return m_input; }
     [[nodiscard]] constexpr size_t size() const noexcept { return m_input.size(); }
     [[nodiscard]] constexpr bool empty() const noexcept { return m_input.empty(); }
+    [[nodiscard]] constexpr std::optional<uint32_t> error_field() const noexcept { return m_error_field; }
 
     // Zero-initialized the fields array. This does not reset `error`
     // or `error_field`.  Create a fresh reader from `reader::span()`
@@ -221,11 +232,75 @@ template <typename... Fs> struct reader<schema<Fs...>>
             return m_error;
         }
 
+        // Check field semantics: error fields that appeared on the wire
+        // are an immediate failure.  Also determine whether any field
+        // forces a lexn pass.
+        bool has_error = false;
+        bool need_lexn = false;
+        [&]<size_t... Is>(std::index_sequence<Is...>)
+        {
+            auto scan = [&]<size_t I>(std::integral_constant<size_t, I>)
+            {
+                using Field = decltype(Schema::template field<I>());
+                const field_semantics semantics = Field::semantics();
+                const auto &meta = m_fields[I].m;
+
+                if constexpr (semantics == field_semantics::error)
+                {
+                    if (meta.num_occurrences > 0)
+                    {
+                        has_error = true;
+                        m_error_field = static_cast<uint32_t>(Field::tag()) * 8 +
+                            static_cast<uint32_t>(Field::wire());
+                    }
+
+                    return;
+                }
+
+                if constexpr (semantics == field_semantics::always_lexn)
+                {
+                    need_lexn |= meta.num_occurrences > 0;
+                    return;
+                }
+
+                if (meta.num_occurrences <= 1)
+                    return;  // single-occurrence never forces lexn
+
+                if constexpr (semantics == field_semantics::repeated)
+                {
+                    need_lexn = true;
+                    return;
+                }
+
+                if constexpr (semantics == field_semantics::singular)
+                {
+                    if (Field::wire() == wire_type::len || meta.lost_distinct_u64)
+                        need_lexn = true;
+                }
+
+                // last_write_wins: never forces lexn
+            };
+            (scan(std::integral_constant<size_t, Is> {}), ...);
+        }(std::make_index_sequence<Schema::num_fields()> {});
+
+        if (has_error) [[unlikely]]
+        {
+            m_error = PPB_ERROR_CORRUPT_TAG;
+            return m_error;
+        }
+
+        std::tuple<std::decay_t<Hs>...> tup(std::forward<Hs>(handlers)...);
+
         m_error = init(std::as_const(*this));
         if (m_error != PPB_OK) [[unlikely]]
             return m_error;
 
-        std::tuple<std::decay_t<Hs>...> tup(std::forward<Hs>(handlers)...);
+        if (!need_lexn) [[likely]]
+        {
+            run_handlers(tup, reinterpret_cast<uintptr_t>(m_input.data()), size_t(num_bytes));
+            m_input = m_input.subspan(size_t(num_bytes));
+            return m_error;
+        }
 
         const std::byte *const logical_end = m_input.data() + num_bytes;
         const std::byte *base;
@@ -412,6 +487,7 @@ private:
 
     std::span<const std::byte> m_input;
     ppb_error m_error = PPB_OK;
+    std::optional<uint32_t> m_error_field;
     std::array<ppb_field, Schema::num_fields()> m_fields = {};
 };
 

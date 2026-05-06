@@ -2,6 +2,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <ppb/ppb.hpp>
+#include <vector>
 
 static int g_fail_count = 0;
 static int g_check_count = 0;
@@ -837,6 +838,232 @@ test_reader_parse_per_batch_dispatch()
     CHECK(r.empty());
 }
 
+// error semantics: field present on wire -> CORRUPT_TAG, init not called.
+static void
+test_reader_parse_semantics_error_field_present()
+{
+    using S = ppb::schema<ppb::varint<1, ppb::field_semantics::error>>;
+    static const uint8_t wire[] = { 0x08, 0x01 };  // field 1 varint 1
+    ppb::reader<S> r(wire, sizeof(wire));
+
+    int init_calls = 0;
+
+    CHECK(r.parse(
+              [&](const ppb::reader<S> &) -> ppb_error
+              {
+                  init_calls++;
+                  return PPB_OK;
+              }) == PPB_ERROR_CORRUPT_TAG);
+    CHECK(init_calls == 0);
+    CHECK(r.error() == PPB_ERROR_CORRUPT_TAG);
+    // tag = field_number * 8 + wire_type = 1*8 + 0 (varint) = 8
+    CHECK(r.error_field().has_value());
+    CHECK(r.error_field().value() == 8);
+}
+
+// field with error semantics NOT on wire: parse succeeds, init called.
+static void
+test_reader_parse_semantics_error_field_absent()
+{
+    using S = ppb::schema<ppb::varint<1, ppb::field_semantics::error>>;
+    static const uint8_t wire[] = { 0x10, 0x01 };  // field 2 varint 1 (not in schema)
+    ppb::reader<S> r(wire, sizeof(wire));
+
+    int init_calls = 0;
+
+    CHECK(r.parse(
+              [&](const ppb::reader<S> &) -> ppb_error
+              {
+                  init_calls++;
+                  return PPB_OK;
+              }) == PPB_OK);
+    CHECK(init_calls == 1);
+    CHECK(r.empty());
+    CHECK(!r.error_field().has_value());
+}
+
+// repeated, single occurrence: no lexn needed, handler called once.
+static void
+test_reader_parse_semantics_repeated_single()
+{
+    using S = ppb::schema<ppb::varint<1, ppb::field_semantics::repeated>>;
+    static const uint8_t wire[] = { 0x08, 0x2a };  // field 1 varint 42
+    ppb::reader<S> r(wire, sizeof(wire));
+
+    int calls = 0;
+
+    CHECK(r.parse([](const ppb::reader<S> &) -> ppb_error { return PPB_OK; }, {},
+              ppb::on<1>(
+                  [&](const ppb_field &) -> ppb_error
+                  {
+                      calls++;
+                      return PPB_OK;
+                  })) == PPB_OK);
+    CHECK(calls == 1);
+    CHECK(r.empty());
+}
+
+// repeated, multiple occurrences: forces lexn, handler called per occurrence.
+static void
+test_reader_parse_semantics_repeated_multi()
+{
+    using S = ppb::schema<ppb::varint<1, ppb::field_semantics::repeated>>;
+    static const uint8_t wire[] = {
+        0x08, 0x01,  /* field 1 varint 1 */
+        0x08, 0x02,  /* field 1 varint 2 */
+    };
+    ppb::reader<S> r(wire, sizeof(wire));
+
+    int calls = 0;
+
+    CHECK(r.parse([](const ppb::reader<S> &) -> ppb_error { return PPB_OK; }, {},
+              ppb::on<1>(
+                  [&](const ppb_field &) -> ppb_error
+                  {
+                      calls++;
+                      return PPB_OK;
+                  })) == PPB_OK);
+    // Repeated field -> one lexn call per occurrence.
+    CHECK(calls == 2);
+    CHECK(r.empty());
+}
+
+// last_write_wins, multiple occurrences: never forces lexn, handler sees
+// the prescan aggregate (single call).
+static void
+test_reader_parse_semantics_lww_multi()
+{
+    using S = ppb::schema<ppb::varint<1, ppb::field_semantics::last_write_wins>>;
+    static const uint8_t wire[] = {
+        0x08, 0x01,  /* field 1 varint 1 */
+        0x08, 0x02,  /* field 1 varint 2 */
+    };
+    ppb::reader<S> r(wire, sizeof(wire));
+
+    int calls = 0;
+
+    CHECK(r.parse([](const ppb::reader<S> &) -> ppb_error { return PPB_OK; }, {},
+              ppb::on<1>(
+                  [&](const ppb_field &) -> ppb_error
+                  {
+                      calls++;
+                      return PPB_OK;
+                  })) == PPB_OK);
+    CHECK(calls == 1);  // no lexn -> LWW
+    CHECK(r.empty());
+}
+
+// singular, multiple occurrences with distinct values: lost_distinct_u64
+// forces lexn, handler called per occurrence.
+static void
+test_reader_parse_semantics_singular_distinct()
+{
+    using S = ppb::schema<ppb::varint<1, ppb::field_semantics::singular>>;
+    static const uint8_t wire[] = {
+        0x08, 0x01,  /* field 1 varint 1 */
+        0x08, 0x02,  /* field 1 varint 2 (distinct) */
+    };
+    ppb::reader<S> r(wire, sizeof(wire));
+
+    int calls = 0;
+
+    CHECK(r.parse([](const ppb::reader<S> &) -> ppb_error { return PPB_OK; }, {},
+              ppb::on<1>(
+                  [&](const ppb_field &) -> ppb_error
+                  {
+                      calls++;
+                      return PPB_OK;
+                  })) == PPB_OK);
+    CHECK(calls == 2);  // distinct values -> lexn forced -> per-occurrence
+    CHECK(r.empty());
+}
+
+// singular, multiple occurrences all equal: lost_distinct_u64 stays 0,
+// no lexn needed, handler called once.
+static void
+test_reader_parse_semantics_singular_equal()
+{
+    using S = ppb::schema<ppb::varint<1, ppb::field_semantics::singular>>;
+    static const uint8_t wire[] = {
+        0x08, 0x01,  /* field 1 varint 1 */
+        0x08, 0x01,  /* field 1 varint 1 (same value) */
+    };
+    ppb::reader<S> r(wire, sizeof(wire));
+
+    int calls = 0;
+
+    CHECK(r.parse([](const ppb::reader<S> &) -> ppb_error { return PPB_OK; }, {},
+              ppb::on<1>(
+                  [&](const ppb_field &) -> ppb_error
+                  {
+                      calls++;
+                      return PPB_OK;
+                  })) == PPB_OK);
+    CHECK(calls == 1);  // equal values -> no lexn
+    CHECK(r.empty());
+}
+
+// singular LEN, multiple occurrences: wire type LEN always forces lexn,
+// regardless of lost_distinct_u64 (which is always 0 for LEN).
+static void
+test_reader_parse_semantics_singular_len_multi()
+{
+    using S = ppb::schema<ppb::len<1, ppb::field_semantics::singular>>;
+    static const uint8_t wire[] = {
+        0x0a, 0x01, 0x42,  /* field 1 LEN "B" */
+        0x0a, 0x01, 0x42,  /* field 1 LEN "B" (same payload) */
+    };
+    ppb::reader<S> r(wire, sizeof(wire));
+
+    int calls = 0;
+
+    CHECK(r.parse([](const ppb::reader<S> &) -> ppb_error { return PPB_OK; }, {},
+              ppb::on<1>(
+                  [&](const ppb_field &) -> ppb_error
+                  {
+                      calls++;
+                      return PPB_OK;
+                  })) == PPB_OK);
+    CHECK(calls == 2);  // LEN -> lexn forced
+    CHECK(r.empty());
+}
+
+// always_lexn forces lexn, so handlers fire in wire order, not schema order.
+// The wire has field 2 before field 1; lexn delivers field 2 first.
+static void
+test_reader_parse_semantics_always_lexn_wire_order()
+{
+    using S = ppb::schema<ppb::varint<1, ppb::field_semantics::repeated>,
+        ppb::varint<2, ppb::field_semantics::always_lexn>>;
+    static const uint8_t wire[] = {
+        0x10, 0x01,  /* field 2 varint 1 (higher tag, but on the wire first) */
+        0x08, 0x02,  /* field 1 varint 2 */
+    };
+    ppb::reader<S> r(wire, sizeof(wire));
+
+    std::vector<int> order;
+
+    CHECK(r.parse([](const ppb::reader<S> &) -> ppb_error { return PPB_OK; }, {},
+              ppb::on<1>(
+                  [&](const ppb_field &) -> ppb_error
+                  {
+                      order.push_back(1);
+                      return PPB_OK;
+                  }),
+              ppb::on<2>(
+                  [&](const ppb_field &) -> ppb_error
+                  {
+                      order.push_back(2);
+                      return PPB_OK;
+                  })) == PPB_OK);
+
+    // lexn delivers in wire order: field 2 then field 1.
+    CHECK(order.size() == 2);
+    CHECK(order[0] == 2);
+    CHECK(order[1] == 1);
+    CHECK(r.empty());
+}
+
 int
 main()
 {
@@ -878,6 +1105,16 @@ main()
     test_reader_parse_handler_error_runs_full_batch();
     test_reader_parse_sticky_error_short_circuits();
     test_reader_parse_per_batch_dispatch();
+
+    test_reader_parse_semantics_error_field_present();
+    test_reader_parse_semantics_error_field_absent();
+    test_reader_parse_semantics_repeated_single();
+    test_reader_parse_semantics_repeated_multi();
+    test_reader_parse_semantics_lww_multi();
+    test_reader_parse_semantics_singular_distinct();
+    test_reader_parse_semantics_singular_equal();
+    test_reader_parse_semantics_singular_len_multi();
+    test_reader_parse_semantics_always_lexn_wire_order();
 
     std::printf("\n%d checks, %d failures\n", g_check_count, g_fail_count);
     return g_fail_count > 0 ? 1 : 0;
