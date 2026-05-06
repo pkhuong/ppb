@@ -16,9 +16,108 @@
 #include <type_traits>
 #include <utility>
 
+// PPB C++ wrapper: a header-only, allocation-free, type-safe facade
+// over the C lexer in <ppb/ppb.h>.
+//
+// The wrapper compiles a typed `ppb::schema<...>` down to the
+// encoded-tag arrays the C library consumes, then dispatches matched
+// fields to caller-supplied `ppb::on<Key>(callable)` handlers with
+// natural C++ argument types.
+//
+// Like the C library, the wrapper never allocates and instead borrows
+// the encoded input bytes: callers pass in a byte span
+// (`std::span<const std::byte>`) and decoded values either point back
+// into that span (string_view, span<const Element>, lazy varint
+// views) or are returned by value (scalars).  Lifetimes are the
+// caller's responsibility: pretty much anything passed to handlers
+// borrows from the input span.
+//
+// The C++ library never calls `ppb_validate_tags`: `ppb::schema<>`
+// instead performs the same validation at compile-time.
+//
+// Public API surface:
+//   - `ppb::schema<Fs...>`: type-list of field descriptors, validated
+//     at compile time (non-empty, single Key type, strictly ascending
+//     encoded tags, in-range field numbers).
+//   - `ppb::reader<Schema>`: stateful driver around a schema and an
+//     input span; owns the per-field state buffer.
+//   - `reader::parse(init, limit, handlers...)`: prescan + optional
+//     lexn-loop + handler dispatch.  Use `init` to inspect prescan
+//     metadata and preallocate.  Lower-level entry points
+//     (`prescan`, `lexn`, `dispatch`) are also available.
+//   - `ppb::on<Key, wire = any>(callable)`: handler factory.
+//     Multiple handlers can share a key; the wrapper picks the one
+//     whose argument type matches the matched field, and reports
+//     ambiguity at compile time.
+//   - `ppb::limit`: byte / field caps, hard or soft.
+//
+// Field descriptors:
+//   - Wire-typed primitives: `varint`, `i64`, `len`, `i32`.  Handlers
+//     receive `const ppb_field &`.
+//   - Typed scalars (varint-backed): `int32`, `int64`, `sint32`,
+//     `sint64`, `uint32`, `uint64`, `boolean`, `enumerated<K, Enum>`.
+//   - Typed scalars (i32/i64-backed): `fixed32`, `sfixed32`, `f32`,
+//     `fixed64`, `sfixed64`, `f64`.
+//   - LEN-backed: `utf8string` (-> `std::string_view`),
+//     `bytes<K, Element=std::byte>` (-> `std::span<const Element>`).
+//   - Packed repeated: `packed_fixed32`/`sfixed32`/`f32`/`fixed64`/
+//     `sfixed64`/`f64` (-> span of `le_packed<T>`),
+//     `packed_int32`/`int64`/`sint32`/`sint64`/`uint32`/`uint64`/
+//     `boolean`/`enumerated` (-> lazy varint view).
+//   - Unpacked repeated aliases: `unpacked_<scalar>` =
+//     `<scalar><K, field_semantics::repeated>`.
+//
+// Field semantics (`enum class field_semantics`, see the enum's own
+// comment for full details) control how `parse()` dispatches when the
+// same field appears multiple times: `repeated` and `always_lexn`
+// force per-occurrence dispatch; `last_write_wins` always squashes;
+// `singular` squashes when the C lexer reports the squash was
+// lossless (varint/i32/i64 with bit-identical values), but always
+// forces lexn for LEN since the C lexer does not compare LEN
+// payloads; `error` rejects any occurrence with PPB_ERROR_CORRUPT_TAG.
+//
+// Error handling:
+//   - `reader::error()` is a sticky `ppb_error`: once set, every
+//     subsequent `prescan`/`lexn`/`parse`/`dispatch` short-circuits.
+//     `reset_fields()` does *not* clear it; construct a fresh reader
+//     to recover.
+//   - `reader::error_field()` reports the encoded tag of any
+//     `field_semantics::error` field that triggered, as
+//     `field_number * 8 + wire_type`.
+//   - Handler errors are accumulated first-write-wins; every handler
+//     in the current lexn batch still runs after a sibling errors.
+//   - Soft decoding errors inside `extract_value` (e.g. misaligned
+//     `bytes<K, Element>` payload, mid-payload truncated packed
+//     varint) set the reader's error and hand the handler a partial
+//     result (an empty span, a view that exhausts at the failure).
+//
+// Compile-time diagnostics:
+//   The header makes heavy use of `static_assert`. Field-tag range,
+//   wire type, schema ordering / non-emptiness / single-Key-type, and
+//   handler key-type / arg-type matching are all caught at compile
+//   time.  `tests/test_ppb_cpp_compile_fail.cc` enumerates the
+//   diagnostics; `tests/test_ppb_cpp_static.cc` covers the matching
+//   positive cases.
+//
+// Limitations:
+//   - The C library's catch-all entry (`PPB_TAG(-1, wire)`) is not
+//     reachable from the C++ schema, which restricts field numbers to
+//     [1, 2**29).  Use the C API directly if you need catch-all
+//     dispatch.
+//   - `enumerated<K, Enum>` does not validate that wire values name
+//     a declared enumerator: the cast goes through `Enum`'s underlying
+//     type so it is always well-defined, but out-of-range values may
+//     reach the handler.
+
 namespace ppb
 {
 
+// Protobuf wire types, matching `enum ppb_wire_type`.
+//
+// `any` is a sentinel used by `reader::meta<>()` and `ppb::on<>()` to
+// mean "match all wire types associated with this key".  It is not a
+// valid wire type for a field descriptor; `field_base` static-asserts
+// against it.
 enum class wire_type : uint8_t
 {
     varint = PPB_WIRE_VARINT,
@@ -29,7 +128,39 @@ enum class wire_type : uint8_t
     any = 255,  // sentinel value for meta<>
 };
 
-// field semantics for `reader::parse`.
+// Per-field policy used by `reader::parse()` to decide how to dispatch
+// when the same field appears multiple times on the wire.  All
+// semantics are advisory: handler dispatch is the only behavior that
+// changes; prescan metadata is always aggregated the same way.
+//
+//   always_lexn     Force a lexn pass even on a single occurrence, so
+//                   handlers are invoked in wire order.  Default for
+//                   the raw `varint` / `i64` / `len` / `i32` types.
+//
+//   repeated        We want to see every occurrence.  A single
+//                   occurrence is dispatched once from the prescan
+//                   aggregate (no extra lexn); two or more occurrences
+//                   force a lexn pass.
+//
+//   singular        Last-write-wins is acceptable *iff* the squashed
+//                   values are bit-identical (the C lexer reports this
+//                   via `lost_distinct_u64`).  Otherwise we force a
+//                   lexn pass so the handler sees each occurrence.
+//
+//                   N.B.: for LEN fields, `lost_distinct_u64` is never
+//                   set (the C lexer does not compare LEN payloads),
+//                   so any LEN field with two or more occurrences
+//                   forces a lexn pass.  Use `last_write_wins` if you
+//                   just want to drop earlier LEN payloads.
+//
+//   last_write_wins Only the last occurrence is dispatched, regardless
+//                   of wire type.  Matches proto3 default field
+//                   semantics for scalars.
+//
+//   error           Any occurrence is a parse error: parse() returns
+//                   PPB_ERROR_CORRUPT_TAG, sets `reader::error_field()`
+//                   to the encoded tag (field_number * 8 + wire_type),
+//                   and does not invoke `init` or any handlers.
 enum class field_semantics : int8_t
 {
     always_lexn = -1,  // always force lexn, even for a single occurrence
@@ -45,46 +176,58 @@ struct field_generic_base;
 template <auto K, wire_type type> struct field_base;
 
 // A varint-encoded field
-template <auto K, field_semantics sem = field_semantics::repeated> struct varint;
+template <auto K, field_semantics sem = field_semantics::always_lexn> struct varint;
 // An i64-encoded field
-template <auto K, field_semantics sem = field_semantics::repeated> struct i64;
+template <auto K, field_semantics sem = field_semantics::always_lexn> struct i64;
 // A length-prefixed field
-template <auto K, field_semantics sem = field_semantics::repeated> struct len;
+template <auto K, field_semantics sem = field_semantics::always_lexn> struct len;
 // An i32-encoded field
-template <auto K, field_semantics sem = field_semantics::repeated> struct i32;
+template <auto K, field_semantics sem = field_semantics::always_lexn> struct i32;
 
-// Varint-backed scalar field types
-template <auto K, field_semantics sem = field_semantics::singular> struct int32;
-template <auto K, field_semantics sem = field_semantics::singular> struct int64;
-template <auto K, field_semantics sem = field_semantics::singular> struct sint32;
-template <auto K, field_semantics sem = field_semantics::singular> struct sint64;
-template <auto K, field_semantics sem = field_semantics::singular> struct uint32;
-template <auto K, field_semantics sem = field_semantics::singular> struct uint64;
-template <auto K, field_semantics sem = field_semantics::singular> struct boolean;
-template <auto K, typename Enum, field_semantics sem = field_semantics::singular,
+// Varint-backed scalar field types (proto2 last-write-wins semantics by default)
+template <auto K, field_semantics sem = field_semantics::last_write_wins> struct int32;
+template <auto K, field_semantics sem = field_semantics::last_write_wins> struct int64;
+template <auto K, field_semantics sem = field_semantics::last_write_wins> struct sint32;
+template <auto K, field_semantics sem = field_semantics::last_write_wins> struct sint64;
+template <auto K, field_semantics sem = field_semantics::last_write_wins> struct uint32;
+template <auto K, field_semantics sem = field_semantics::last_write_wins> struct uint64;
+template <auto K, field_semantics sem = field_semantics::last_write_wins> struct boolean;
+
+// Varint-backed enum field.  `Enum` must have a fixed underlying type
+// (e.g. `enum class Color : uint32_t`).  Wire values are first
+// converted to `Enum`'s underlying type and then to `Enum`, which is
+// well-defined for any 64-bit input.  No range checking is performed:
+// values that don't name an enumerator reach the handler as the
+// corresponding bit pattern in the underlying type.
+//
+// proto2 last-write-wins semantics by default.
+template <auto K, typename Enum, field_semantics sem = field_semantics::last_write_wins,
     typename UnderlyingType = std::underlying_type_t<Enum>>
 struct enumerated;
 
-// I32-backed scalar field types
-template <auto K, field_semantics sem = field_semantics::singular> struct fixed32;
-template <auto K, field_semantics sem = field_semantics::singular> struct sfixed32;
-template <auto K, field_semantics sem = field_semantics::singular> struct f32;
+// I32-backed scalar field types. proto2 last-write-wins semantics by default
+template <auto K, field_semantics sem = field_semantics::last_write_wins> struct fixed32;
+template <auto K, field_semantics sem = field_semantics::last_write_wins> struct sfixed32;
+template <auto K, field_semantics sem = field_semantics::last_write_wins> struct f32;
 
-// I64-backed scalar field types
-template <auto K, field_semantics sem = field_semantics::singular> struct fixed64;
-template <auto K, field_semantics sem = field_semantics::singular> struct sfixed64;
-template <auto K, field_semantics sem = field_semantics::singular> struct f64;
+// I64-backed scalar field types. proto2 last-write-wins semantics by default
+template <auto K, field_semantics sem = field_semantics::last_write_wins> struct fixed64;
+template <auto K, field_semantics sem = field_semantics::last_write_wins> struct sfixed64;
+template <auto K, field_semantics sem = field_semantics::last_write_wins> struct f64;
 
-// LEN-backed scalar field types
-template <auto K, field_semantics sem = field_semantics::singular> struct utf8string;
-template <auto K, typename Element = std::byte, field_semantics sem = field_semantics::singular> struct bytes;
+// LEN-backed scalar field types. proto2 last-write-wins semantics by default
+template <auto K, field_semantics sem = field_semantics::last_write_wins> struct utf8string;
+template <auto K, typename Element = std::byte, field_semantics sem = field_semantics::last_write_wins>
+struct bytes;
 
-/*
- * Wraps a fixed-width value stored as little-endian, unaligned bytes
- * (the protobuf wire format for fixed32/sfixed32/fixed64/sfixed64/float/double).
- * The conversion to `T` returns the host-order value, byte-swapping if
- * the host is big-endian.
- */
+// Wraps a fixed-width value stored as little-endian, unaligned bytes
+// (the protobuf wire format for fixed32/sfixed32/fixed64/sfixed64/
+// float/double).  Conversion to `T` returns the host-order value,
+// byte-swapping if the host is big-endian.
+//
+// The type is `[[gnu::packed]]` so that `alignof(le_packed<T>) == 1`,
+// which lets `bytes<K, le_packed<T>>` reinterpret a LEN payload as a
+// span of `le_packed<T>` regardless of payload alignment.
 template <typename T> struct [[gnu::packed]] le_packed
 {
     static_assert(std::is_trivially_copyable_v<T>,
@@ -142,7 +285,18 @@ template <auto K, typename Element> using unpacked_bytes = bytes<K, Element, fie
 namespace ppb
 {
 
-// A schema is a type list of field types.
+// Compile-time schema: a strictly-ascending type list of field descriptors.
+//
+// All fields must share the same `Key` type (an `enum class`), except
+// for unknown fields, which have no key at all.  Tags must be in
+// strictly ascending encoded order; when the same field number
+// appears with multiple wire types, list them in `enum ppb_wire_type`
+// order (varint, i64, len, i32).
+//
+// `field<I>()` returns a default-constructed instance of the I-th
+// field type; use `decltype(schema::template field<I>())` to recover
+// the type itself.  `s_encoded_tags` is the parallel array of
+// `ppb_encoded_tag`s that the C lexer consumes.
 template <typename... Fs> struct schema : private detail::schema_impl<Fs...>
 {
 private:
@@ -179,8 +333,19 @@ public:
     using typename impl::field_range;
 };
 
-// Limit on the number of fields processed at a time, and hard/soft
-// limit on the number of bytes lexed.
+// Bundles the `(max_fields, max_bytes, error_on_bytes)` triple for
+// `ppb_prescan_*` / `ppb_lexn_*`.
+//
+// Construct with one of the named factories:
+//   limit::max_fields(n)         cap toplevel-field count
+//   limit::hard(bytes [, n])     stop at or after `bytes` and error if exceeded
+//   limit::soft(bytes [, n])     stop at or after `bytes`, no error if exceeded
+//
+// The `with_*` builders chain additional caps onto an existing limit.
+// Note that `with_max_bytes` leaves the byte-limit-error code alone, so
+// chaining `limit::max_fields(n).with_max_bytes(b)` produces a *soft*
+// byte limit; for a hard one, use `with_hard_limit` (or the `hard`
+// factory).
 struct limit
 {
 public:
@@ -228,6 +393,10 @@ public:
         return ret;
     }
 
+    // Sets the byte cap without changing the byte-limit error policy.
+    // On a default-constructed limit this produces a soft limit;
+    // chain after `with_hard_limit`/`with_soft_limit` to override
+    // only the cap.
     constexpr limit with_max_bytes(size_t max_bytes) const noexcept
     {
         limit ret = *this;
@@ -245,17 +414,28 @@ private:
     ppb_error m_error_on_bytes = PPB_OK;
 };
 
-// Wraps a function as a field handler for the Key, and potentially
-// for the wire type.
+// Wraps `handler` as a value handler bound to (Key, wire).
 //
-// The `reader`'s `parse` method (as well as the lower level
-// `prescan`, `lexn`, and `dispatch` methods) invokes the handler when
-// it matches a decoded field.
+// `reader::parse()` (and `prescan` / `lexn` / `dispatch`) invokes the
+// handler when a decoded field matches.  The handler function must be
+// invocable with whatever the matched field's `extract_value`
+// returns: typed scalars yield typed arguments, `varint`/`i64`/`len`/
+// `i32` yield `const ppb_field &`, and packed varint fields yield a
+// lazy view (see `packed_int32` etc.).
 //
-// Each handler is invoked with a `const ppb_field &`, and returns a
-// `enum ppb_error`; non-zero errors are piped back to the reader and
-// stop the lexing loop, if necessary (handlers for the same lexn
-// batch are still invoked).
+// The `Key` template argument must have the same C++ type as the
+// schema's `Key`: mixing a plain integer literal with an
+// `enum class`-keyed schema (or vice versa) is a compile error.
+//
+// `wire` defaults to `wire_type::any`, which matches every wire type
+// associated with `Key` in the schema.  Specify a concrete wire type
+// to disambiguate when a schema lists the same key under multiple
+// wire types.
+//
+// Each handler returns `ppb_error`; non-`PPB_OK` returns are
+// accumulated into the reader's sticky error (first-write-wins) and
+// stop further lexn batches, but every handler in the *current* batch
+// still runs.
 template <auto Key, wire_type wire = wire_type::any, typename Fn>
 [[nodiscard]] constexpr detail::value_handler<Key, wire, std::decay_t<Fn>>
 on(Fn &&handler)
@@ -263,13 +443,35 @@ on(Fn &&handler)
     return detail::value_handler<Key, wire, std::decay_t<Fn>> { std::forward<Fn>(handler) };
 }
 
-// Stateful reader for a schema / span.
+// Stateful reader for a schema and a byte span.
+//
+// Holds a span of unconsumed input, a sticky `ppb_error`, an optional
+// `error_field` (set when `field_semantics::error` triggers), and an
+// array of per-field state populated by prescan / lexn.  The reader
+// itself is trivially copyable; copies are independent snapshots that
+// don't share input ownership (there is none) nor decoded state.
+//
+// Lifecycle:
+//   1. Construct with the input bytes.
+//   2. Call `parse()` (or the lower-level `prescan` / `lexn`) with
+//      `ppb::on<>(...)` handlers.
+//   3. To process the next message with the same reader, point the
+//      reader at the new bytes and call `reset_fields()`; see
+//      `reset_fields()` for the sticky-error caveat.
+//
+// The `error()`, `error_field()`, and `unknown_field()` state is
+// sticky.  Construct a fresh `reader` to clear that state.
 template <typename Schema> struct reader;
 template <typename... Fs> struct reader<schema<Fs...>>
 {
     using Schema = schema<Fs...>;
 
     constexpr reader() noexcept = default;
+
+    // Constructs a reader over `input`.  Spans larger than
+    // `PTRDIFF_MAX` are rejected at construction by setting the
+    // sticky error to `PPB_ERROR_TRUNCATED_DATA` (the C lexer's
+    // invariant requires `size <= PTRDIFF_MAX`).
     constexpr reader(std::span<const std::byte> input) noexcept
         : m_input(input)
     {
@@ -290,67 +492,133 @@ template <typename... Fs> struct reader<schema<Fs...>>
 
     constexpr ~reader() noexcept = default;
 
-    // The `ppb_error` for a reader starts as PPB_OK, and remains sticky afterward.
+    // Returns the reader's sticky error (initially `PPB_OK`).  Once set
+    // to a non-`PPB_OK` value, the error stays set: subsequent calls to
+    // `prescan`, `lexn`, `parse`, and `dispatch` short-circuit and
+    // return that error without further work.  `reset_fields()` does
+    // *not* clear it; use a fresh reader to recover.
     //
-    // Once the error is non-zero, we stop trying to prescan or lex bytes.
+    // **Once the error is non-zero, we stop trying to do additional work!**
     [[nodiscard]] constexpr ppb_error error() const noexcept { return m_error; }
+
+    // Returns the *unconsumed* portion of the input, not the original
+    // span.  After a `lexn`/`parse`, the prefix that was successfully
+    // lexed is no longer reachable from the reader.  Use
+    // `size() == 0` / `empty()` to detect end-of-input.
     [[nodiscard]] constexpr std::span<const std::byte> input() const noexcept { return m_input; }
     [[nodiscard]] constexpr size_t size() const noexcept { return m_input.size(); }
     [[nodiscard]] constexpr bool empty() const noexcept { return m_input.empty(); }
+
+    // Encoded tag of the field that triggered `field_semantics::error`,
+    // or `nullopt` if no such trigger has occurred.  The encoding matches
+    // the protobuf wire tag: `field_number * 8 + wire_type`.  Only set by
+    // `parse()` for `field_semantics::error`; not cleared by `reset_fields()`.
     [[nodiscard]] constexpr std::optional<uint32_t> error_field() const noexcept { return m_error_field; }
 
-    // Zero-initialized the fields array. This does not reset `error`
-    // or `error_field`.  Create a fresh reader from `reader::span()`
-    // to reset the sticky error state.
+    // Zeroes the per-field metadata array so the reader can process
+    // a fresh message.
+    //
+    // Does *not* reset `error()` or `error_field()`: the sticky-error
+    // model is intentional, and a reader that has already failed cannot
+    // be revived this way.  Construct a new reader instead.
+    //
+    // Typical loop:
+    //
+    //   ppb::reader<S> r(first_message);
+    //   for (;;) {
+    //       if (r.parse(init, {}, handlers...) != PPB_OK) break;
+    //       // ... use decoded values ...
+    //       r = ppb::reader<S>(next_message);
+    //   }
+    //
+    // `reset_fields()` itself is mostly useful when re-running
+    // prescan/lexn on the same bytes (e.g. different handlers against
+    // an unchanged span), not for stream processing.
     constexpr void reset_fields() noexcept { m_fields = {}; }
 
-    // Runs `prescan` with `bounds`, then invokes `init` with a const
-    // reference to `this` (use `reader::meta()` to gather metadata
-    // and preallocate the destination), and finally runs `lexn` on
-    // the input read by `prescan` (disregarding bounds), while
-    // invoking the handlers.
+    // High-level driver: prescan + optional lexn pass + handler dispatch.
     //
-    // Exits early when prescan reads 0 bytes.
+    // 1. Run `ppb_prescan` over the input span subject to `bounds`.
+    // 2. Inspect each schema entry's `field_semantics`:
+    //      - `error` fields seen on the wire: parse() fails with
+    //        `PPB_ERROR_CORRUPT_TAG`, `error_field()` is set, `init` is
+    //        not called.
+    //      - Otherwise determine whether any field forces a lexn pass
+    //        (see `field_semantics`).
+    // 3. Call `init(std::as_const(*this))`.  Use the snapshot to inspect
+    //    `meta<Key>()` and preallocate per-message storage.  If `init`
+    //    returns non-`PPB_OK`, the error is recorded and the input span
+    //    is *not* advanced; the next call to `parse()` will short-circuit
+    //    on the sticky error.
+    // 4. If no lexn pass is needed: dispatch handlers once with the
+    //    prescan-aggregated values, then advance the input past the
+    //    prescanned bytes.
+    // 5. Otherwise: run `ppb_lexn` in a loop, dispatching handlers per
+    //    batch.  The input span advances as bytes are consumed; on a
+    //    handler error or lexn error the loop stops with the input span
+    //    pointing past the last fully-consumed batch.
     //
-    // *Consumes* from the input span once `init` returns success!
-    // Call `reset_fields` after `parse` to prepare for the next message.
+    // Exits early with `PPB_OK` (without invoking `init`) when prescan
+    // reports zero bytes, e.g., on empty input, `limit::max_fields(0)`,
+    // or a soft byte limit at offset zero.  Callers who need `init` to
+    // run even on empty input should special-case that themselves.
+    //
+    // Handlers' return values follow the same first-write-wins
+    // accumulation as `lexn`: every handler in the current batch is
+    // invoked even if an earlier one errored.
+    //
+    // *Consumes* from the input span!
     template <typename Init, typename... Hs>
     [[nodiscard]] ppb_error parse(Init &&init, limit bounds = {}, Hs &&...handlers);
 
-    // Runs prescan (subject to `bounds`) on the input span.  When any `on()`
-    // handlers are passed, dispatches to them after a successful prescan.
-    // Each handler that matches a field we found on the wire is invoked with
-    // the corresponding `struct ppb_field`, and must return a `ppb_error`
-    // (errors are accumulated into the reader's error, with first-write-wins,
-    // but all handlers are invoked).
+    // Runs `ppb_prescan` over the input span subject to `bounds`.  When
+    // any `on()` handlers are passed, dispatches them once using the
+    // prescan-aggregated values (last-occurrence semantics for scalars;
+    // LEN payloads are the last seen on the wire).
     //
-    // Returns a ppb_error (negative value) on error, or a non-negative
-    // number of bytes read by the `prescan` call.
+    // Returns the number of bytes prescanned (>= 0) on success, or a
+    // negative `ppb_error` value.  Does *not* advance the input span;
+    // call `lexn`/`parse` to consume bytes.
+    //
+    // Handler errors are folded into the reader's sticky error; the
+    // returned value reflects them as well (negative on error).
     template <typename... Hs> [[nodiscard]] ptrdiff_t prescan(limit bounds = {}, Hs &&...handlers);
 
-    // Returns the metadata associated with `key`.
+    // Returns the prescan-aggregated `ppb_field_meta` for `key`.
     //
-    // Errors at compile-time if there is no such key (or key/wire
-    // type pair) in the schema.
+    // By default merges metadata across all schema entries that match
+    // `key` (i.e., the same field number under different wire types);
+    // pass an explicit `wire` to read just one entry's metadata.
     //
-    // By default, merges the metadata for all wire types associated
-    // with `key`; specify a `wire` type to avoid merging and return
-    // only the exact hit.
+    // Compile-error when `key` (or the `(key, wire)` pair) is not in the
+    // schema.  Before the first `prescan`/`parse`, returns a
+    // zero-initialized `ppb_field_meta`.
     template <typename Schema::Key key, wire_type wire = wire_type::any>
     constexpr ppb_field_meta meta() const noexcept;
 
-    // Runs `lexn` *once* subject to bounds on the input span.  When
-    // any `on()` handlers are passed, dispatches to them each
-    // successful `lexn`.  Each handler that matches a field we found
-    // on the wire is invoked with the corresponding `struct
-    // ppb_field`, and must return a `ppb_error` (errors are
-    // accumulated into the reader's error, with first-write-wins, but
-    // all handlers are invoked).
+    // Runs `ppb_lexn` once over the input span subject to `bounds`.
+    // Decodes a batch of strictly monotonically-increasing fields; on
+    // return the input span has advanced past the consumed bytes (even
+    // if `bounds` triggered the early exit, and even on a non-fatal
+    // limit error).
+    //
+    // When any `on()` handlers are passed, dispatches them for fields in
+    // the decoded batch.  Handler errors fold into the reader's sticky
+    // error, but every handler in the batch still runs.
+    //
+    // Call in a loop until `empty()` (or until `error()` is non-OK) to
+    // process a whole message.
     //
     // *Consumes* from the input span!
     template <typename... Hs> [[nodiscard]] ppb_error lexn(limit bounds = {}, Hs &&...handlers);
 
-    // Runs `on()` handlers on entries for which we found a value.
+    // Re-dispatches handlers against the current per-field state without
+    // touching the input span.  Useful for testing and for invoking
+    // additional handlers after a prescan, but not part of the normal
+    // parse loop.
+    //
+    // `dispatch_tuple` is the tuple-receiving form for generic usage;
+    // direct invocations should probably prefer `dispatch`.
     template <typename... Hs> ppb_error dispatch(Hs &&...handlers);
 
     template <typename... Hs> ppb_error dispatch_tuple(std::tuple<Hs...> &handlers);

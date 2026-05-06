@@ -1,8 +1,29 @@
-// Never include this file directly, it should only be included by ppb.hpp.
-
+// Private implementation details for the PPB C++ wrapper
+//
+// This header is included exactly once by <ppb/ppb.hpp>, at the point
+// where the public forward declarations are visible but the
+// `ppb::schema`/`ppb::reader` definitions are not yet introduced.  Do
+// not include it directly; nothing in here is a stable API.
+//
+// Identifiers in `ppb::detail::` are not part of the API surface and
+// may change without notice.
 namespace ppb
 {
 
+// Base for every field descriptor.  Fields inherit via
+// `field_base<K, wire_type>`, which static-asserts the (K, wire_type)
+// constraints and exposes `tag()`, `wire()`, and `encoded_tag()`.
+//
+// `extract_value(field, error*)` is the customization point: typed
+// scalars override it to decode the matched `ppb_field` into a
+// natural C++ type, optionally writing to `*error` for soft failures
+// (e.g. a misaligned LEN payload for `bytes<K, Element>`).  When a
+// field type doesn't override `extract_value`, the inherited version
+// hands the handler a `const ppb_field &` instead.
+//
+// Field-tag constraints (enforced by static_assert):
+//   - K convertible to uint64_t
+//   - 1 <= K <= 2^29 - 1 (the protobuf-spec field-number range)
 struct field_generic_base
 {
     static constexpr const ppb_field &extract_value(const ppb_field &field, ppb_error *) { return field; }
@@ -100,6 +121,11 @@ template <auto K, typename Enum, field_semantics sem, typename UnderlyingType>
 struct enumerated : public varint<K, sem>
 {
     static_assert(std::is_enum_v<Enum>, "enumerated field type requires an enum type parameter");
+
+    // Cast through the underlying type before reaching `Enum`.  This
+    // is well-defined for any 64-bit input regardless of `Enum`'s
+    // value range; out-of-range values reach the handler as the
+    // corresponding bit pattern in `Enum`'s underlying type.
     static constexpr Enum extract_value(const ppb_field &f, ppb_error *)
     {
         return static_cast<Enum>(static_cast<UnderlyingType>(f.v.u64));
@@ -163,6 +189,9 @@ template <auto K, typename Element, field_semantics sem> struct bytes : public l
 {
     static_assert(alignof(Element) == 1, "bytes element type must be byte-aligned");
 
+    // Reinterpret the LEN payload as a span of `Element`; this is
+    // only safe for unaligned `Element`, and only works when the
+    // payload buffer size is a multiple of the element size.
     static constexpr std::span<const Element> extract_value(const ppb_field &f, ppb_error *error)
     {
         if (f.v.payload.size % sizeof(Element) != 0) [[unlikely]]
@@ -289,6 +318,11 @@ template <typename... Fs> struct schema_impl
     }
 };
 
+// Folds `upd` into `acc`.  Used by `reader::meta<key>()` to combine
+// per-wire-type metadata when the schema has multiple entries sharing
+// a field number.  Always sets `lost_distinct_u64` when both sides
+// have at least one occurrence: we can't tell, so better to be
+// conservative.
 constexpr void
 merge_meta(ppb_field_meta &acc, ppb_field_meta upd) noexcept
 {
@@ -309,6 +343,18 @@ merge_meta(ppb_field_meta &acc, ppb_field_meta upd) noexcept
     acc.max_bytes = (acc.max_bytes < upd.max_bytes) ? upd.max_bytes : acc.max_bytes;
 }
 
+// Compile-time-bounded dispatch over [begin, end) in [0, limit).
+//
+// The body is split into 16-wide blocks; within each block a switch
+// on the local offset jumps into a fall-through chain that invokes
+// `handler(integral_constant<size_t, I>{})` for each I in the block
+// from the entry point onward.  The handler returns `bool`:
+//   - `true`  to continue with the next index;
+//   - `false` to stop early.  The outer `dispatch` then returns
+//             `false` and skips later blocks.
+//
+// `beging` and `end` are runtime bounds, so the same instantiation
+// handles arbitrary half-open subranges of [0, limit).
 template <typename Fn>
 [[gnu::always_inline]] constexpr bool
 dispatch_16(size_t begin, Fn &&handler)
@@ -401,6 +447,21 @@ dispatch(size_t begin, size_t end, Fn &&handler)
     return ok;
 }
 
+// `value_handler<Key, W, Fn>` pairs a callable with the (Key, wire)
+// pattern it matches.  Built by `ppb::on<Key, wire>(callable)`.
+//
+// `find_value_handler<Key, W, Arg, Hs...>()` selects the handler in
+// `Hs...` that matches `(Key, W)` and is invocable with `Arg`:
+//   - returns `nullopt` when no handler matches (Key, W) -- silently
+//     dropping unhandled fields is fine;
+//   - returns the index when exactly one handler matches;
+//   - when multiple handlers match (Key, W), disambiguates by
+//     `is_invocable_v<handler, Arg>` and requires exactly one
+//     survivor.  Zero or many survivors are static_assert errors.
+//
+// All handlers in the pack must share the dispatch `Key`'s C++ type;
+// mixing (e.g.) a plain `int` literal with an `enum class`-keyed
+// schema is a static_assert error.
 template <auto K, wire_type W, typename Fn> struct value_handler
 {
     using key_type = decltype(K);
@@ -421,25 +482,23 @@ template <auto K, wire_type W, typename Fn> struct value_handler
     Fn handler;
 };
 
-/*
- * Selects the value_handler in `Hs...` that matches the (Key, W) pair
- * and is invocable with `Arg`.
- *
- * Returns std::nullopt when no handler matches the (Key, W) pair --
- * silently dropping unhandled fields is fine.
- *
- * When exactly one handler matches by (Key, W), returns its index.
- *
- * When multiple match by (Key, W), disambiguates by
- * std::is_invocable_v<handler_type, Arg> and requires that exactly
- * one survivor remain; static_asserts otherwise.
- *
- * Type-list form: takes only template parameters, so the call is a
- * core constant expression even when its result is consumed inside a
- * function whose own parameters are runtime values (clang rejects
- * consteval calls that bind references to runtime parameters, even
- * when the body never reads them).
- */
+// Selects the value_handler in `Hs...` that matches the (Key, W) pair
+// and is invocable with `Arg`.
+//
+// Returns std::nullopt when no handler matches the (Key, W) pair --
+// silently dropping unhandled fields is fine.
+//
+// When exactly one handler matches by (Key, W), returns its index.
+//
+// When multiple handlers match by (Key, W), disambiguates by
+// std::is_invocable_v<handler_type, Arg> and requires that exactly
+// one survivor remain; static_asserts otherwise.
+//
+// Type-list form: takes only template parameters, so the call is a
+// core constant expression even when its result is consumed inside a
+// function whose own parameters are runtime values (clang rejects
+// consteval calls that bind references to runtime parameters, even
+// when the body never reads them).
 template <auto Key, wire_type W, typename Arg, typename... Hs>
 consteval std::optional<size_t>
 find_value_handler()
@@ -528,10 +587,15 @@ template <typename UnderlyingType> struct enum_decode
     }
 };
 
-/*
- * Input iterator that lazily decodes varints from a packed payload.
- * On decode failure, sets *m_error (first-write-wins) and exhausts.
- */
+// Lazily decoded view over a packed-varint LEN payload.
+//
+// Used for handlers that take `auto view` for `packed_int32`,
+// `packed_uint64`, etc.  The view captures `&reader::m_error`; on a
+// decode failure (`PPB_ERROR_TRUNCATED_DATA`/`_CORRUPT_VARINT`) the
+// iterator sets the reader's error first-write-wins and exhausts.
+//
+// The captured byte range lives in the original input span and the
+// error pointer points into the reader.
 template <typename T, typename Policy> class packed_varint_iter
 {
 public:
