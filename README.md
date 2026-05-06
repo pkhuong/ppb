@@ -14,6 +14,12 @@ with `PPB_ERROR_CORRUPT_VARINT`.  The PPB interface requires the
 entire serialized message to be in a contiguous read-only buffer, and
 decodes values to 64-bit values, or as subslices in that buffer.
 
+See [README_CPP.md](README_CPP.md) for a more convenient C++ wrapper;
+you should still read this document first to understand how the
+underlying library works.  N.B., only the C side (ppb.h, ppb.c) is
+formally verified. The C++ side is merely unit tested (it's a lot of
+code, but almost all of it is consteval)
+
 This library is designed for applications that require predictable
 performance more than maximum average throughput, and reliability,
 even in the face of adversarially corrupt "protobuf" bytes, even at
