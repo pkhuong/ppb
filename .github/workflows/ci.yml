@@ -7,13 +7,13 @@ jobs:
     runs-on: ubuntu-slim
     steps:
       - name: install deps
-        run: sudo apt-get update && sudo apt-get install -y gcovr clang xxd
+        run: sudo apt-get update && sudo apt-get install -y gcovr g++ clang xxd
       - name: checkout
         uses: actions/checkout@v4
       - name: build and test
-        run: make CC=gcc EXTRA_FLAGS=-mbmi2 test
+        run: make CC=gcc CXX=g++ EXTRA_FLAGS=-mbmi2 test unit_cpp
       - name: build and test (sanitizers)
-        run: make CC=clang EXTRA_FLAGS="-mbmi2 -fsanitize=address,undefined -fno-omit-frame-pointer" test
+        run: make CC=clang CXX=clang++ EXTRA_FLAGS="-mbmi2 -fsanitize=address,undefined -fno-omit-frame-pointer" test unit_cpp
       - name: gather coverage
         run: export EXTRA_FLAGS=-mbmi2 ; ./coverage.sh
       - name: Upload coverage to Codecov
@@ -27,25 +27,25 @@ jobs:
     runs-on: ubuntu-slim
     steps:
       - name: install deps
-        run: sudo apt-get update && sudo apt-get install -y clang gcc-multilib xxd
+        run: sudo apt-get update && sudo apt-get install -y clang gcc-multilib g++-multilib xxd
       - name: checkout
         uses: actions/checkout@v4
       - name: build and test
-        run: make CC=gcc EXTRA_FLAGS=-m32 test
+        run: make CC=gcc CXX=g++ EXTRA_FLAGS=-m32 test unit_cpp
       - name: build and test (sanitizers)
-        run: make CC=clang EXTRA_FLAGS="-m32 -fsanitize=address,undefined -fno-omit-frame-pointer" test
+        run: make CC=clang CXX=clang++ EXTRA_FLAGS="-m32 -fsanitize=address,undefined -fno-omit-frame-pointer" test unit_cpp
 
   aarch64-vanilla:
     runs-on: ubuntu-24.04-arm
     steps:
       - name: install deps
-        run: sudo apt-get update && sudo apt-get install -y gcovr clang xxd
+        run: sudo apt-get update && sudo apt-get install -y gcovr g++ clang xxd
       - name: checkout
         uses: actions/checkout@v4
       - name: build and test
-        run: make CC=gcc test
+        run: make CC=gcc CXX=g++ test unit_cpp
       - name: build and test (sanitizers)
-        run: make CC=clang EXTRA_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer" test
+        run: make CC=clang CXX=clang++ EXTRA_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer" test unit_cpp
       - name: gather coverage
         run: ./coverage.sh
       - name: Upload coverage to Codecov
@@ -68,10 +68,10 @@ jobs:
           githubToken: ${{ github.token }}
           install: |
             apt-get update -q -y
-            apt-get install -q -y make gcc clang xxd
+            apt-get install -q -y make gcc g++ clang xxd python3
           run: |
-            make CC=gcc test
+            make CC=gcc CXX=g++ test unit_cpp
             # ASan reserves a huge virtual shadow region on startup, which
             # the s390x QEMU container can't satisfy without overcommit.
             # Run UBSan only here.
-            make CC=clang EXTRA_FLAGS="-fsanitize=undefined -fno-omit-frame-pointer" test
+            make CC=clang CXX=clang++ EXTRA_FLAGS="-fsanitize=undefined -fno-omit-frame-pointer" test unit_cpp
