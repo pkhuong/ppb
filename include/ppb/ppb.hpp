@@ -468,15 +468,16 @@ private:
 
         // Find a handler for the schema field.
         using Field = decltype(Schema::template field<idx>());
-        constexpr std::optional<size_t> handler_idx =
-            detail::find_value_handler<Field::tag(), Field::wire(), decltype(field), Hs...>();
+        constexpr std::optional<size_t> handler_idx = detail::find_value_handler<Field::tag(), Field::wire(),
+            decltype(Field::extract_value(field, &m_error)), Hs...>();
         if constexpr (handler_idx.has_value())
         {
             auto field_addr = reinterpret_cast<uintptr_t>(field.v.ptr);
 
             if (field_addr - lower_bound <= range_size_inclusive) [[likely]]
             {
-                enum ppb_error result = std::get<handler_idx.value()>(handlers).handler(field);
+                enum ppb_error result = std::get<handler_idx.value()>(handlers).handler(
+                    Field::extract_value(field, &m_error));
                 if (result != PPB_OK) [[unlikely]]
                 {
                     m_error = (m_error == PPB_OK) ? result : m_error;
