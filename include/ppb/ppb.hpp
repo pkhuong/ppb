@@ -9,6 +9,7 @@
 #include <limits>
 #include <optional>
 #include <span>
+#include <tuple>
 #include <type_traits>
 #include <utility>
 
@@ -244,4 +245,12 @@ private:
     ppb_error m_error = PPB_OK;
     std::array<ppb_field, Schema::num_fields()> m_fields = {};
 };
+
+template <auto Key, wire_type wire = wire_type::any, typename Fn>
+[[nodiscard]] constexpr detail::value_handler<Key, wire, std::decay_t<Fn>>
+on(Fn &&handler)
+{
+    return detail::value_handler<Key, wire, std::decay_t<Fn>> { std::forward<Fn>(handler) };
+}
+
 }  // namespace ppb

@@ -239,5 +239,114 @@ dispatch(size_t begin, size_t end, Fn &&handler)
 
     return ok;
 }
+
+template <auto K, wire_type W, typename Fn> struct value_handler
+{
+    using key_type = decltype(K);
+    using handler_type = Fn;
+
+    static constexpr key_type key() { return K; }
+    static constexpr wire_type wire() { return W; }
+
+    // Does this value handler match the key.
+    static constexpr bool matches(key_type other_key, wire_type other_w)
+    {
+        if (K != other_key)
+            return false;
+
+        return (W == wire_type::any) || (W == other_w);
+    }
+
+    Fn handler;
+};
+
+/*
+ * Selects the value_handler in `Hs...` that matches the (Key, W) pair
+ * and is invocable with `Arg`.
+ *
+ * Returns std::nullopt when no handler matches the (Key, W) pair --
+ * silently dropping unhandled fields is fine.
+ *
+ * When exactly one handler matches by (Key, W), returns its index.
+ *
+ * When multiple match by (Key, W), disambiguates by
+ * std::is_invocable_v<handler_type, Arg> and requires that exactly
+ * one survivor remain; static_asserts otherwise.
+ *
+ * Type-list form: takes only template parameters, so the call is a
+ * core constant expression even when its result is consumed inside a
+ * function whose own parameters are runtime values (clang rejects
+ * consteval calls that bind references to runtime parameters, even
+ * when the body never reads them).
+ */
+template <auto Key, wire_type W, typename Arg, typename... Hs>
+consteval std::optional<size_t>
+find_value_handler()
+{
+    static_assert((std::is_same_v<std::decay_t<typename Hs::key_type>, std::decay_t<decltype(Key)>> && ...),
+        "every value_handler in the tuple must use the same key type as the dispatch Key");
+
+    constexpr size_t N = sizeof...(Hs);
+
+    struct hit
+    {
+        size_t count;
+        size_t first;
+    };
+
+    constexpr auto scan = [](const std::array<bool, N> &m1, const std::array<bool, N> &m2) -> hit
+    {
+        hit r = { 0, N };
+        for (size_t i = 0; i < N; i++)
+        {
+            if (!(m1[i] && m2[i]))
+                continue;
+
+            if (r.count == 0)
+                r.first = i;
+
+            r.count++;
+        }
+
+        return r;
+    };
+
+    constexpr std::array<bool, N> key_mask = { Hs::matches(Key, W)... };
+    constexpr hit key_hit = scan(key_mask, key_mask);
+
+    if constexpr (key_hit.count == 0)
+    {
+        return std::nullopt;
+    }
+    else if constexpr (key_hit.count == 1)
+    {
+        return key_hit.first;
+    }
+    else
+    {
+        constexpr std::array<bool, N> arg_mask = { std::is_invocable_v<typename Hs::handler_type, Arg>... };
+        constexpr hit arg_hit = scan(key_mask, arg_mask);
+
+        static_assert(arg_hit.count != 0,
+            "value_handlers match (Key, wire), but none is invocable with the argument type");
+        static_assert(arg_hit.count <= 1,
+            "multiple value_handlers match (Key, wire) and accept the argument type; ambiguous");
+
+        return arg_hit.first;
+    }
+}
+
+// Tuple-deducing shorthand: the parameter is only used to deduce
+// `Hs...` from a tuple expression that the caller already has.  Only
+// safe to call from a context where the tuple is itself a constant
+// expression (e.g., test files); inside a function whose tuple is a
+// runtime value, call the type-list form directly.
+template <auto Key, wire_type W, typename Arg, typename... Hs>
+consteval std::optional<size_t>
+find_value_handler(const std::tuple<Hs...> &)
+{
+    return find_value_handler<Key, W, Arg, Hs...>();
+}
+
 }  // namespace detail
 }  // namespace ppb
