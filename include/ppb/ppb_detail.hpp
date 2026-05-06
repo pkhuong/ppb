@@ -5,6 +5,7 @@ namespace ppb
 
 struct field_generic_base
 {
+    static constexpr field_semantics semantics() { return field_semantics::always_lexn; }
 };
 
 template <auto K, wire_type type> struct field_base : public field_generic_base
@@ -26,20 +27,24 @@ template <auto K, wire_type type> struct field_base : public field_generic_base
     }
 };
 
-template <auto K> struct varint : public field_base<K, wire_type::varint>
+template <auto K, field_semantics sem> struct varint : public field_base<K, wire_type::varint>
 {
+    static constexpr field_semantics semantics() { return sem; }
 };
 
-template <auto K> struct i64 : public field_base<K, wire_type::i64>
+template <auto K, field_semantics sem> struct i64 : public field_base<K, wire_type::i64>
 {
+    static constexpr field_semantics semantics() { return sem; }
 };
 
-template <auto K> struct len : public field_base<K, wire_type::len>
+template <auto K, field_semantics sem> struct len : public field_base<K, wire_type::len>
 {
+    static constexpr field_semantics semantics() { return sem; }
 };
 
-template <auto K> struct i32 : public field_base<K, wire_type::i32>
+template <auto K, field_semantics sem> struct i32 : public field_base<K, wire_type::i32>
 {
+    static constexpr field_semantics semantics() { return sem; }
 };
 
 namespace detail
