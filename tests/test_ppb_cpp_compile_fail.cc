@@ -144,3 +144,30 @@ constexpr auto bad = ppb::detail::find_value_handler<1, ppb::wire_type::varint, 
 constexpr auto bad = ppb::detail::find_value_handler<1, ppb::wire_type::varint, int>(
     std::tuple { ppb::on<1L, ppb::wire_type::varint>([](int) { }) });
 #endif
+
+// Same static_asserts exercised through the prescan() call path.
+
+static const uint8_t smoke_wire[] = { 0x08, 0x01 };  // field 1 varint 1
+using SmokeSchema = ppb::schema<ppb::varint<1>>;
+
+/* expect-error: multiple value_handlers match \(Key, wire\) and accept the argument type; ambiguous */
+#ifdef PPB_FAIL_PRESCAN_AMBIGUOUS_HANDLERS
+constexpr auto bad = ppb::reader<SmokeSchema>(smoke_wire, sizeof(smoke_wire))
+                         .prescan({}, ppb::on<1>([](const ppb_field &) -> ppb_error { return PPB_OK; }),
+                             ppb::on<1>([](const ppb_field &) -> ppb_error { return PPB_OK; }));
+#endif
+
+/* expect-error: value_handlers match \(Key, wire\), but none is invocable with the argument type */
+#ifdef PPB_FAIL_PRESCAN_NONE_INVOCABLE
+constexpr auto bad = ppb::reader<SmokeSchema>(smoke_wire, sizeof(smoke_wire))
+                         .prescan({},
+                             ppb::on<1, ppb::wire_type::varint>([](int) -> ppb_error { return PPB_OK; }),
+                             ppb::on<1, ppb::wire_type::varint>(
+                                 [](const char *) -> ppb_error { return PPB_OK; }));
+#endif
+
+/* expect-error: every value_handler in the tuple must use the same key type as the dispatch Key */
+#ifdef PPB_FAIL_PRESCAN_KEY_TYPE_MISMATCH
+constexpr auto bad = ppb::reader<SmokeSchema>(smoke_wire, sizeof(smoke_wire))
+                         .prescan({}, ppb::on<1L>([](const ppb_field &) -> ppb_error { return PPB_OK; }));
+#endif

@@ -466,6 +466,67 @@ test_reader_meta_merged_one_sided()
     }
 }
 
+// Prescan handler dispatch tests
+
+enum class HandlerKey : int
+{
+    x = 1,
+    absent = 42
+};
+
+using HandlerSchema = ppb::schema<ppb::varint<HandlerKey::x>, ppb::len<HandlerKey::x>>;
+
+// Copied from varint_then_len_wire in test_ppb.c.
+static const uint8_t handler_dispatch_wire[] = {
+    0x08, 0x96, 0x01,                                    /* field 1 varint 150 */
+    0x0a, 0x05, 0x68, 0x65, 0x6c, 0x6c, 0x6f,            /* field 1 LEN "hello" */
+};
+
+static void
+test_reader_prescan_with_handlers()
+{
+    int varint_calls = 0;
+    int len_calls = 0;
+    int absent_calls = 0;
+
+    ppb::reader<HandlerSchema> r(handler_dispatch_wire, sizeof(handler_dispatch_wire));
+    CHECK(r.prescan(ppb::limit {},
+              ppb::on<HandlerKey::x, ppb::wire_type::varint>(
+                  [&varint_calls](const ppb_field &) -> ppb_error
+                  {
+                      varint_calls++;
+                      return PPB_OK;
+                  }),
+              ppb::on<HandlerKey::x, ppb::wire_type::len>(
+                  [&len_calls](const ppb_field &) -> ppb_error
+                  {
+                      len_calls++;
+                      return PPB_OK;
+                  }),
+              ppb::on<HandlerKey::absent>(
+                  [&absent_calls](const ppb_field &) -> ppb_error
+                  {
+                      absent_calls++;
+                      return PPB_OK;
+                  })) >= 0);
+    CHECK(r.error() == PPB_OK);
+
+    CHECK(varint_calls == 1);
+    CHECK(len_calls == 1);
+    CHECK(absent_calls == 0);
+}
+
+static void
+test_reader_prescan_handler_error()
+{
+    ppb::reader<HandlerSchema> r(handler_dispatch_wire, sizeof(handler_dispatch_wire));
+
+    CHECK(r.prescan(ppb::limit {},
+              ppb::on<HandlerKey::x>([](const ppb_field &) -> ppb_error { return PPB_ERROR_CORRUPT_TAG; })) <
+        0);
+    CHECK(r.error() == PPB_ERROR_CORRUPT_TAG);
+}
+
 int
 main()
 {
@@ -494,6 +555,9 @@ main()
     test_reader_meta_merged();
     test_reader_meta_no_merge();
     test_reader_meta_merged_one_sided();
+
+    test_reader_prescan_with_handlers();
+    test_reader_prescan_handler_error();
 
     std::printf("\n%d checks, %d failures\n", g_check_count, g_fail_count);
     return g_fail_count > 0 ? 1 : 0;
