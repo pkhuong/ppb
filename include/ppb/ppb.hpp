@@ -241,6 +241,47 @@ template <typename... Fs> struct reader<schema<Fs...>>
         return ret;
     }
 
+    // Runs `lexn` *once* subject to bounds on the input span.  When
+    // any `on()` handlers are passed, dispatches to them each
+    // successful `lexn`.  Each handler that matches a field we found
+    // on the wire is invoked with the corresponding `struct
+    // ppb_field`, and must return a `ppb_error` (errors are
+    // accumulated into the reader's error, with first-write-wins, but
+    // all handlers are invoked).
+    //
+    // *Consumes* from the input span!
+    template <typename... Hs> [[nodiscard]] ppb_error lexn(limit bounds = {}, Hs &&...handlers)
+    {
+        if (m_error != PPB_OK) [[unlikely]]
+            return m_error;
+
+        std::tuple<std::decay_t<Hs>...> tup(std::forward<Hs>(handlers)...);
+
+        const auto base = reinterpret_cast<uintptr_t>(m_input.data());
+
+        ppb_buf buf = make_ppb_buf();
+        const ppb_lexn_ret ret = ppb_lexn_impl(&buf, m_fields.size(), Schema::s_encoded_tags.data(),
+            m_fields.data(), bounds.fields(), bounds.bytes(), bounds.error_on_bytes());
+
+        m_error = ret.status;
+        m_input = std::span(reinterpret_cast<const std::byte *>(buf.buf), buf.size);
+
+        size_t range_size = reinterpret_cast<uintptr_t>(buf.buf) - base;
+        if constexpr (sizeof...(Hs) == 0)
+        {
+            return m_error;
+        }
+
+        // range_size == 0 should only happen on empty input (or maybe on error).
+        if (m_error != PPB_OK || range_size == 0) [[unlikely]]
+        {
+            return m_error;
+        }
+
+        run_handlers(tup, base, range_size - 1, ret.first_field, ret.first_field + ret.field_range);
+        return m_error;
+    }
+
     // Runs `on()` handlers on entries for which we found a value.
     template <typename... Hs> ppb_error dispatch(Hs &&...handlers)
     {

@@ -527,6 +527,92 @@ test_reader_prescan_handler_error()
     CHECK(r.error() == PPB_ERROR_CORRUPT_TAG);
 }
 
+// lexn handler dispatch tests: each lexn call decodes a batch of
+// strictly increasing fields, dispatches handlers, and consumes the
+// bytes from the reader's input span.
+
+using LexnSchema = ppb::schema<ppb::varint<1>, ppb::len<2>>;
+
+// Two batches, each {field 1 varint, field 2 LEN}.  The repeated key 1
+// at offset 6 forces lexn to end the first batch there.
+static const uint8_t lexn_two_batches_wire[] = {
+    0x08, 0x01,                 /* batch 1: field 1 varint 1 */
+    0x12, 0x02, 0x68, 0x69,     /* batch 1: field 2 LEN "hi" */
+    0x08, 0x02,                 /* batch 2: field 1 varint 2 */
+    0x12, 0x02, 0x6f, 0x6b,     /* batch 2: field 2 LEN "ok" */
+};
+
+static void
+test_reader_lexn_decode_dispatch_consume()
+{
+    int field1_calls = 0;
+    int field2_calls = 0;
+
+    ppb::reader<LexnSchema> r(lexn_two_batches_wire, sizeof(lexn_two_batches_wire));
+
+    auto run_once = [&]
+    {
+        return r.lexn({},
+            ppb::on<1>(
+                [&](const ppb_field &) -> ppb_error
+                {
+                    field1_calls++;
+                    return PPB_OK;
+                }),
+            ppb::on<2>(
+                [&](const ppb_field &) -> ppb_error
+                {
+                    field2_calls++;
+                    return PPB_OK;
+                }));
+    };
+
+    // First call decodes batch 1 and fires both handlers.
+    CHECK(run_once() == PPB_OK);
+    CHECK(field1_calls == 1);
+    CHECK(field2_calls == 1);
+
+    // Second call picks up where we left off and decodes batch 2.
+    CHECK(run_once() == PPB_OK);
+    CHECK(field1_calls == 2);
+    CHECK(field2_calls == 2);
+
+    // Third call: input span has been fully consumed, so no handlers fire.
+    CHECK(run_once() == PPB_OK);
+    CHECK(field1_calls == 2);
+    CHECK(field2_calls == 2);
+    CHECK(r.error() == PPB_OK);
+}
+
+static void
+test_reader_lexn_handler_error_runs_full_batch()
+{
+    int field1_calls = 0;
+    int field2_calls = 0;
+
+    ppb::reader<LexnSchema> r(lexn_two_batches_wire, sizeof(lexn_two_batches_wire));
+
+    // Field 1's handler returns an error, but the field 2 handler in
+    // the same batch must still fire and the first error must win.
+    CHECK(r.lexn({},
+              ppb::on<1>(
+                  [&](const ppb_field &) -> ppb_error
+                  {
+                      field1_calls++;
+                      return PPB_ERROR_CORRUPT_TAG;
+                  }),
+              ppb::on<2>(
+                  [&](const ppb_field &) -> ppb_error
+                  {
+                      field2_calls++;
+                      return PPB_ERROR_TRUNCATED_DATA;
+                  })) == PPB_ERROR_CORRUPT_TAG);
+
+    CHECK(field1_calls == 1);
+    CHECK(field2_calls == 1);
+    CHECK(r.error() == PPB_ERROR_CORRUPT_TAG);
+}
+
 int
 main()
 {
@@ -558,6 +644,9 @@ main()
 
     test_reader_prescan_with_handlers();
     test_reader_prescan_handler_error();
+
+    test_reader_lexn_decode_dispatch_consume();
+    test_reader_lexn_handler_error_runs_full_batch();
 
     std::printf("\n%d checks, %d failures\n", g_check_count, g_fail_count);
     return g_fail_count > 0 ? 1 : 0;
