@@ -5,6 +5,7 @@ namespace ppb
 
 struct field_generic_base
 {
+    static constexpr const ppb_field &extract_value(const ppb_field &field, ppb_error *) { return field; }
     static constexpr field_semantics semantics() { return field_semantics::always_lexn; }
 };
 
