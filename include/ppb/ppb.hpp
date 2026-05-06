@@ -189,8 +189,16 @@ template <typename... Fs> struct reader<schema<Fs...>>
     [[nodiscard]] constexpr size_t size() const noexcept { return m_input.size(); }
     [[nodiscard]] constexpr bool empty() const noexcept { return m_input.empty(); }
 
-    // Runs prescan (subject to `bounds`) on the input span.
-    [[nodiscard]] ptrdiff_t prescan(limit bounds = {})
+    // Runs prescan (subject to `bounds`) on the input span.  When any `on()`
+    // handlers are passed, dispatches to them after a successful prescan.
+    // Each handler that matches a field we found on the wire is invoked with
+    // the corresponding `struct ppb_field`, and must return a `ppb_error`
+    // (errors are accumulated into the reader's error, with first-write-wins,
+    // but all handlers are invoked).
+    //
+    // Returns a ppb_error (negative value) on error, or a non-negative
+    // number of bytes read by the `prescan` call.
+    template <typename... Hs> [[nodiscard]] ptrdiff_t prescan(limit bounds = {}, Hs &&...handlers)
     {
         if (m_error != PPB_OK) [[unlikely]]
             return m_error;
@@ -204,7 +212,8 @@ template <typename... Fs> struct reader<schema<Fs...>>
             return m_error;
         }
 
-        return ret;
+        ppb_error err = dispatch(std::forward<Hs>(handlers)...);
+        return int(err) < 0 ? ptrdiff_t(err) : ret;
     }
 
     // Returns the metadata associated with `key`.
@@ -232,6 +241,25 @@ template <typename... Fs> struct reader<schema<Fs...>>
         return ret;
     }
 
+    // Runs `on()` handlers on entries for which we found a value.
+    template <typename... Hs> ppb_error dispatch(Hs &&...handlers)
+    {
+        std::tuple<std::decay_t<Hs>...> tup(std::forward<Hs>(handlers)...);
+        return dispatch_tuple(tup);
+    }
+
+    template <typename... Hs> ppb_error dispatch_tuple(std::tuple<Hs...> &handlers)
+    {
+        if constexpr (sizeof...(Hs) == 0)
+            return m_error;
+
+        if (m_error != PPB_OK) [[unlikely]]
+            return m_error;
+
+        run_handlers(handlers, 1, std::numeric_limits<uintptr_t>::max() - 1);
+        return m_error;
+    }
+
 private:
     constexpr ppb_buf make_ppb_buf() const noexcept
     {
@@ -239,6 +267,43 @@ private:
             .buf = m_input.data(),
             .size = m_input.size(),
         };
+    }
+
+    template <typename... Hs>
+    [[gnu::noinline]] void run_handlers(std::tuple<Hs...> &handlers, uintptr_t lower_bound,
+        uintptr_t range_size_inclusive, size_t begin = 0, size_t end = Schema::num_fields())
+    {
+        detail::dispatch<Schema::num_fields()>(begin, end,
+            [&]<size_t I>(std::integral_constant<size_t, I>)
+            {
+                run_handler_for_idx<I>(handlers, lower_bound, range_size_inclusive);
+                return true;
+            });
+    }
+
+    template <size_t idx, typename... Hs>
+    [[gnu::always_inline]] void run_handler_for_idx(std::tuple<Hs...> &handlers, uintptr_t lower_bound,
+        uintptr_t range_size_inclusive)
+    {
+        const ppb_field &field = m_fields[idx];
+
+        // Find a handler for the schema field.
+        using Field = decltype(Schema::template field<idx>());
+        constexpr std::optional<size_t> handler_idx =
+            detail::find_value_handler<Field::tag(), Field::wire(), decltype(field), Hs...>();
+        if constexpr (handler_idx.has_value())
+        {
+            auto field_addr = reinterpret_cast<uintptr_t>(field.v.ptr);
+
+            if (field_addr - lower_bound <= range_size_inclusive) [[likely]]
+            {
+                enum ppb_error result = std::get<handler_idx.value()>(handlers).handler(field);
+                if (result != PPB_OK) [[unlikely]]
+                {
+                    m_error = (m_error == PPB_OK) ? result : m_error;
+                }
+            }
+        }
     }
 
     std::span<const std::byte> m_input;
