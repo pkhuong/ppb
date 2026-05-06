@@ -1639,9 +1639,156 @@ test_unpacked_aliases_compile_and_decode()
     CHECK(got[2] == 3);
 }
 
+// Smoke test for reader getters, limit getters, and schema::num_fields().
+static void
+test_reader_getters()
+{
+    ppb::reader<TestSchema> r(four_field_wire, sizeof(four_field_wire));
+
+    CHECK(r.error() == PPB_OK);
+    CHECK(r.input().data() != nullptr);
+    CHECK(r.size() == sizeof(four_field_wire));
+    CHECK(!r.empty());
+    CHECK(!r.error_field().has_value());
+
+    ppb::reader<TestSchema> r2;
+    CHECK(r2.size() == 0);
+    CHECK(r2.empty());
+
+    ppb::limit lim = ppb::limit::hard(100, 10);
+    CHECK(lim.bytes() == 100);
+    CHECK(lim.fields() == 10);
+    CHECK(lim.error_on_bytes() == PPB_ERROR_LIMIT_EXCEEDED);
+
+    // num_fields() at runtime
+    CHECK(TestSchema::num_fields() == 4);
+}
+
+// parse() with empty input: prescan reads 0 bytes, takes the num_bytes <= 0 path.
+static void
+test_parse_empty_prescan()
+{
+    ppb::reader<TestSchema> r(std::span<const std::byte> {});
+    CHECK(r.parse([](const ppb::reader<TestSchema> &) -> ppb_error { return PPB_OK; }) == PPB_OK);
+    CHECK(r.empty());
+}
+
+// Schema with 16 fields exercises dispatch_16 cases 7-15.
+using WideSchema = ppb::schema<ppb::varint<1>, ppb::varint<2>, ppb::varint<3>, ppb::varint<4>, ppb::varint<5>,
+    ppb::varint<6>, ppb::varint<7>, ppb::varint<8>, ppb::varint<9>, ppb::varint<10>, ppb::varint<11>,
+    ppb::varint<12>, ppb::varint<13>, ppb::varint<14>, ppb::varint<15>, ppb::varint<16>>;
+
+static const uint8_t wide_wire[] = {
+    0x08,
+    0x01,
+    0x10,
+    0x01,
+    0x18,
+    0x01,
+    0x20,
+    0x01,
+    0x28,
+    0x01,
+    0x30,
+    0x01,
+    0x38,
+    0x01,
+    0x40,
+    0x01,
+    0x48,
+    0x01,
+    0x50,
+    0x01,
+    0x58,
+    0x01,
+    0x60,
+    0x01,
+    0x68,
+    0x01,
+    0x70,
+    0x01,
+    0x78,
+    0x01,
+    0x80,
+    0x01,
+    0x01,
+};
+
+static void
+test_dispatch_high_indices()
+{
+    ppb::reader<WideSchema> r(wide_wire, sizeof(wide_wire));
+    CHECK(r.prescan() > 0);
+    CHECK(r.error() == PPB_OK);
+}
+
+// lexn sticky error: calling lexn after error is already set short-circuits.
+static void
+test_lexn_sticky_error()
+{
+    ppb::reader<TestSchema> r(truncated_tag_wire, sizeof(truncated_tag_wire));  // prescan will fail
+
+    (void)r.prescan();
+    CHECK(r.error() == PPB_ERROR_TRUNCATED_DATA);
+
+    // lexn should short-circuit on the sticky error
+    int called = 0;
+
+    CHECK(r.lexn({},
+              ppb::on<1>(
+                  [&](const ppb_field &) -> ppb_error
+                  {
+                      called++;
+                      return PPB_OK;
+                  })) == PPB_ERROR_TRUNCATED_DATA);
+    CHECK(called == 0);
+}
+
+// prescan sticky error: calling prescan after error is already set short-circuits.
+static void
+test_prescan_sticky_error()
+{
+    ppb::reader<TestSchema> r(truncated_tag_wire, sizeof(truncated_tag_wire));
+
+    (void)r.prescan();
+    CHECK(r.error() == PPB_ERROR_TRUNCATED_DATA);
+
+    // second prescan short-circuits
+    CHECK(r.prescan() == PPB_ERROR_TRUNCATED_DATA);
+}
+
+// parse init error branch: init returns non-OK, handlers not run.
+static void
+test_parse_init_error_branch()
+{
+    ppb::reader<TestSchema> r(four_field_wire, sizeof(four_field_wire));
+    int handler_calls = 0;
+
+    CHECK(r.parse([](const ppb::reader<TestSchema> &) -> ppb_error { return PPB_ERROR_TRUNCATED_DATA; }, {},
+              ppb::on<1>(
+                  [&](const ppb_field &) -> ppb_error
+                  {
+                      handler_calls++;
+                      return PPB_OK;
+                  })) == PPB_ERROR_TRUNCATED_DATA);
+    CHECK(handler_calls == 0);
+}
+
+// Span with claimed size > PTRDIFF_MAX triggers TRUNCATED_DATA in constructor.
+static void
+test_reader_too_large_input()
+{
+    std::span<const std::byte> huge(static_cast<const std::byte *>(nullptr),
+        size_t(std::numeric_limits<ptrdiff_t>::max()) + 1);
+    ppb::reader<TestSchema> r(huge);
+
+    CHECK(r.error() == PPB_ERROR_TRUNCATED_DATA);
+}
+
 int
 main()
 {
+    test_reader_getters();
     test_reader_default_construct();
     test_reader_span_construct();
     test_reader_ptr_construct();
@@ -1705,6 +1852,14 @@ main()
     test_typed_packed_enumerated_field();
     test_typed_packed_varint_truncated_payload();
     test_unpacked_aliases_compile_and_decode();
+
+    test_parse_empty_prescan();
+
+    test_dispatch_high_indices();
+    test_lexn_sticky_error();
+    test_prescan_sticky_error();
+    test_parse_init_error_branch();
+    test_reader_too_large_input();
 
     std::printf("\n%d checks, %d failures\n", g_check_count, g_fail_count);
     return g_fail_count > 0 ? 1 : 0;
