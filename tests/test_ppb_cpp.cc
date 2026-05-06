@@ -1064,6 +1064,581 @@ test_reader_parse_semantics_always_lexn_wire_order()
     CHECK(r.empty());
 }
 
+/*
+ * Higher-level field type tests: each new typed field wraps a base
+ * wire-type field and adds an `extract_value` that decodes the matched
+ * value into a typed result.  We verify the conversion by attaching an
+ * `on<Key>` handler whose argument type matches the decoded value.
+ */
+
+static void
+test_typed_scalar_varint_fields()
+{
+    using S = ppb::schema<ppb::int32<1>, ppb::int64<2>, ppb::sint32<3>, ppb::sint64<4>, ppb::uint32<5>,
+        ppb::uint64<6>, ppb::boolean<7>>;
+
+    static const uint8_t wire[] = {
+        0x08, 0x96, 0x01,                          /* f1 int32 = 150 */
+        0x10, 0xe8, 0x07,                          /* f2 int64 = 1000 */
+        0x18, 0x01,                                /* f3 sint32 = -1 (zigzag 1) */
+        0x20, 0x03,                                /* f4 sint64 = -2 (zigzag 3) */
+        0x28, 0xff, 0xff, 0xff, 0xff, 0x0f,        /* f5 uint32 = 0xFFFFFFFF */
+        0x30, 0xb9, 0x60,                          /* f6 uint64 = 12345 */
+        0x38, 0x01,                                /* f7 boolean = true */
+    };
+
+    int32_t v_int32 = 0;
+    int64_t v_int64 = 0;
+    int32_t v_sint32 = 0;
+    int64_t v_sint64 = 0;
+    uint32_t v_uint32 = 0;
+    uint64_t v_uint64 = 0;
+    bool v_bool = false;
+
+    ppb::reader<S> r(wire, sizeof(wire));
+
+    CHECK(r.parse([](const ppb::reader<S> &) -> ppb_error { return PPB_OK; }, {},
+              ppb::on<1>(
+                  [&](int32_t v) -> ppb_error
+                  {
+                      v_int32 = v;
+                      return PPB_OK;
+                  }),
+              ppb::on<2>(
+                  [&](int64_t v) -> ppb_error
+                  {
+                      v_int64 = v;
+                      return PPB_OK;
+                  }),
+              ppb::on<3>(
+                  [&](int32_t v) -> ppb_error
+                  {
+                      v_sint32 = v;
+                      return PPB_OK;
+                  }),
+              ppb::on<4>(
+                  [&](int64_t v) -> ppb_error
+                  {
+                      v_sint64 = v;
+                      return PPB_OK;
+                  }),
+              ppb::on<5>(
+                  [&](uint32_t v) -> ppb_error
+                  {
+                      v_uint32 = v;
+                      return PPB_OK;
+                  }),
+              ppb::on<6>(
+                  [&](uint64_t v) -> ppb_error
+                  {
+                      v_uint64 = v;
+                      return PPB_OK;
+                  }),
+              ppb::on<7>(
+                  [&](bool v) -> ppb_error
+                  {
+                      v_bool = v;
+                      return PPB_OK;
+                  })) == PPB_OK);
+
+    CHECK(v_int32 == 150);
+    CHECK(v_int64 == 1000);
+    CHECK(v_sint32 == -1);
+    CHECK(v_sint64 == -2);
+    CHECK(v_uint32 == 0xFFFFFFFFU);
+    CHECK(v_uint64 == 12345);
+    CHECK(v_bool == true);
+}
+
+static void
+test_typed_int32_negative_decodes_as_10_byte_varint()
+{
+    using S = ppb::schema<ppb::int32<1>>;
+
+    static const uint8_t wire[] = {
+        0x08, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x01, /* f1 int32 = -1 (10-byte varint) */
+    };
+
+    int32_t v = 0;
+    ppb::reader<S> r(wire, sizeof(wire));
+
+    CHECK(r.parse([](const ppb::reader<S> &) -> ppb_error { return PPB_OK; }, {},
+              ppb::on<1>(
+                  [&](int32_t x) -> ppb_error
+                  {
+                      v = x;
+                      return PPB_OK;
+                  })) == PPB_OK);
+    CHECK(v == -1);
+}
+
+enum class Color : uint32_t
+{
+    red = 1,
+    green = 2,
+    blue = 3,
+};
+
+static void
+test_typed_enumerated_field()
+{
+    using S = ppb::schema<ppb::enumerated<1, Color>>;
+
+    static const uint8_t wire[] = {
+        0x08, 0x02, /* f1 = 2 (green) */
+    };
+
+    Color v = Color::red;
+    ppb::reader<S> r(wire, sizeof(wire));
+
+    CHECK(r.parse([](const ppb::reader<S> &) -> ppb_error { return PPB_OK; }, {},
+              ppb::on<1>(
+                  [&](Color c) -> ppb_error
+                  {
+                      v = c;
+                      return PPB_OK;
+                  })) == PPB_OK);
+    CHECK(v == Color::green);
+}
+
+static void
+test_typed_scalar_i32_fields()
+{
+    using S = ppb::schema<ppb::fixed32<1>, ppb::sfixed32<2>, ppb::f32<3>>;
+
+    static const uint8_t wire[] = {
+        0x0d, 0xef, 0xbe, 0xad, 0xde, /* f1 fixed32 = 0xDEADBEEF */
+        0x15, 0xfe, 0xff, 0xff, 0xff, /* f2 sfixed32 = -2 */
+        0x1d, 0x00, 0x00, 0xc0, 0x3f, /* f3 f32 = 1.5f */
+    };
+
+    uint32_t v_fixed = 0;
+    int32_t v_sfixed = 0;
+    float v_f = 0.0f;
+
+    ppb::reader<S> r(wire, sizeof(wire));
+
+    CHECK(r.parse([](const ppb::reader<S> &) -> ppb_error { return PPB_OK; }, {},
+              ppb::on<1>(
+                  [&](uint32_t v) -> ppb_error
+                  {
+                      v_fixed = v;
+                      return PPB_OK;
+                  }),
+              ppb::on<2>(
+                  [&](int32_t v) -> ppb_error
+                  {
+                      v_sfixed = v;
+                      return PPB_OK;
+                  }),
+              ppb::on<3>(
+                  [&](float v) -> ppb_error
+                  {
+                      v_f = v;
+                      return PPB_OK;
+                  })) == PPB_OK);
+
+    CHECK(v_fixed == 0xDEADBEEFU);
+    CHECK(v_sfixed == -2);
+    CHECK(v_f == 1.5f);
+}
+
+static void
+test_typed_scalar_i64_fields()
+{
+    using S = ppb::schema<ppb::fixed64<1>, ppb::sfixed64<2>, ppb::f64<3>>;
+
+    static const uint8_t wire[] = {
+        0x09, 0x88, 0x77, 0x66, 0x55, 0x44, 0x33, 0x22, 0x11, /* f1 fixed64 */
+        0x11, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, /* f2 sfixed64 = -1 */
+        0x19, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x04, 0x40, /* f3 f64 = 2.5 */
+    };
+
+    uint64_t v_fixed = 0;
+    int64_t v_sfixed = 0;
+    double v_f = 0.0;
+
+    ppb::reader<S> r(wire, sizeof(wire));
+
+    CHECK(r.parse([](const ppb::reader<S> &) -> ppb_error { return PPB_OK; }, {},
+              ppb::on<1>(
+                  [&](uint64_t v) -> ppb_error
+                  {
+                      v_fixed = v;
+                      return PPB_OK;
+                  }),
+              ppb::on<2>(
+                  [&](int64_t v) -> ppb_error
+                  {
+                      v_sfixed = v;
+                      return PPB_OK;
+                  }),
+              ppb::on<3>(
+                  [&](double v) -> ppb_error
+                  {
+                      v_f = v;
+                      return PPB_OK;
+                  })) == PPB_OK);
+
+    CHECK(v_fixed == 0x1122334455667788ULL);
+    CHECK(v_sfixed == -1);
+    CHECK(v_f == 2.5);
+}
+
+static void
+test_typed_utf8string_field()
+{
+    using S = ppb::schema<ppb::utf8string<1>>;
+
+    static const uint8_t wire[] = {
+        0x0a, 0x05, 'h', 'e', 'l', 'l', 'o', /* f1 utf8string = "hello" */
+    };
+
+    std::string_view v;
+    ppb::reader<S> r(wire, sizeof(wire));
+
+    CHECK(r.parse([](const ppb::reader<S> &) -> ppb_error { return PPB_OK; }, {},
+              ppb::on<1>(
+                  [&](std::string_view s) -> ppb_error
+                  {
+                      v = s;
+                      return PPB_OK;
+                  })) == PPB_OK);
+    CHECK(v == std::string_view("hello"));
+}
+
+static void
+test_typed_bytes_default_element()
+{
+    using S = ppb::schema<ppb::bytes<1>>;
+
+    static const uint8_t wire[] = {
+        0x0a, 0x03, 0xca, 0xfe, 0xbe, /* f1 bytes = {0xCA, 0xFE, 0xBE} */
+    };
+
+    std::span<const std::byte> v;
+    ppb::reader<S> r(wire, sizeof(wire));
+
+    CHECK(r.parse([](const ppb::reader<S> &) -> ppb_error { return PPB_OK; }, {},
+              ppb::on<1>(
+                  [&](std::span<const std::byte> s) -> ppb_error
+                  {
+                      v = s;
+                      return PPB_OK;
+                  })) == PPB_OK);
+    CHECK(v.size() == 3);
+    CHECK(static_cast<uint8_t>(v[0]) == 0xca);
+    CHECK(static_cast<uint8_t>(v[1]) == 0xfe);
+    CHECK(static_cast<uint8_t>(v[2]) == 0xbe);
+}
+
+static void
+test_typed_bytes_uint32_element()
+{
+    using S = ppb::schema<ppb::packed_fixed32<1>>;
+
+    static const uint8_t wire[] = {
+        0x0a, 0x08, /* f1 bytes header (8 payload bytes) */
+        0xef, 0xbe, 0xad, 0xde, /* uint32 0xDEADBEEF */
+        0xbe, 0xba, 0xfe, 0xca, /* uint32 0xCAFEBABE */
+    };
+
+    std::vector<uint32_t> got;
+    ppb::reader<S> r(wire, sizeof(wire));
+
+    CHECK(r.parse([](const ppb::reader<S> &) -> ppb_error { return PPB_OK; }, {},
+              ppb::on<1>(
+                  [&](std::span<const ppb::le_packed<uint32_t>> s) -> ppb_error
+                  {
+                      for (const auto &e : s)
+                      {
+                          got.push_back(static_cast<uint32_t>(e));
+                      }
+
+                      return PPB_OK;
+                  })) == PPB_OK);
+    CHECK(got.size() == 2);
+    CHECK(got[0] == 0xDEADBEEFU);
+    CHECK(got[1] == 0xCAFEBABEU);
+}
+
+static void
+test_typed_bytes_misaligned_size_sets_error()
+{
+    using S = ppb::schema<ppb::packed_fixed32<1>>;
+
+    /* Payload size = 5 is not a multiple of sizeof(uint32_t)=4. */
+    static const uint8_t wire[] = {
+        0x0a, 0x05, 0x01, 0x02, 0x03, 0x04, 0x05, /* f1 bytes payload (5 bytes, misaligned) */
+    };
+
+    bool handler_called = false;
+    size_t observed_size = 999;
+    ppb::reader<S> r(wire, sizeof(wire));
+    ppb_error rc = r.parse([](const ppb::reader<S> &) -> ppb_error { return PPB_OK; }, {},
+        ppb::on<1>(
+            [&](std::span<const ppb::le_packed<uint32_t>> s) -> ppb_error
+            {
+                handler_called = true;
+                observed_size = s.size();
+                return PPB_OK;
+            }));
+
+    /* The handler runs with an empty span, but the reader records the error. */
+    CHECK(rc == PPB_ERROR_TRUNCATED_DATA);
+    CHECK(handler_called);
+    CHECK(observed_size == 0);
+    CHECK(r.error() == PPB_ERROR_TRUNCATED_DATA);
+}
+
+static void
+test_typed_packed_fixed_fields()
+{
+    using S = ppb::schema<ppb::packed_fixed32<1>, ppb::packed_sfixed64<2>, ppb::packed_f32<3>>;
+
+    static const uint8_t wire[] = {
+        0x0a, 0x08, /* f1 packed_fixed32 header (8 bytes) */
+        0xef, 0xbe, 0xad, 0xde, /* 0xDEADBEEF */
+        0xbe, 0xba, 0xfe, 0xca, /* 0xCAFEBABE */
+        0x12, 0x10, /* f2 packed_sfixed64 header (16 bytes) */
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, /* -1 */
+        0xfe, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, /* -2 */
+        0x1a, 0x08, /* f3 packed_f32 header (8 bytes) */
+        0x00, 0x00, 0x80, 0x3f, /* 1.0f */
+        0x00, 0x00, 0x00, 0x40, /* 2.0f */
+    };
+
+    std::vector<uint32_t> u32s;
+    std::vector<int64_t> i64s;
+    std::vector<float> floats;
+
+    ppb::reader<S> r(wire, sizeof(wire));
+
+    CHECK(r.parse([](const ppb::reader<S> &) -> ppb_error { return PPB_OK; }, {},
+              ppb::on<1>(
+                  [&](std::span<const ppb::le_packed<uint32_t>> s) -> ppb_error
+                  {
+                      for (const auto &e : s)
+                      {
+                          u32s.push_back(static_cast<uint32_t>(e));
+                      }
+
+                      return PPB_OK;
+                  }),
+              ppb::on<2>(
+                  [&](std::span<const ppb::le_packed<int64_t>> s) -> ppb_error
+                  {
+                      for (const auto &e : s)
+                      {
+                          i64s.push_back(static_cast<int64_t>(e));
+                      }
+
+                      return PPB_OK;
+                  }),
+              ppb::on<3>(
+                  [&](std::span<const ppb::le_packed<float>> s) -> ppb_error
+                  {
+                      for (const auto &e : s)
+                      {
+                          floats.push_back(static_cast<float>(e));
+                      }
+
+                      return PPB_OK;
+                  })) == PPB_OK);
+
+    CHECK(u32s.size() == 2);
+    CHECK(u32s[0] == 0xDEADBEEFU);
+    CHECK(u32s[1] == 0xCAFEBABEU);
+
+    CHECK(i64s.size() == 2);
+    CHECK(i64s[0] == -1);
+    CHECK(i64s[1] == -2);
+
+    CHECK(floats.size() == 2);
+    CHECK(floats[0] == 1.0f);
+    CHECK(floats[1] == 2.0f);
+}
+
+static void
+test_typed_packed_varint_fields()
+{
+    using S = ppb::schema<ppb::packed_int32<1>, ppb::packed_sint32<2>, ppb::packed_boolean<3>,
+        ppb::packed_uint64<4>>;
+
+    static const uint8_t wire[] = {
+        0x0a, 0x04, 0x01, 0x02, 0xac, 0x02, /* f1 = [1, 2, 300] */
+        0x12, 0x03, 0x01, 0x03, 0x05, /* f2 = [-1, -2, -3] (zigzag) */
+        0x1a, 0x03, 0x01, 0x00, 0x01, /* f3 = [true, false, true] */
+        0x22, 0x03, 0x64, 0xc8, 0x01, /* f4 = [100, 200] */
+    };
+
+    std::vector<int32_t> i32s;
+    std::vector<int32_t> s32s;
+    std::vector<bool> bools;
+    std::vector<uint64_t> u64s;
+
+    ppb::reader<S> r(wire, sizeof(wire));
+
+    CHECK(r.parse([](const ppb::reader<S> &) -> ppb_error { return PPB_OK; }, {},
+              ppb::on<1>(
+                  [&](auto view) -> ppb_error
+                  {
+                      for (auto v : view)
+                      {
+                          i32s.push_back(v);
+                      }
+
+                      return PPB_OK;
+                  }),
+              ppb::on<2>(
+                  [&](auto view) -> ppb_error
+                  {
+                      for (auto v : view)
+                      {
+                          s32s.push_back(v);
+                      }
+
+                      return PPB_OK;
+                  }),
+              ppb::on<3>(
+                  [&](auto view) -> ppb_error
+                  {
+                      for (auto v : view)
+                      {
+                          bools.push_back(v);
+                      }
+
+                      return PPB_OK;
+                  }),
+              ppb::on<4>(
+                  [&](auto view) -> ppb_error
+                  {
+                      for (auto v : view)
+                      {
+                          u64s.push_back(v);
+                      }
+
+                      return PPB_OK;
+                  })) == PPB_OK);
+
+    CHECK(i32s.size() == 3);
+    CHECK(i32s[0] == 1);
+    CHECK(i32s[1] == 2);
+    CHECK(i32s[2] == 300);
+
+    CHECK(s32s.size() == 3);
+    CHECK(s32s[0] == -1);
+    CHECK(s32s[1] == -2);
+    CHECK(s32s[2] == -3);
+
+    CHECK(bools.size() == 3);
+    CHECK(bools[0] == true);
+    CHECK(bools[1] == false);
+    CHECK(bools[2] == true);
+
+    CHECK(u64s.size() == 2);
+    CHECK(u64s[0] == 100);
+    CHECK(u64s[1] == 200);
+}
+
+static void
+test_typed_packed_enumerated_field()
+{
+    using S = ppb::schema<ppb::packed_enumerated<1, Color>>;
+
+    static const uint8_t wire[] = {
+        0x0a, 0x03, 0x01, 0x02, 0x03, /* f1 = [red, green, blue] */
+    };
+
+    std::vector<Color> got;
+    ppb::reader<S> r(wire, sizeof(wire));
+
+    CHECK(r.parse([](const ppb::reader<S> &) -> ppb_error { return PPB_OK; }, {},
+              ppb::on<1>(
+                  [&](auto view) -> ppb_error
+                  {
+                      for (auto c : view)
+                      {
+                          got.push_back(c);
+                      }
+
+                      return PPB_OK;
+                  })) == PPB_OK);
+    CHECK(got.size() == 3);
+    CHECK(got[0] == Color::red);
+    CHECK(got[1] == Color::green);
+    CHECK(got[2] == Color::blue);
+}
+
+static void
+test_typed_packed_varint_truncated_payload()
+{
+    using S = ppb::schema<ppb::packed_int32<1>>;
+
+    /*
+     * Length says 3 bytes, but the third byte has the continuation
+     * bit set with no follow-up -- the iterator should set
+     * TRUNCATED_DATA.
+     */
+    static const uint8_t wire[] = {
+        0x0a, 0x03, 0x01, 0x02, 0x80, /* f1 packed_int32 = [1, 2, <truncated>] */
+    };
+
+    int values_seen = 0;
+    ppb::reader<S> r(wire, sizeof(wire));
+    ppb_error rc = r.parse([](const ppb::reader<S> &) -> ppb_error { return PPB_OK; }, {},
+        ppb::on<1>(
+            [&](auto view) -> ppb_error
+            {
+                for (auto v : view)
+                {
+                    (void)v;
+                    values_seen++;
+                }
+                return PPB_OK;
+            }));
+
+    CHECK(rc == PPB_ERROR_TRUNCATED_DATA);
+    /*
+     * The iterator decodes the first two valid values before hitting the
+     * truncated third varint.
+     */
+    CHECK(values_seen == 2);
+    CHECK(r.error() == PPB_ERROR_TRUNCATED_DATA);
+}
+
+static void
+test_unpacked_aliases_compile_and_decode()
+{
+    /*
+     * unpacked_int32 aliases int32 with repeated semantics; verify that
+     * dispatching via on<>() reaches the typed handler for each occurrence.
+     */
+    using S = ppb::schema<ppb::unpacked_int32<1>>;
+
+    static const uint8_t wire[] = {
+        0x08, 0x01, /* f1 = 1 */
+        0x08, 0x02, /* f1 = 2 */
+        0x08, 0x03, /* f1 = 3 */
+    };
+
+    std::vector<int32_t> got;
+    ppb::reader<S> r(wire, sizeof(wire));
+
+    CHECK(r.parse([](const ppb::reader<S> &) -> ppb_error { return PPB_OK; }, {},
+              ppb::on<1>(
+                  [&](int32_t v) -> ppb_error
+                  {
+                      got.push_back(v);
+                      return PPB_OK;
+                  })) == PPB_OK);
+
+    CHECK(got.size() == 3);
+    CHECK(got[0] == 1);
+    CHECK(got[1] == 2);
+    CHECK(got[2] == 3);
+}
+
 int
 main()
 {
@@ -1115,6 +1690,21 @@ main()
     test_reader_parse_semantics_singular_equal();
     test_reader_parse_semantics_singular_len_multi();
     test_reader_parse_semantics_always_lexn_wire_order();
+
+    test_typed_scalar_varint_fields();
+    test_typed_int32_negative_decodes_as_10_byte_varint();
+    test_typed_enumerated_field();
+    test_typed_scalar_i32_fields();
+    test_typed_scalar_i64_fields();
+    test_typed_utf8string_field();
+    test_typed_bytes_default_element();
+    test_typed_bytes_uint32_element();
+    test_typed_bytes_misaligned_size_sets_error();
+    test_typed_packed_fixed_fields();
+    test_typed_packed_varint_fields();
+    test_typed_packed_enumerated_field();
+    test_typed_packed_varint_truncated_payload();
+    test_unpacked_aliases_compile_and_decode();
 
     std::printf("\n%d checks, %d failures\n", g_check_count, g_fail_count);
     return g_fail_count > 0 ? 1 : 0;

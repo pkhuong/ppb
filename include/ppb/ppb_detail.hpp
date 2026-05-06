@@ -48,6 +48,161 @@ template <auto K, field_semantics sem> struct i32 : public field_base<K, wire_ty
     static constexpr field_semantics semantics() { return sem; }
 };
 
+// Nicer scalar types (wrappers around the 4 wire types above)
+template <auto K, field_semantics sem> struct int32 : public varint<K, sem>
+{
+    static constexpr int32_t extract_value(const ppb_field &f, ppb_error *)
+    {
+        return static_cast<int32_t>(f.v.u64);
+    }
+};
+
+template <auto K, field_semantics sem> struct int64 : public varint<K, sem>
+{
+    static constexpr int64_t extract_value(const ppb_field &f, ppb_error *)
+    {
+        return static_cast<int64_t>(f.v.u64);
+    }
+};
+
+template <auto K, field_semantics sem> struct sint32 : public varint<K, sem>
+{
+    static constexpr int32_t extract_value(const ppb_field &f, ppb_error *)
+    {
+        return static_cast<int32_t>(ppb_zag(f.v.u64));
+    }
+};
+
+template <auto K, field_semantics sem> struct sint64 : public varint<K, sem>
+{
+    static constexpr int64_t extract_value(const ppb_field &f, ppb_error *) { return ppb_zag(f.v.u64); }
+};
+
+template <auto K, field_semantics sem> struct uint32 : public varint<K, sem>
+{
+    static constexpr uint32_t extract_value(const ppb_field &f, ppb_error *)
+    {
+        return static_cast<uint32_t>(f.v.u64);
+    }
+};
+
+template <auto K, field_semantics sem> struct uint64 : public varint<K, sem>
+{
+    static constexpr uint64_t extract_value(const ppb_field &f, ppb_error *) { return f.v.u64; }
+};
+
+template <auto K, field_semantics sem> struct boolean : public varint<K, sem>
+{
+    static constexpr bool extract_value(const ppb_field &f, ppb_error *) { return f.v.u64 != 0; }
+};
+
+template <auto K, typename Enum, field_semantics sem, typename UnderlyingType>
+struct enumerated : public varint<K, sem>
+{
+    static_assert(std::is_enum_v<Enum>, "enumerated field type requires an enum type parameter");
+    static constexpr Enum extract_value(const ppb_field &f, ppb_error *)
+    {
+        return static_cast<Enum>(static_cast<UnderlyingType>(f.v.u64));
+    }
+};
+
+template <auto K, field_semantics sem> struct fixed32 : public i32<K, sem>
+{
+    static constexpr uint32_t extract_value(const ppb_field &f, ppb_error *)
+    {
+        return static_cast<uint32_t>(f.v.u64);
+    }
+};
+
+template <auto K, field_semantics sem> struct sfixed32 : public i32<K, sem>
+{
+    static constexpr int32_t extract_value(const ppb_field &f, ppb_error *)
+    {
+        return std::bit_cast<int32_t>(static_cast<uint32_t>(f.v.u64));
+    }
+};
+
+template <auto K, field_semantics sem> struct f32 : public i32<K, sem>
+{
+    static constexpr float extract_value(const ppb_field &f, ppb_error *)
+    {
+        return std::bit_cast<float>(static_cast<uint32_t>(f.v.u64));
+    }
+};
+
+template <auto K, field_semantics sem> struct fixed64 : public i64<K, sem>
+{
+    static constexpr uint64_t extract_value(const ppb_field &f, ppb_error *) { return f.v.u64; }
+};
+
+template <auto K, field_semantics sem> struct sfixed64 : public i64<K, sem>
+{
+    static constexpr int64_t extract_value(const ppb_field &f, ppb_error *)
+    {
+        return std::bit_cast<int64_t>(f.v.u64);
+    }
+};
+
+template <auto K, field_semantics sem> struct f64 : public i64<K, sem>
+{
+    static constexpr double extract_value(const ppb_field &f, ppb_error *)
+    {
+        return std::bit_cast<double>(f.v.u64);
+    }
+};
+
+template <auto K, field_semantics sem> struct utf8string : public len<K, sem>
+{
+    static constexpr std::string_view extract_value(const ppb_field &f, ppb_error *)
+    {
+        return std::string_view(static_cast<const char *>(f.v.payload.buf), f.v.payload.size);
+    }
+};
+
+template <auto K, typename Element, field_semantics sem> struct bytes : public len<K, sem>
+{
+    static_assert(alignof(Element) == 1, "bytes element type must be byte-aligned");
+
+    static constexpr std::span<const Element> extract_value(const ppb_field &f, ppb_error *error)
+    {
+        if (f.v.payload.size % sizeof(Element) != 0) [[unlikely]]
+        {
+            if (error && *error == PPB_OK)
+                *error = PPB_ERROR_TRUNCATED_DATA;
+
+            return {};
+        }
+
+        size_t count = f.v.payload.size / sizeof(Element);
+        return std::span<const Element>(static_cast<const Element *>(f.v.payload.buf), count);
+    }
+};
+
+template <typename T>
+[[gnu::always_inline]] inline T
+le_packed<T>::value() const
+{
+    if constexpr (std::endian::native == std::endian::little)
+    {
+        return x;
+    }
+
+    if constexpr (sizeof(T) == 4)
+    {
+        uint32_t raw;
+        std::memcpy(&raw, &x, sizeof(T));
+        raw = __builtin_bswap32(raw);
+        return std::bit_cast<T>(raw);
+    }
+    else
+    {
+        uint64_t raw;
+        std::memcpy(&raw, &x, sizeof(T));
+        raw = __builtin_bswap64(raw);
+        return std::bit_cast<T>(raw);
+    }
+}
+
 namespace detail
 {
 
@@ -354,5 +509,233 @@ find_value_handler(const std::tuple<Hs...> &)
     return find_value_handler<Key, W, Arg, Hs...>();
 }
 
+// Decode policies for packed varint iterators.
+struct identity_decode
+{
+    template <typename T> static constexpr T apply(uint64_t v) noexcept { return static_cast<T>(v); }
+};
+
+struct zigzag_decode
+{
+    template <typename T> static constexpr T apply(uint64_t v) noexcept { return static_cast<T>(ppb_zag(v)); }
+};
+
+template <typename UnderlyingType> struct enum_decode
+{
+    template <typename T> static constexpr T apply(uint64_t v) noexcept
+    {
+        return static_cast<T>(static_cast<UnderlyingType>(v));
+    }
+};
+
+/*
+ * Input iterator that lazily decodes varints from a packed payload.
+ * On decode failure, sets *m_error (first-write-wins) and exhausts.
+ */
+template <typename T, typename Policy> class packed_varint_iter
+{
+public:
+    using value_type = T;
+    using reference = T;
+    using pointer = const T *;
+    using iterator_category = std::input_iterator_tag;
+    using difference_type = ptrdiff_t;
+
+    packed_varint_iter() = default;
+
+    packed_varint_iter(const std::byte *pos, const std::byte *end, ppb_error *error) noexcept
+        : m_pos(pos)
+        , m_next(pos)
+        , m_end(end)
+        , m_error(error)
+    {
+        if (m_pos < m_end) [[likely]]
+            decode();
+    }
+
+    T operator*() const noexcept { return m_current; }
+
+    packed_varint_iter &operator++()
+    {
+        m_pos = m_next;
+        if (m_pos < m_end) [[likely]]
+            decode();
+
+        return *this;
+    }
+
+    packed_varint_iter operator++(int)
+    {
+        packed_varint_iter tmp = *this;
+        ++(*this);
+        return tmp;
+    }
+
+    packed_varint_iter end() const { return packed_varint_iter(m_end, m_end, m_error); }
+
+    bool operator==(const packed_varint_iter &other) const noexcept { return m_pos == other.m_pos; }
+    bool operator!=(const packed_varint_iter &other) const noexcept { return m_pos != other.m_pos; }
+
+private:
+    /*
+     * Decode the varint at `m_pos` into `m_current` and set `m_next`
+     * to its end.  `m_pos` is left untouched so equality with the end
+     * iterator only triggers after `operator++` consumes the value.
+     */
+    void decode() noexcept
+    {
+        size_t remaining = size_t(m_end - m_pos);
+        ppb_buf buf = { .buf = m_pos, .size = remaining };
+        ppb_error err = PPB_OK;
+        uint64_t raw = ppb_decode_varint(&buf, &err);
+
+        if (err != PPB_OK) [[unlikely]]
+        {
+            if (m_error && *m_error == PPB_OK)
+                *m_error = err;
+
+            m_pos = m_end;
+            m_next = m_end;
+            return;
+        }
+
+        m_current = Policy::template apply<T>(raw);
+        m_next = static_cast<const std::byte *>(buf.buf);
+    }
+
+    const std::byte *m_pos = nullptr;
+    const std::byte *m_next = nullptr;
+    const std::byte *m_end = nullptr;
+    ppb_error *m_error = nullptr;
+    T m_current = T {};
+};
+
+template <typename T, typename Policy> class packed_varint_view
+{
+public:
+    using iterator = packed_varint_iter<T, Policy>;
+
+    packed_varint_view(const std::byte *data, size_t size, ppb_error *error) noexcept
+        : m_begin(data, data + size, error)
+    {
+    }
+
+    iterator begin() const noexcept { return m_begin; }
+    iterator end() const noexcept { return m_begin.end(); }
+
+private:
+    iterator m_begin;
+};
+
 }  // namespace detail
+
+// Packed repeated field types: some need the packed_varint_view above.
+// (these first few can just give a span back, so that's nice)
+
+template <auto K> struct packed_fixed32 : public bytes<K, le_packed<uint32_t>, field_semantics::repeated>
+{
+};
+
+template <auto K> struct packed_sfixed32 : public bytes<K, le_packed<int32_t>, field_semantics::repeated>
+{
+};
+
+template <auto K> struct packed_f32 : public bytes<K, le_packed<float>, field_semantics::repeated>
+{
+};
+
+template <auto K> struct packed_fixed64 : public bytes<K, le_packed<uint64_t>, field_semantics::repeated>
+{
+};
+
+template <auto K> struct packed_sfixed64 : public bytes<K, le_packed<int64_t>, field_semantics::repeated>
+{
+};
+
+template <auto K> struct packed_f64 : public bytes<K, le_packed<double>, field_semantics::repeated>
+{
+};
+
+// Packed varint fields return a lazy-decoding view.
+
+template <auto K> struct packed_int32 : public len<K, field_semantics::repeated>
+{
+    static constexpr auto extract_value(const ppb_field &f, ppb_error *error)
+    {
+        return detail::packed_varint_view<int32_t, detail::identity_decode>(static_cast<const std::byte *>(
+                                                                                f.v.payload.buf),
+            f.v.payload.size, error);
+    }
+};
+
+template <auto K> struct packed_int64 : public len<K, field_semantics::repeated>
+{
+    static constexpr auto extract_value(const ppb_field &f, ppb_error *error)
+    {
+        return detail::packed_varint_view<int64_t, detail::identity_decode>(static_cast<const std::byte *>(
+                                                                                f.v.payload.buf),
+            f.v.payload.size, error);
+    }
+};
+
+template <auto K> struct packed_sint32 : public len<K, field_semantics::repeated>
+{
+    static constexpr auto extract_value(const ppb_field &f, ppb_error *error)
+    {
+        return detail::packed_varint_view<int32_t, detail::zigzag_decode>(static_cast<const std::byte *>(
+                                                                              f.v.payload.buf),
+            f.v.payload.size, error);
+    }
+};
+
+template <auto K> struct packed_sint64 : public len<K, field_semantics::repeated>
+{
+    static constexpr auto extract_value(const ppb_field &f, ppb_error *error)
+    {
+        return detail::packed_varint_view<int64_t, detail::zigzag_decode>(static_cast<const std::byte *>(
+                                                                              f.v.payload.buf),
+            f.v.payload.size, error);
+    }
+};
+
+template <auto K> struct packed_uint32 : public len<K, field_semantics::repeated>
+{
+    static constexpr auto extract_value(const ppb_field &f, ppb_error *error)
+    {
+        return detail::packed_varint_view<uint32_t, detail::identity_decode>(static_cast<const std::byte *>(
+                                                                                 f.v.payload.buf),
+            f.v.payload.size, error);
+    }
+};
+
+template <auto K> struct packed_uint64 : public len<K, field_semantics::repeated>
+{
+    static constexpr auto extract_value(const ppb_field &f, ppb_error *error)
+    {
+        return detail::packed_varint_view<uint64_t, detail::identity_decode>(static_cast<const std::byte *>(
+                                                                                 f.v.payload.buf),
+            f.v.payload.size, error);
+    }
+};
+
+template <auto K> struct packed_boolean : public len<K, field_semantics::repeated>
+{
+    static constexpr auto extract_value(const ppb_field &f, ppb_error *error)
+    {
+        return detail::packed_varint_view<bool, detail::identity_decode>(static_cast<const std::byte *>(
+                                                                             f.v.payload.buf),
+            f.v.payload.size, error);
+    }
+};
+
+template <auto K, typename Enum, typename UnderlyingType>
+struct packed_enumerated : public len<K, field_semantics::repeated>
+{
+    static constexpr auto extract_value(const ppb_field &f, ppb_error *error)
+    {
+        return detail::packed_varint_view<Enum, detail::enum_decode<UnderlyingType>>(
+            static_cast<const std::byte *>(f.v.payload.buf), f.v.payload.size, error);
+    }
+};
+
 }  // namespace ppb
