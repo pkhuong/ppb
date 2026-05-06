@@ -109,3 +109,38 @@ constexpr ppb_field_meta bad = ppb::reader<ppb::schema<ppb::varint<1>>> {}.meta<
 #ifdef PPB_FAIL_META_WIRE_TYPE_NOT_FOUND
 constexpr ppb_field_meta bad = ppb::reader<ppb::schema<ppb::varint<1>>> {}.meta<1, ppb::wire_type::len>();
 #endif
+
+// find_value_handler: multiple key+wire matches, none invocable with Arg
+//
+// Both handlers match key=1, varint, but neither accepts `long`.
+
+/* expect-error: value_handlers match \(Key, wire\), but none is invocable with the argument type */
+#ifdef PPB_FAIL_FIND_VALUE_HANDLER_NONE_INVOCABLE
+struct Foo
+{
+};
+constexpr auto bad = ppb::detail::find_value_handler<1, ppb::wire_type::varint, Foo>(
+    std::tuple { ppb::on<1, ppb::wire_type::varint>([](int) { }),
+        ppb::on<1, ppb::wire_type::varint>([](const char *) { }) });
+#endif
+
+// find_value_handler: multiple key+wire matches, multiple invocable with Arg
+//
+// Both handlers match key=1, varint, and both accept `int`: ambiguous call rejected.
+
+/* expect-error: multiple value_handlers match \(Key, wire\) and accept the argument type; ambiguous */
+#ifdef PPB_FAIL_FIND_VALUE_HANDLER_AMBIGUOUS
+constexpr auto bad = ppb::detail::find_value_handler<1, ppb::wire_type::varint, int>(std::tuple {
+    ppb::on<1, ppb::wire_type::varint>([](int) { }), ppb::on<1, ppb::wire_type::varint>([](int) { }) });
+#endif
+
+// find_value_handler: handler key type differs from the dispatch Key type
+//
+// Dispatch Key is the `int` literal `1`; the handler is built with the
+// `long` literal `1L`, so the all-same-key-type static_assert fires.
+
+/* expect-error: every value_handler in the tuple must use the same key type as the dispatch Key */
+#ifdef PPB_FAIL_FIND_VALUE_HANDLER_KEY_TYPE_MISMATCH
+constexpr auto bad = ppb::detail::find_value_handler<1, ppb::wire_type::varint, int>(
+    std::tuple { ppb::on<1L, ppb::wire_type::varint>([](int) { }) });
+#endif

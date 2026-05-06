@@ -248,6 +248,43 @@ static_assert(
 
 }  // namespace test_dispatch
 
+// find_value_handler(): select the value_handler matching (Key, wire, Arg).
+namespace test_find_value_handler
+{
+// Dummy handler function pointers.
+using H_int = void (*)(int);
+using H_str = void (*)(const char *);
+
+constexpr H_int h_int = nullptr;
+constexpr H_str h_str = nullptr;
+
+// No match: returns nullopt.
+constexpr auto no_match = ppb::detail::find_value_handler<1, ppb::wire_type::varint, int>(
+    std::tuple { ppb::on<2, ppb::wire_type::varint>(h_int) });
+static_assert(!no_match.has_value());
+
+// Exact key+wire match: returns the correct index.
+constexpr auto exact = ppb::detail::find_value_handler<1, ppb::wire_type::varint, int>(
+    std::tuple { ppb::on<2, ppb::wire_type::varint>(h_int), ppb::on<1, ppb::wire_type::varint>(h_int) });
+static_assert(exact.has_value() && *exact == 1);
+
+// wire_type::any matches any wire type for the key.
+constexpr auto any_wire = ppb::detail::find_value_handler<1, ppb::wire_type::i64, int>(
+    std::tuple { ppb::on<1>(h_int) });
+static_assert(any_wire.has_value() && *any_wire == 0);
+
+// Specific wire type does NOT match a different wire type.
+constexpr auto wrong_wire = ppb::detail::find_value_handler<1, ppb::wire_type::i64, int>(
+    std::tuple { ppb::on<1, ppb::wire_type::varint>(h_int) });
+static_assert(!wrong_wire.has_value());
+
+// Multiple key+wire matches, disambiguated by Arg invocability.
+constexpr auto disambiguated = ppb::detail::find_value_handler<1, ppb::wire_type::varint, int>(
+    std::tuple { ppb::on<1, ppb::wire_type::varint>(h_str), ppb::on<1, ppb::wire_type::varint>(h_int) });
+static_assert(disambiguated.has_value() && *disambiguated == 1);
+
+}  // namespace test_find_value_handler
+
 int
 main()
 {
