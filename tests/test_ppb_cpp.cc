@@ -613,6 +613,230 @@ test_reader_lexn_handler_error_runs_full_batch()
     CHECK(r.error() == PPB_ERROR_CORRUPT_TAG);
 }
 
+// parse(): prescan -> init(const reader&) -> lex+dispatch in batches.
+//
+// Reuses LexnSchema / lexn_two_batches_wire (two `{varint<1>, len<2>}`
+// batches) so we can observe per-batch dispatch and partial consume.
+
+static void
+test_reader_parse_happy_path()
+{
+    int init_calls = 0;
+    int field1_calls = 0;
+    int field2_calls = 0;
+
+    ppb::reader<LexnSchema> r(lexn_two_batches_wire, sizeof(lexn_two_batches_wire));
+
+    CHECK(r.parse(
+              [&](const ppb::reader<LexnSchema> &snapshot) -> ppb_error
+              {
+                  init_calls++;
+                  // After prescan, meta() reflects what was found on the wire.
+                  CHECK(snapshot.meta<1>().num_occurrences == 2);
+                  CHECK(snapshot.meta<2>().num_occurrences == 2);
+                  return PPB_OK;
+              },
+              {},
+              ppb::on<1>(
+                  [&](const ppb_field &) -> ppb_error
+                  {
+                      field1_calls++;
+                      return PPB_OK;
+                  }),
+              ppb::on<2>(
+                  [&](const ppb_field &) -> ppb_error
+                  {
+                      field2_calls++;
+                      return PPB_OK;
+                  })) == PPB_OK);
+
+    CHECK(init_calls == 1);
+    CHECK(field1_calls == 2);
+    CHECK(field2_calls == 2);
+    CHECK(r.error() == PPB_OK);
+    CHECK(r.empty());
+
+    // After parse(), metadata from prescan is still visible.
+    CHECK(r.meta<1>().num_occurrences == 2);
+    CHECK(r.meta<2>().num_occurrences == 2);
+
+    // After reset_fields(), metadata is zeroed.
+    r.reset_fields();
+    CHECK(r.meta<1>().num_occurrences == 0);
+    CHECK(r.meta<2>().num_occurrences == 0);
+}
+
+static void
+test_reader_parse_init_error_does_not_consume()
+{
+    int init_calls = 0;
+    int handler_calls = 0;
+
+    ppb::reader<LexnSchema> r(lexn_two_batches_wire, sizeof(lexn_two_batches_wire));
+    const size_t initial_size = r.size();
+
+    CHECK(r.parse(
+              [&](const ppb::reader<LexnSchema> &) -> ppb_error
+              {
+                  init_calls++;
+                  return PPB_ERROR_TRUNCATED_DATA;
+              },
+              {},
+              ppb::on<1>(
+                  [&](const ppb_field &) -> ppb_error
+                  {
+                      handler_calls++;
+                      return PPB_OK;
+                  })) == PPB_ERROR_TRUNCATED_DATA);
+
+    CHECK(init_calls == 1);
+    CHECK(handler_calls == 0);
+    CHECK(r.error() == PPB_ERROR_TRUNCATED_DATA);
+    CHECK(r.size() == initial_size);
+}
+
+// Wire with a corrupt tag mid-stream: prescan fails, init must not run.
+static const uint8_t parse_corrupt_wire[] = {
+    0x08, 0x01,  /* field 1 varint 1 */
+    0x00,        /* zero tag (corrupt) */
+};
+
+static void
+test_reader_parse_prescan_error_skips_init()
+{
+    int init_calls = 0;
+    int handler_calls = 0;
+
+    ppb::reader<LexnSchema> r(parse_corrupt_wire, sizeof(parse_corrupt_wire));
+
+    CHECK(r.parse(
+              [&](const ppb::reader<LexnSchema> &) -> ppb_error
+              {
+                  init_calls++;
+                  return PPB_OK;
+              },
+              {},
+              ppb::on<1>(
+                  [&](const ppb_field &) -> ppb_error
+                  {
+                      handler_calls++;
+                      return PPB_OK;
+                  })) == PPB_ERROR_CORRUPT_TAG);
+
+    CHECK(init_calls == 0);
+    CHECK(handler_calls == 0);
+    CHECK(r.error() == PPB_ERROR_CORRUPT_TAG);
+}
+
+static void
+test_reader_parse_handler_error_runs_full_batch()
+{
+    int field1_calls = 0;
+    int field2_calls = 0;
+
+    ppb::reader<LexnSchema> r(lexn_two_batches_wire, sizeof(lexn_two_batches_wire));
+
+    // Field 1's handler errors on the first batch, but field 2's
+    // handler in the same batch must still fire.  parse exits before
+    // starting the second batch.
+    CHECK(r.parse([](const ppb::reader<LexnSchema> &) -> ppb_error { return PPB_OK; }, {},
+              ppb::on<1>(
+                  [&](const ppb_field &) -> ppb_error
+                  {
+                      field1_calls++;
+                      return PPB_ERROR_CORRUPT_TAG;
+                  }),
+              ppb::on<2>(
+                  [&](const ppb_field &) -> ppb_error
+                  {
+                      field2_calls++;
+                      return PPB_OK;
+                  })) == PPB_ERROR_CORRUPT_TAG);
+
+    CHECK(field1_calls == 1);
+    CHECK(field2_calls == 1);
+    CHECK(r.error() == PPB_ERROR_CORRUPT_TAG);
+}
+
+static void
+test_reader_parse_sticky_error_short_circuits()
+{
+    int init_calls = 0;
+
+    ppb::reader<LexnSchema> r(parse_corrupt_wire, sizeof(parse_corrupt_wire));
+
+    // First parse hits the corrupt tag during prescan.
+    CHECK(r.parse([](const ppb::reader<LexnSchema> &) -> ppb_error { return PPB_OK; }) ==
+        PPB_ERROR_CORRUPT_TAG);
+
+    // Second parse must short-circuit on the sticky error before even
+    // running init.
+    CHECK(r.parse(
+              [&](const ppb::reader<LexnSchema> &) -> ppb_error
+              {
+                  init_calls++;
+                  return PPB_OK;
+              }) == PPB_ERROR_CORRUPT_TAG);
+    CHECK(init_calls == 0);
+}
+
+// Schema with fields A=varint<1> and B=varint<2>.  The wire has field A
+// repeated 4x, then field B once, then field A again.  Since A, B, A is
+// non-monotonic (A < B), lexn splits this into two batches:
+//   batch 1: 4xA, 1xB  -> both handlers fire
+//   batch 2: 1xA       -> only A's handler fires
+// This shows parse() invokes handlers per lexn batch, not on everything
+// prescan saw (which would be a single merged invocation).
+
+using AB_Schema = ppb::schema<ppb::varint<1>, ppb::varint<2>>;
+
+static const uint8_t a_a_a_a_b_a_wire[] = {
+    0x08, 0x01,  /* field 1 varint 1 */
+    0x08, 0x01,  /* field 1 varint 1 */
+    0x08, 0x01,  /* field 1 varint 1 */
+    0x08, 0x01,  /* field 1 varint 1 */
+    0x10, 0x2a,  /* field 2 varint 42 */
+    0x08, 0x09,  /* field 1 varint 9 */
+};
+
+static void
+test_reader_parse_per_batch_dispatch()
+{
+    int field1_calls = 0;
+    int field2_calls = 0;
+
+    ppb::reader<AB_Schema> r(a_a_a_a_b_a_wire, sizeof(a_a_a_a_b_a_wire));
+
+    CHECK(r.parse(
+              [](const ppb::reader<AB_Schema> &snapshot) -> ppb_error
+              {
+                  // Prescan sees all occurrences.
+                  CHECK(snapshot.meta<1>().num_occurrences == 5);
+                  CHECK(snapshot.meta<2>().num_occurrences == 1);
+                  return PPB_OK;
+              },
+              {},
+              ppb::on<1>(
+                  [&](const ppb_field &) -> ppb_error
+                  {
+                      field1_calls++;
+                      return PPB_OK;
+                  }),
+              ppb::on<2>(
+                  [&](const ppb_field &) -> ppb_error
+                  {
+                      field2_calls++;
+                      return PPB_OK;
+                  })) == PPB_OK);
+
+    // Field 1 is repeated (5x), so lexn dispatches it one-at-a-time.
+    // Field 2 appears once and is dispatched exactly once.
+    // This confirms parse() dispatches per lexn batch, not on everything prescan saw.
+    CHECK(field1_calls == 5);
+    CHECK(field2_calls == 1);
+    CHECK(r.empty());
+}
+
 int
 main()
 {
@@ -647,6 +871,13 @@ main()
 
     test_reader_lexn_decode_dispatch_consume();
     test_reader_lexn_handler_error_runs_full_batch();
+
+    test_reader_parse_happy_path();
+    test_reader_parse_init_error_does_not_consume();
+    test_reader_parse_prescan_error_skips_init();
+    test_reader_parse_handler_error_runs_full_batch();
+    test_reader_parse_sticky_error_short_circuits();
+    test_reader_parse_per_batch_dispatch();
 
     std::printf("\n%d checks, %d failures\n", g_check_count, g_fail_count);
     return g_fail_count > 0 ? 1 : 0;
