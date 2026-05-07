@@ -390,6 +390,45 @@ static_assert(sizeof(ppb::auto_schema<ppb::detect_unknown_fields>) > 0);
 
 }  // namespace test_unknown_field
 
+// `ppb::on_unknown` factory: produces an `unknown_handler` and
+// composes with `find_unknown_handler`.  Negative counterparts in
+// PPB_FAIL_ON_UNKNOWN_*.
+namespace test_on_unknown
+{
+
+constexpr auto h = ppb::on_unknown([](const ppb_field &) -> ppb_error { return PPB_OK; });
+
+// `unknown_handler` carries the catch-all marker; not a value_handler.
+static_assert(decltype(h)::is_unknown_handler());
+
+// Default wire = `any`; both varint and i32 dispatch through it.
+constexpr auto found_varint =
+    ppb::detail::find_unknown_handler<ppb::wire_type::varint, const ppb_field &, decltype(h)>();
+static_assert(found_varint.has_value() && *found_varint == 0);
+
+constexpr auto found_i32 =
+    ppb::detail::find_unknown_handler<ppb::wire_type::i32, const ppb_field &, decltype(h)>();
+static_assert(found_i32.has_value() && *found_i32 == 0);
+
+// Wire-pinned handler only matches that wire.
+constexpr auto h_varint = ppb::on_unknown<ppb::wire_type::varint>(
+    [](const ppb_field &) -> ppb_error { return PPB_OK; });
+
+constexpr auto found_specific =
+    ppb::detail::find_unknown_handler<ppb::wire_type::varint, const ppb_field &, decltype(h_varint)>();
+static_assert(found_specific.has_value() && *found_specific == 0);
+
+constexpr auto missed =
+    ppb::detail::find_unknown_handler<ppb::wire_type::i32, const ppb_field &, decltype(h_varint)>();
+static_assert(!missed.has_value());
+
+// `find_value_handler` ignores `unknown_handler`s mixed into the pack.
+constexpr auto value_only = ppb::detail::find_value_handler<1, ppb::wire_type::varint, int,
+    ppb::detail::value_handler<1, ppb::wire_type::varint, int (*)(int)>, decltype(h)>();
+static_assert(value_only.has_value() && *value_only == 0);
+
+}  // namespace test_on_unknown
+
 int
 main()
 {

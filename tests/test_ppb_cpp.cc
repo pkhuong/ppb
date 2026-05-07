@@ -2136,6 +2136,91 @@ test_unknown_field_known_handlers_still_run()
     CHECK(r.unknown_field() == 56);
 }
 
+// `ppb::on_unknown(...)` fires for catch-all fields and receives the
+// raw `ppb_field`.  Handler also coexists with `ppb::on<>(...)` for
+// real fields in the same `parse()` call.
+static void
+test_on_unknown_dispatches_per_occurrence()
+{
+    // Two unknown varints (fields 7 and 8) plus the known field 1.
+    static const uint8_t multi_unknown_wire[] = {
+        0x08, 0x96, 0x01, /* field 1 varint 150 (known) */
+        0x38, 0x07, /* field 7 varint 7 (unknown, tag = 7*8 = 56) */
+        0x40, 0x08, /* field 8 varint 8 (unknown, tag = 8*8 = 64) */
+    };
+
+    ppb::reader<KnownPlusUnknownSchema> r(multi_unknown_wire, sizeof(multi_unknown_wire));
+
+    int known_calls = 0;
+    int unknown_calls = 0;
+    std::vector<uint64_t> unknown_values;
+
+    CHECK(r.parse([](const ppb::reader<KnownPlusUnknownSchema> &) -> ppb_error { return PPB_OK; }, {},
+              ppb::on<1, ppb::wire_type::varint>(
+                  [&](const ppb_field &) -> ppb_error
+                  {
+                      known_calls++;
+                      return PPB_OK;
+                  }),
+              ppb::on_unknown(
+                  [&](const ppb_field &f) -> ppb_error
+                  {
+                      unknown_calls++;
+                      unknown_values.push_back(f.v.u64);
+                      return PPB_OK;
+                  })) == PPB_OK);
+    CHECK(known_calls == 1);
+    CHECK(unknown_calls == 2);
+    CHECK(unknown_values.size() == 2);
+    CHECK(unknown_values[0] == 7);
+    CHECK(unknown_values[1] == 8);
+}
+
+// `on_unknown<wire>` only matches that wire type's catch-all.
+static void
+test_on_unknown_per_wire_dispatch()
+{
+    // One unknown varint (field 7) and one unknown i32 (field 9).
+    static const uint8_t mixed_wire[] = {
+        0x38, 0x01, /* field 7 varint 1 (unknown) */
+        0x4d, 0x2a, 0x00, 0x00, 0x00, /* field 9 i32 42 (unknown) */
+    };
+
+    using S = ppb::auto_schema<ppb::varint<1>, ppb::detect_unknown_fields>;
+    ppb::reader<S> r(mixed_wire, sizeof(mixed_wire));
+
+    int varint_calls = 0;
+    int i32_calls = 0;
+
+    CHECK(r.parse([](const ppb::reader<S> &) -> ppb_error { return PPB_OK; }, {},
+              ppb::on_unknown<ppb::wire_type::varint>(
+                  [&](const ppb_field &) -> ppb_error
+                  {
+                      varint_calls++;
+                      return PPB_OK;
+                  }),
+              ppb::on_unknown<ppb::wire_type::i32>(
+                  [&](const ppb_field &) -> ppb_error
+                  {
+                      i32_calls++;
+                      return PPB_OK;
+                  })) == PPB_OK);
+    CHECK(varint_calls == 1);
+    CHECK(i32_calls == 1);
+}
+
+// `on_unknown` handler errors fold into the reader's sticky error.
+static void
+test_on_unknown_handler_error_propagates()
+{
+    ppb::reader<KnownPlusUnknownSchema> r(known_plus_unknown_wire, sizeof(known_plus_unknown_wire));
+
+    CHECK(r.parse([](const ppb::reader<KnownPlusUnknownSchema> &) -> ppb_error { return PPB_OK; }, {},
+              ppb::on_unknown([](const ppb_field &) -> ppb_error { return PPB_ERROR_TRUNCATED_DATA; })) ==
+        PPB_ERROR_TRUNCATED_DATA);
+    CHECK(r.error() == PPB_ERROR_TRUNCATED_DATA);
+}
+
 int
 main()
 {
@@ -2227,6 +2312,9 @@ main()
     test_unknown_field_first_write_wins();
     test_unknown_field_sticky_across_reset_fields();
     test_unknown_field_known_handlers_still_run();
+    test_on_unknown_dispatches_per_occurrence();
+    test_on_unknown_per_wire_dispatch();
+    test_on_unknown_handler_error_propagates();
 
     std::printf("\n%d checks, %d failures\n", g_check_count, g_fail_count);
     return g_fail_count > 0 ? 1 : 0;
