@@ -746,6 +746,50 @@ find_unknown_handler()
     }
 }
 
+// Checks that handler H matches at least one field in Fs...
+// Used by reader::run_handlers to catch useless on()/on_unknown()
+// handlers at compile time.
+template <typename H, typename... Fs>
+consteval bool
+handler_matches_some_field()
+{
+    constexpr auto check_one = []<typename F>() consteval -> bool
+    {
+        if constexpr (H::is_unknown_handler())
+        {
+            if constexpr (F::is_unknown())
+                return H::matches_wire(F::wire());
+
+            return false;
+        }
+        else
+        {
+            if constexpr (F::is_unknown())
+            {
+                return false;
+            }
+            else if constexpr (!std::is_same_v<std::decay_t<typename H::key_type>,
+                                   std::decay_t<typename F::Key>>)
+            {
+                /*
+                 * The handler's Key type differs from this field's Key
+                 * type, so H::matches() wouldn't compile.  Return true
+                 * here: we want the dedicated key-type static_assert in
+                 * find_value_handler to fire with a clearer diagnostic
+                 * than "handler does not match any schema field".
+                 */
+                return true;
+            }
+            else
+            {
+                return H::matches(F::tag(), F::wire());
+            }
+        }
+    };
+
+    return (... || check_one.template operator()<Fs>());
+}
+
 // Decode policies for packed varint iterators.
 struct identity_decode
 {

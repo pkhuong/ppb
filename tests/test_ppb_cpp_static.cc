@@ -429,6 +429,50 @@ static_assert(value_only.has_value() && *value_only == 0);
 
 }  // namespace test_on_unknown
 
+// handler_matches_some_field: positive cases (counterpart to
+// PPB_FAIL_RUN_HANDLERS_* tests).
+namespace test_handler_matches_some_field
+{
+
+using Hf = ppb_error (*)(const ppb_field &);
+constexpr Hf hf = nullptr;
+
+// on<Key, specific_wire> matches a field with that key and wire.
+using H_varint = decltype(ppb::on<1, ppb::wire_type::varint>(hf));
+static_assert(ppb::detail::handler_matches_some_field<H_varint, ppb::varint<1>>());
+static_assert(ppb::detail::handler_matches_some_field<H_varint, ppb::varint<1>, ppb::i64<1>>());
+// Does not match when the only field has the same key but a different wire.
+static_assert(!ppb::detail::handler_matches_some_field<H_varint, ppb::i64<1>>());
+// Does not match when the key is absent.
+static_assert(!ppb::detail::handler_matches_some_field<H_varint, ppb::varint<2>>());
+
+// on<Key> with wire_type::any matches any wire type for that key.
+using H_any = decltype(ppb::on<1>(hf));
+static_assert(ppb::detail::handler_matches_some_field<H_any, ppb::varint<1>>());
+static_assert(ppb::detail::handler_matches_some_field<H_any, ppb::i64<1>>());
+static_assert(ppb::detail::handler_matches_some_field<H_any, ppb::len<1>>());
+
+// on_unknown<any> matches any ppb::unknown entry.
+using HU = decltype(ppb::on_unknown(hf));
+static_assert(
+    ppb::detail::handler_matches_some_field<HU, ppb::varint<1>, ppb::unknown<ppb::wire_type::varint>>());
+static_assert(
+    ppb::detail::handler_matches_some_field<HU, ppb::varint<1>, ppb::unknown<ppb::wire_type::i64>>());
+static_assert(
+    ppb::detail::handler_matches_some_field<HU, ppb::varint<1>, ppb::unknown<ppb::wire_type::len>>());
+static_assert(
+    ppb::detail::handler_matches_some_field<HU, ppb::varint<1>, ppb::unknown<ppb::wire_type::i32>>());
+// Does not match when there is no catch-all.
+static_assert(!ppb::detail::handler_matches_some_field<HU, ppb::varint<1>>());
+
+// on_unknown<wire> only matches catch-alls with that wire type.
+using HU_varint = decltype(ppb::on_unknown<ppb::wire_type::varint>(hf));
+static_assert(ppb::detail::handler_matches_some_field<HU_varint, ppb::varint<1>,
+    ppb::unknown<ppb::wire_type::varint>>());
+static_assert(!ppb::detail::handler_matches_some_field<HU_varint, ppb::unknown<ppb::wire_type::i64>>());
+
+}  // namespace test_handler_matches_some_field
+
 int
 main()
 {

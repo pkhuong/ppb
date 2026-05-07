@@ -475,7 +475,8 @@ enum class HandlerKey : int
     absent = 42
 };
 
-using HandlerSchema = ppb::schema<ppb::varint<HandlerKey::x>, ppb::len<HandlerKey::x>>;
+using HandlerSchema =
+    ppb::schema<ppb::varint<HandlerKey::x>, ppb::len<HandlerKey::x>, ppb::varint<HandlerKey::absent>>;
 
 // Copied from varint_then_len_wire in test_ppb.c.
 static const uint8_t handler_dispatch_wire[] = {

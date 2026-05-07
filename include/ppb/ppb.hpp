@@ -1049,6 +1049,11 @@ template <typename... Hs>
 reader<schema<Fs...>>::run_handlers(std::tuple<Hs...> &handlers, uintptr_t lower_bound,
     uintptr_t range_size_inclusive, size_t begin, size_t end, bool run_zero_defaults)
 {
+    static_assert((detail::handler_matches_some_field<Hs, Fs...>() && ...),
+        "on<Key> or on_unknown<> handler does not match any schema field; the "
+        "key is absent from the schema / there is no ppb::unknown<> field in the "
+        "schema (respectively), or the key exists but wire types don't match.");
+
     detail::dispatch<Schema::num_fields()>(begin, end,
         [&]<size_t I>(std::integral_constant<size_t, I>)
         {
