@@ -74,7 +74,9 @@
 // `singular` squashes when the C lexer reports the squash was
 // lossless (varint/i32/i64 with bit-identical values), but always
 // forces lexn for LEN since the C lexer does not compare LEN
-// payloads; `error` rejects any occurrence with PPB_ERROR_CORRUPT_TAG.
+// payloads; `proto3_zero_default` is like `last_write_wins` but *may*
+// also dispatch absent fields (handler receives zero u64 or empty
+// span); `error` rejects any occurrence with PPB_ERROR_CORRUPT_TAG.
 //
 // Error handling:
 //   - `reader::error()` is a sticky `ppb_error`: once set, every
@@ -128,10 +130,12 @@ enum class wire_type : uint8_t
     any = 255,  // sentinel value for meta<>
 };
 
-// Per-field policy used by `reader::parse()` to decide how to dispatch
-// when the same field appears multiple times on the wire.  All
-// semantics are advisory: handler dispatch is the only behavior that
-// changes; prescan metadata is always aggregated the same way.
+// Per-field policy used by `reader::parse()` to decide how to
+// dispatch when the same field appears multiple times on the wire.
+// All semantics are advisory. Handler dispatch is the only behavior
+// that changes; prescan metadata is always aggregated the same way.
+// Handlers may be called up to once for every occurrence on the wire,
+// and all handlers are skipped on empty inputs.
 //
 //   always_lexn     Force a lexn pass even on a single occurrence, so
 //                   handlers are invoked in wire order.  Default for
@@ -157,6 +161,12 @@ enum class wire_type : uint8_t
 //                   of wire type.  Matches proto3 default field
 //                   semantics for scalars.
 //
+//   proto3_zero_default Like `last_write_wins` (never forces a lexn
+//                   pass) but the handler *may* be invoked even when
+//                   the field was absent from the wire, in which case
+//                   the handler receives the zero-filled default (0
+//                   for scalars, empty span for LEN).
+//
 //   error           Any occurrence is a parse error: parse() returns
 //                   PPB_ERROR_CORRUPT_TAG, sets `reader::error_field()`
 //                   to the encoded tag (field_number * 8 + wire_type),
@@ -167,6 +177,7 @@ enum class field_semantics : int8_t
     repeated = 0,  // we want to see everything
     singular = 1,  // it's ok to do LWW if all the squashed values are equivalent
     last_write_wins = 2,  // we only want to see the last value (regular proto semantics)
+    proto3_zero_default = 3,  // LWW but also dispatch absent fields as zero/empty
     error = 127,  // just report a PPB_ERROR_CORRUPT_TAG if we see this
 };
 
@@ -617,11 +628,14 @@ template <typename... Fs> struct reader<schema<Fs...>>
     // additional handlers after a prescan, but not part of the normal
     // parse loop.
     //
-    // `dispatch_tuple` is the tuple-receiving form for generic usage;
-    // direct invocations should probably prefer `dispatch`.
+    // `dispatch_tuple` for generic usage; direct invocations should
+    // probably prefer `dispatch`.  When `run_zero_defaults = true`,
+    // invokes handlers for proto3_zero_default fields
+    // unconditionally (otherwise, treats them like `last_write_wins`).
     template <typename... Hs> ppb_error dispatch(Hs &&...handlers);
 
-    template <typename... Hs> ppb_error dispatch_tuple(std::tuple<Hs...> &handlers);
+    template <typename... Hs>
+    ppb_error dispatch_tuple(std::tuple<Hs...> &handlers, bool run_zero_defaults = false);
 
 private:
     constexpr ppb_buf make_ppb_buf() const noexcept
@@ -634,11 +648,12 @@ private:
 
     template <typename... Hs>
     [[gnu::noinline]] void run_handlers(std::tuple<Hs...> &handlers, uintptr_t lower_bound,
-        uintptr_t range_size_inclusive, size_t begin = 0, size_t end = Schema::num_fields());
+        uintptr_t range_size_inclusive, size_t begin = 0, size_t end = Schema::num_fields(),
+        bool run_zero_defaults = false);
 
     template <size_t idx, typename... Hs>
     [[gnu::always_inline]] inline void run_handler_for_idx(std::tuple<Hs...> &handlers, uintptr_t lower_bound,
-        uintptr_t range_size_inclusive);
+        uintptr_t range_size_inclusive, bool run_zero_defaults);
 
     std::span<const std::byte> m_input;
     ppb_error m_error = PPB_OK;
@@ -715,7 +730,7 @@ reader<schema<Fs...>>::parse(Init &&init, limit bounds, Hs &&...handlers)
                     need_lexn = true;
             }
 
-            // last_write_wins: never forces lexn
+            // last_write_wins / proto3_zero_default: never forces lexn
         };
         (scan(std::integral_constant<size_t, Is> {}), ...);
     }(std::make_index_sequence<Schema::num_fields()> {});
@@ -734,7 +749,8 @@ reader<schema<Fs...>>::parse(Init &&init, limit bounds, Hs &&...handlers)
 
     if (!need_lexn) [[likely]]
     {
-        run_handlers(tup, reinterpret_cast<uintptr_t>(m_input.data()), size_t(num_bytes) - 1);
+        run_handlers(tup, reinterpret_cast<uintptr_t>(m_input.data()), size_t(num_bytes) - 1, 0,
+            Schema::num_fields(), /*run_zero_defaults=*/true);
         m_input = m_input.subspan(size_t(num_bytes));
         return m_error;
     }
@@ -781,7 +797,8 @@ reader<schema<Fs...>>::prescan(limit bounds, Hs &&...handlers)
         return m_error;
     }
 
-    ppb_error err = dispatch(std::forward<Hs>(handlers)...);
+    std::tuple<std::decay_t<Hs>...> tup(std::forward<Hs>(handlers)...);
+    ppb_error err = dispatch_tuple(tup, /*run_zero_defaults=*/true);
     return int(err) < 0 ? ptrdiff_t(err) : ret;
 }
 
@@ -852,7 +869,7 @@ reader<schema<Fs...>>::dispatch(Hs &&...handlers)
 template <typename... Fs>
 template <typename... Hs>
 ppb_error
-reader<schema<Fs...>>::dispatch_tuple(std::tuple<Hs...> &handlers)
+reader<schema<Fs...>>::dispatch_tuple(std::tuple<Hs...> &handlers, bool run_zero_defaults)
 {
     if constexpr (sizeof...(Hs) == 0)
         return m_error;
@@ -860,7 +877,9 @@ reader<schema<Fs...>>::dispatch_tuple(std::tuple<Hs...> &handlers)
     if (m_error != PPB_OK) [[unlikely]]
         return m_error;
 
-    run_handlers(handlers, 1, std::numeric_limits<uintptr_t>::max() - 1);
+    run_handlers(handlers, /*lower_bound=*/1,
+        /*range_size_inclusive=*/std::numeric_limits<uintptr_t>::max() - 1,
+        /*begin=*/0, /*end=*/Schema::num_fields(), run_zero_defaults);
     return m_error;
 }
 
@@ -868,12 +887,12 @@ template <typename... Fs>
 template <typename... Hs>
 [[gnu::noinline]] void
 reader<schema<Fs...>>::run_handlers(std::tuple<Hs...> &handlers, uintptr_t lower_bound,
-    uintptr_t range_size_inclusive, size_t begin, size_t end)
+    uintptr_t range_size_inclusive, size_t begin, size_t end, bool run_zero_defaults)
 {
     detail::dispatch<Schema::num_fields()>(begin, end,
         [&]<size_t I>(std::integral_constant<size_t, I>)
         {
-            run_handler_for_idx<I>(handlers, lower_bound, range_size_inclusive);
+            run_handler_for_idx<I>(handlers, lower_bound, range_size_inclusive, run_zero_defaults);
             return true;
         });
 }
@@ -882,7 +901,7 @@ template <typename... Fs>
 template <size_t idx, typename... Hs>
 [[gnu::always_inline]] void
 reader<schema<Fs...>>::run_handler_for_idx(std::tuple<Hs...> &handlers, uintptr_t lower_bound,
-    uintptr_t range_size_inclusive)
+    uintptr_t range_size_inclusive, bool run_zero_defaults)
 {
     const ppb_field &field = m_fields[idx];
 
@@ -892,17 +911,19 @@ reader<schema<Fs...>>::run_handler_for_idx(std::tuple<Hs...> &handlers, uintptr_
         decltype(Field::extract_value(field, &m_error)), Hs...>();
     if constexpr (handler_idx.has_value())
     {
-        auto field_addr = reinterpret_cast<uintptr_t>(field.v.ptr);
-
-        if (field_addr - lower_bound <= range_size_inclusive) [[likely]]
+        if constexpr (Field::semantics() == field_semantics::proto3_zero_default)
         {
-            enum ppb_error result = std::get<handler_idx.value()>(handlers).handler(
-                Field::extract_value(field, &m_error));
-            if (result != PPB_OK) [[unlikely]]
-            {
-                m_error = (m_error == PPB_OK) ? result : m_error;
-            }
+            // widen range_size_inclusive = UINTPTR_MAX if run_zero_defaults.
+            range_size_inclusive |= -uintptr_t(run_zero_defaults);
         }
+
+        if (reinterpret_cast<uintptr_t>(field.v.ptr) - lower_bound > range_size_inclusive) [[unlikely]]
+            return;
+
+        enum ppb_error result = std::get<handler_idx.value()>(handlers).handler(
+            Field::extract_value(field, &m_error));
+        if (result != PPB_OK) [[unlikely]]
+            m_error = (m_error == PPB_OK) ? result : m_error;
     }
 }
 

@@ -953,6 +953,252 @@ test_reader_parse_semantics_lww_multi()
     CHECK(r.empty());
 }
 
+// proto3_zero_default, field absent: handler called with zero-filled value.
+static void
+test_reader_parse_semantics_proto3_zero_default_absent()
+{
+    using S = ppb::schema<ppb::uint64<1, ppb::field_semantics::proto3_zero_default>>;
+    static const uint8_t wire[] = {
+        0x10, 0x01,  /* field 2 varint 1 (not field 1) */
+    };
+    ppb::reader<S> r(wire, sizeof(wire));
+
+    int calls = 0;
+    uint64_t seen = 99;
+
+    CHECK(r.parse([](const ppb::reader<S> &) -> ppb_error { return PPB_OK; }, {},
+              ppb::on<1>(
+                  [&](uint64_t v) -> ppb_error
+                  {
+                      calls++;
+                      seen = v;
+                      return PPB_OK;
+                  })) == PPB_OK);
+    CHECK(calls == 1);  // absent field still dispatched
+    CHECK(seen == 0);   // zero-filled default
+    CHECK(r.empty());
+}
+
+// proto3_zero_default, field present: handler called with wire value.
+static void
+test_reader_parse_semantics_proto3_zero_default_present()
+{
+    using S = ppb::schema<ppb::uint64<1, ppb::field_semantics::proto3_zero_default>>;
+    static const uint8_t wire[] = {
+        0x08, 0x2a,  /* field 1 varint 42 */
+    };
+    ppb::reader<S> r(wire, sizeof(wire));
+
+    int calls = 0;
+    uint64_t seen = 0;
+
+    CHECK(r.parse([](const ppb::reader<S> &) -> ppb_error { return PPB_OK; }, {},
+              ppb::on<1>(
+                  [&](uint64_t v) -> ppb_error
+                  {
+                      calls++;
+                      seen = v;
+                      return PPB_OK;
+                  })) == PPB_OK);
+    CHECK(calls == 1);
+    CHECK(seen == 42);
+    CHECK(r.empty());
+}
+
+// proto3_zero_default, multiple occurrences: no lexn forced, handler sees
+// last-write-wins aggregate (single call with last value).
+static void
+test_reader_parse_semantics_proto3_zero_default_multi()
+{
+    using S = ppb::schema<ppb::uint64<1, ppb::field_semantics::proto3_zero_default>>;
+    static const uint8_t wire[] = {
+        0x08, 0x01,  /* field 1 varint 1 */
+        0x08, 0x02,  /* field 1 varint 2 */
+    };
+    ppb::reader<S> r(wire, sizeof(wire));
+
+    int calls = 0;
+
+    CHECK(r.parse([](const ppb::reader<S> &) -> ppb_error { return PPB_OK; }, {},
+              ppb::on<1>(
+                  [&](uint64_t) -> ppb_error
+                  {
+                      calls++;
+                      return PPB_OK;
+                  })) == PPB_OK);
+    CHECK(calls == 1);  // no lexn -> single dispatch
+    CHECK(r.empty());
+}
+
+// proto3_zero_default with a LEN field absent: handler receives empty span.
+static void
+test_reader_parse_semantics_proto3_zero_default_len_absent()
+{
+    using S = ppb::schema<ppb::bytes<1, std::byte, ppb::field_semantics::proto3_zero_default>>;
+    static const uint8_t wire[] = {
+        0x10, 0x01,  /* field 2 varint 1 (not field 1) */
+    };
+    ppb::reader<S> r(wire, sizeof(wire));
+
+    int calls = 0;
+    size_t seen_size = 99;
+
+    CHECK(r.parse([](const ppb::reader<S> &) -> ppb_error { return PPB_OK; }, {},
+              ppb::on<1>(
+                  [&](std::span<const std::byte> v) -> ppb_error
+                  {
+                      calls++;
+                      seen_size = v.size();
+                      return PPB_OK;
+                  })) == PPB_OK);
+    CHECK(calls == 1);        // absent field still dispatched
+    CHECK(seen_size == 0);    // empty span for absent LEN
+    CHECK(r.empty());
+}
+
+// proto3_zero_default in a schema with a repeated field: lexn is forced by
+// the repeated field; proto3_zero_default behaves like last_write_wins
+// (absent field not dispatched in the lexn path).
+static void
+test_reader_parse_semantics_proto3_zero_default_in_lexn_path()
+{
+    using S = ppb::schema<ppb::uint64<1, ppb::field_semantics::proto3_zero_default>,
+        ppb::varint<2, ppb::field_semantics::repeated>>;
+    static const uint8_t wire[] = {
+        0x10, 0x01,  /* field 2 varint 1 */
+        0x10, 0x02,  /* field 2 varint 2 (forces lexn) */
+    };
+    ppb::reader<S> r(wire, sizeof(wire));
+
+    int calls_f1 = 0;
+    int calls_f2 = 0;
+
+    CHECK(r.parse([](const ppb::reader<S> &) -> ppb_error { return PPB_OK; }, {},
+              ppb::on<1>(
+                  [&](uint64_t) -> ppb_error
+                  {
+                      calls_f1++;
+                      return PPB_OK;
+                  }),
+              ppb::on<2>(
+                  [&](const ppb_field &) -> ppb_error
+                  {
+                      calls_f2++;
+                      return PPB_OK;
+                  })) == PPB_OK);
+    CHECK(calls_f1 == 0);  // absent + lexn path -> not dispatched (same as LWW)
+    CHECK(calls_f2 == 2);
+    CHECK(r.empty());
+}
+
+// proto3_zero_default via prescan(), field absent: handler called with zero.
+static void
+test_reader_prescan_semantics_proto3_zero_default_absent()
+{
+    using S = ppb::schema<ppb::uint64<1, ppb::field_semantics::proto3_zero_default>>;
+    static const uint8_t wire[] = {
+        0x10, 0x01,  /* field 2 varint 1 (not field 1) */
+    };
+    ppb::reader<S> r(wire, sizeof(wire));
+
+    int calls = 0;
+    uint64_t seen = 99;
+
+    CHECK(r.prescan({},
+              ppb::on<1>(
+                  [&](uint64_t v) -> ppb_error
+                  {
+                      calls++;
+                      seen = v;
+                      return PPB_OK;
+                  })) >= 0);
+    CHECK(calls == 1);  // absent field dispatched via prescan
+    CHECK(seen == 0);   // zero-filled default
+    CHECK(r.error() == PPB_OK);
+}
+
+// proto3_zero_default via prescan(), field present: handler called with wire value.
+static void
+test_reader_prescan_semantics_proto3_zero_default_present()
+{
+    using S = ppb::schema<ppb::uint64<1, ppb::field_semantics::proto3_zero_default>>;
+    static const uint8_t wire[] = {
+        0x08, 0x2a,  /* field 1 varint 42 */
+    };
+    ppb::reader<S> r(wire, sizeof(wire));
+
+    int calls = 0;
+    uint64_t seen = 0;
+
+    CHECK(r.prescan({},
+              ppb::on<1>(
+                  [&](uint64_t v) -> ppb_error
+                  {
+                      calls++;
+                      seen = v;
+                      return PPB_OK;
+                  })) >= 0);
+    CHECK(calls == 1);
+    CHECK(seen == 42);
+    CHECK(r.error() == PPB_OK);
+}
+
+// last_write_wins via prescan(), field absent: handler not called.
+static void
+test_reader_prescan_semantics_lww_absent()
+{
+    using S = ppb::schema<ppb::uint64<1, ppb::field_semantics::last_write_wins>>;
+    static const uint8_t wire[] = {
+        0x10, 0x01,  /* field 2 varint 1 (not field 1) */
+    };
+    ppb::reader<S> r(wire, sizeof(wire));
+
+    int calls = 0;
+
+    CHECK(r.prescan({},
+              ppb::on<1>(
+                  [&](uint64_t) -> ppb_error
+                  {
+                      calls++;
+                      return PPB_OK;
+                  })) >= 0);
+    CHECK(calls == 0);  // absent LWW -> not dispatched
+    CHECK(r.error() == PPB_OK);
+}
+
+// last_write_wins + proto3_zero_default via prescan(), both absent:
+// proto3 fires with zero, LWW stays silent.
+static void
+test_reader_prescan_semantics_lww_and_proto3_absent()
+{
+    using S = ppb::schema<ppb::uint64<1, ppb::field_semantics::last_write_wins>,
+        ppb::uint64<2, ppb::field_semantics::proto3_zero_default>>;
+    static const uint8_t wire[] = {
+        0x18, 0x01,  /* field 3 varint 1 (neither field 1 nor field 2) */
+    };
+    ppb::reader<S> r(wire, sizeof(wire));
+
+    int calls_lww = 0;
+    int calls_p3 = 0;
+
+    CHECK(r.prescan({},
+              ppb::on<1>(
+                  [&](uint64_t) -> ppb_error
+                  {
+                      calls_lww++;
+                      return PPB_OK;
+                  }),
+              ppb::on<2>(
+                  [&](uint64_t) -> ppb_error
+                  {
+                      calls_p3++;
+                      return PPB_OK;
+                  })) >= 0);
+    CHECK(calls_lww == 0);  // absent LWW -> silent
+    CHECK(calls_p3 == 1);   // absent proto3 -> fires with zero
+    CHECK(r.error() == PPB_OK);
+}
+
 // singular, multiple occurrences with distinct values: lost_distinct_u64
 // forces lexn, handler called per occurrence.
 static void
@@ -1833,6 +2079,15 @@ main()
     test_reader_parse_semantics_repeated_single();
     test_reader_parse_semantics_repeated_multi();
     test_reader_parse_semantics_lww_multi();
+    test_reader_parse_semantics_proto3_zero_default_absent();
+    test_reader_parse_semantics_proto3_zero_default_present();
+    test_reader_parse_semantics_proto3_zero_default_multi();
+    test_reader_parse_semantics_proto3_zero_default_len_absent();
+    test_reader_parse_semantics_proto3_zero_default_in_lexn_path();
+    test_reader_prescan_semantics_proto3_zero_default_absent();
+    test_reader_prescan_semantics_proto3_zero_default_present();
+    test_reader_prescan_semantics_lww_absent();
+    test_reader_prescan_semantics_lww_and_proto3_absent();
     test_reader_parse_semantics_singular_distinct();
     test_reader_parse_semantics_singular_equal();
     test_reader_parse_semantics_singular_len_multi();

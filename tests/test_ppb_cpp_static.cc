@@ -38,6 +38,14 @@ static_assert(sizeof(ppb::schema<ppb::varint<1>, ppb::i64<2>, ppb::len<3>, ppb::
 // Same field number, different wire types are distinct fields
 // with distinct encoded tag bits, so ascending wire type order is valid.
 static_assert(sizeof(ppb::schema<ppb::varint<1>, ppb::i64<1>>) > 0);
+// proto3_zero_default is valid in any schema.
+static_assert(sizeof(ppb::schema<ppb::int32<1, ppb::field_semantics::proto3_zero_default>>) > 0);
+static_assert(sizeof(ppb::schema<ppb::int32<1, ppb::field_semantics::proto3_zero_default>,
+                  ppb::uint64<2, ppb::field_semantics::last_write_wins>>) > 0);
+static_assert(sizeof(ppb::schema<ppb::int32<1, ppb::field_semantics::proto3_zero_default>,
+                  ppb::len<2, ppb::field_semantics::proto3_zero_default>>) > 0);
+static_assert(sizeof(ppb::schema<ppb::int32<1, ppb::field_semantics::proto3_zero_default>,
+                  ppb::varint<2, ppb::field_semantics::repeated>>) > 0);
 
 // Schema public API: num_fields()
 static_assert(ppb::schema<ppb::varint<1>>::num_fields() == 1);
