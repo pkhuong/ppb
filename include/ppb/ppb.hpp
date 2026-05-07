@@ -103,10 +103,12 @@
 //   positive cases.
 //
 // Limitations:
-//   - The C library's catch-all entry (`PPB_TAG(-1, wire)`) is not
-//     reachable from the C++ schema, which restricts field numbers to
-//     [1, 2**29).  Use the C API directly if you need catch-all
-//     dispatch.
+//   - Field numbers are restricted to [1, 2**29), same as protobuf.
+//     Detect unknown tags with dedicated `ppb::unknown<wire>` (or
+//     `ppb::detect_unknown_fields` to register all four wire types at
+//     once); `reader::unknown_field()` then reports the encoded tag
+//     (`field_number * 8 + wire_type`) of the first unknown seen.
+//     This detection runs after prescan (directly, or via reader::parse).
 //   - `enumerated<K, Enum>` does not validate that wire values name
 //     a declared enumerator: the cast goes through `Enum`'s underlying
 //     type so it is always well-defined, but out-of-range values may
@@ -195,6 +197,14 @@ template <auto K, field_semantics sem = field_semantics::always_lexn> struct i64
 template <auto K, field_semantics sem = field_semantics::always_lexn> struct len;
 // An i32-encoded field
 template <auto K, field_semantics sem = field_semantics::always_lexn> struct i32;
+
+// Catch-all descriptor for the C lexer's `PPB_TAG(-1, wire)` entry.
+// Drop one (or all four, via `detect_unknown_fields`) into a schema
+// to register the catch-all so unknown tags get accounted for instead
+// of silently skipped, and so `reader::unknown_field()` can report
+// when one was seen.  No need for a `Key` type: these work the same
+// with any schema Key type.
+template <wire_type type, field_semantics sem = field_semantics::repeated> struct unknown;
 
 // Varint-backed scalar field types (proto2 last-write-wins semantics by default)
 template <auto K, field_semantics sem = field_semantics::last_write_wins> struct int32;
@@ -287,6 +297,16 @@ template <auto K> using unpacked_sfixed64 = sfixed64<K, field_semantics::repeate
 template <auto K> using unpacked_f64 = f64<K, field_semantics::repeated>;
 template <auto K> using unpacked_utf8string = utf8string<K, field_semantics::repeated>;
 template <auto K, typename Element> using unpacked_bytes = bytes<K, Element, field_semantics::repeated>;
+
+// Convenience tuple that registers the catch-all entry for every wire
+// type at once.  Use with `auto_schema` to opt into unknown-field
+// detection without listing the four unknown fields explicitly:
+//
+//   using S = ppb::auto_schema<MyFields..., ppb::detect_unknown_fields>;
+//
+// Detection happens in `reader::prescan` or `reader::parse`.
+using detect_unknown_fields = std::tuple<unknown<wire_type::varint>, unknown<wire_type::i64>,
+    unknown<wire_type::len>, unknown<wire_type::i32>>;
 
 }  // namespace ppb
 
@@ -544,6 +564,30 @@ template <typename... Fs> struct reader<schema<Fs...>>
     // `parse()` for `field_semantics::error`; not cleared by `reset_fields()`.
     [[nodiscard]] constexpr std::optional<uint32_t> error_field() const noexcept { return m_error_field; }
 
+    // Decoded encoded tag (`field_number * 8 + wire_type`) of the first
+    // catch-all (`ppb::unknown<wire>`) entry that saw at least one
+    // occurrence, or `nullopt` if none did.  Only populated for schemas
+    // that actually register catch-alls (e.g. via
+    // `ppb::detect_unknown_fields`); never cleared by `reset_fields()`.
+    //
+    // Like `error_field()`, the value mirrors the protobuf wire-tag
+    // encoding so callers can extract `field_number = tag >> 3` and
+    // `wire_type = tag & 7`.  Recovered by re-decoding the varint at
+    // the catch-all's stored `v.ptr`, since the C lexer rewrites the
+    // tag to a wire-only sentinel in the per-field state.
+    //
+    // Sticky and first-write-wins: once set, subsequent unknowns of any
+    // wire type leave the value alone.  Detection is "soft" -- it does
+    // *not* set the reader's sticky error or abort dispatch; callers
+    // who want a hard error should layer their own check on top of
+    // `parse()` returning successfully.
+    //
+    // Updated by `parse()` and `prescan()` (which both run prescan, the
+    // only path that aggregates per-field occurrence counts).  The
+    // standalone `lexn()` does not update this flag; stream-style
+    // callers should call `prescan()` first.
+    [[nodiscard]] constexpr std::optional<uint64_t> unknown_field() const noexcept { return m_unknown_field; }
+
     // Zeroes the per-field metadata array so the reader can process
     // a fresh message.
     //
@@ -673,9 +717,49 @@ private:
     [[gnu::always_inline]] inline void run_handler_for_idx(std::tuple<Hs...> &handlers, uintptr_t lower_bound,
         uintptr_t range_size_inclusive, bool run_zero_defaults);
 
+    // Walks the schema for catch-all entries (`ppb::unknown<wire>`) and
+    // updates `m_unknown_field` first-write-wins.  Compiles to nothing
+    // for schemas that don't register catch-alls.
+    //
+    // For each catch-all that fired, we re-decode the original tag
+    // varint at `field.v.ptr`
+    void detect_unknown_field() noexcept
+    {
+        if (m_unknown_field.has_value())
+            return;
+
+        [&]<size_t... Is>(std::index_sequence<Is...>)
+        {
+            auto check = [&]<size_t I>(std::integral_constant<size_t, I>)
+            {
+                using Field = decltype(Schema::template field<I>());
+
+                if constexpr (Field::is_unknown())
+                {
+                    if (m_fields[I].m.num_occurrences == 0 || m_unknown_field.has_value())
+                        return;
+
+                    const auto *ptr = static_cast<const std::byte *>(m_fields[I].v.ptr);
+                    const std::byte *end = m_input.data() + m_input.size();
+
+                    size_t available = (uintptr_t(ptr) - uintptr_t(m_input.data()) <= m_input.size()) ?
+                        size_t(end - ptr) :
+                        0;
+                    ppb_buf buf = { .buf = ptr, .size = available };
+                    ppb_error err = PPB_OK;
+                    uint64_t tag = ppb_decode_varint(&buf, &err);
+                    if (err == PPB_OK)
+                        m_unknown_field = tag;
+                }
+            };
+            (check(std::integral_constant<size_t, Is> {}), ...);
+        }(std::make_index_sequence<Schema::num_fields()> {});
+    }
+
     std::span<const std::byte> m_input;
     ppb_error m_error = PPB_OK;
     std::optional<uint32_t> m_error_field;
+    std::optional<uint64_t> m_unknown_field;
     std::array<ppb_field, Schema::num_fields()> m_fields = {};
 };
 
@@ -701,6 +785,8 @@ reader<schema<Fs...>>::parse(Init &&init, limit bounds, Hs &&...handlers)
         m_error = ppb_error(num_bytes);
         return m_error;
     }
+
+    detect_unknown_field();
 
     // Check field semantics: error fields that appeared on the wire
     // are an immediate failure.  Also determine whether any field
@@ -815,6 +901,11 @@ reader<schema<Fs...>>::prescan(limit bounds, Hs &&...handlers)
         return m_error;
     }
 
+    detect_unknown_field();
+
+    if constexpr (sizeof...(Hs) == 0)
+        return ret;
+
     std::tuple<std::decay_t<Hs>...> tup(std::forward<Hs>(handlers)...);
     ppb_error err = dispatch_tuple(tup, /*run_zero_defaults=*/true);
     return int(err) < 0 ? ptrdiff_t(err) : ret;
@@ -923,25 +1014,37 @@ reader<schema<Fs...>>::run_handler_for_idx(std::tuple<Hs...> &handlers, uintptr_
 {
     const ppb_field &field = m_fields[idx];
 
-    // Find a handler for the schema field.
     using Field = decltype(Schema::template field<idx>());
-    constexpr std::optional<size_t> handler_idx = detail::find_value_handler<Field::tag(), Field::wire(),
-        decltype(Field::extract_value(field, &m_error)), Hs...>();
-    if constexpr (handler_idx.has_value())
+
+    // Catch-all entries have no `Key` and are never bound to user
+    // handlers in the baseline; skip the handler-matching machinery
+    // entirely (which would static_assert on the missing key_type).
+    if constexpr (Field::is_unknown())
     {
-        if constexpr (Field::semantics() == field_semantics::proto3_zero_default)
+        return;
+    }
+    else
+    {
+        // Find a handler for the schema field.
+        constexpr std::optional<size_t> handler_idx = detail::find_value_handler<Field::tag(), Field::wire(),
+            decltype(Field::extract_value(field, &m_error)), Hs...>();
+
+        if constexpr (handler_idx.has_value())
         {
-            // widen range_size_inclusive = UINTPTR_MAX if run_zero_defaults.
-            range_size_inclusive |= -uintptr_t(run_zero_defaults);
+            if constexpr (Field::semantics() == field_semantics::proto3_zero_default)
+            {
+                // widen range_size_inclusive = UINTPTR_MAX if run_zero_defaults.
+                range_size_inclusive |= -uintptr_t(run_zero_defaults);
+            }
+
+            if (reinterpret_cast<uintptr_t>(field.v.ptr) - lower_bound > range_size_inclusive) [[unlikely]]
+                return;
+
+            enum ppb_error result = std::get<handler_idx.value()>(handlers).handler(
+                Field::extract_value(field, &m_error));
+            if (result != PPB_OK) [[unlikely]]
+                m_error = (m_error == PPB_OK) ? result : m_error;
         }
-
-        if (reinterpret_cast<uintptr_t>(field.v.ptr) - lower_bound > range_size_inclusive) [[unlikely]]
-            return;
-
-        enum ppb_error result = std::get<handler_idx.value()>(handlers).handler(
-            Field::extract_value(field, &m_error));
-        if (result != PPB_OK) [[unlikely]]
-            m_error = (m_error == PPB_OK) ? result : m_error;
     }
 }
 

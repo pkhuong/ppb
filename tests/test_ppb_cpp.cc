@@ -2031,6 +2031,111 @@ test_reader_too_large_input()
     CHECK(r.error() == PPB_ERROR_TRUNCATED_DATA);
 }
 
+/*
+ * Catch-all / unknown-field detection tests.
+ *
+ * The wire below carries:
+ *   field 1 varint 150  (known to KnownSchema)
+ *   field 7 varint 1    (unknown, should hit the varint catch-all)
+ *   field 9 i32 42      (unknown, should hit the i32 catch-all)
+ */
+static const uint8_t known_plus_unknown_wire[] = {
+    0x08, 0x96, 0x01, /* field 1 varint 150 */
+    0x38, 0x01, /* field 7 varint 1 (unknown) */
+    0x4d, 0x2a, 0x00, 0x00, 0x00, /* field 9 i32 42 (unknown) */
+};
+
+using KnownSchema = ppb::schema<ppb::varint<1>>;
+using KnownPlusUnknownSchema = ppb::auto_schema<ppb::varint<1>, ppb::detect_unknown_fields>;
+
+// Without catch-alls, unknown tags are silently skipped and
+// `unknown_field()` stays `nullopt`.
+static void
+test_unknown_field_baseline_no_catchalls()
+{
+    ppb::reader<KnownSchema> r(known_plus_unknown_wire, sizeof(known_plus_unknown_wire));
+
+    CHECK(r.parse([](const ppb::reader<KnownSchema> &) -> ppb_error { return PPB_OK; }) == PPB_OK);
+    CHECK(!r.unknown_field().has_value());
+    CHECK(r.error() == PPB_OK);
+}
+
+static void
+test_unknown_field_detects_via_parse()
+{
+    ppb::reader<KnownPlusUnknownSchema> r(known_plus_unknown_wire, sizeof(known_plus_unknown_wire));
+
+    CHECK(r.parse([](const ppb::reader<KnownPlusUnknownSchema> &) -> ppb_error { return PPB_OK; }) == PPB_OK);
+    CHECK(r.error() == PPB_OK);
+    CHECK(r.unknown_field().has_value());
+    // The wire stores the *last* unknown varint as field 7 (tag = 7*8 + 0 = 56);
+    // prescan keeps the last-occurrence pointer per (catch-all) bucket, so that's
+    // the tag we recover.
+    CHECK(r.unknown_field() == 56);
+    // Sanity: extracting field number / wire type out of the tag.
+    CHECK((r.unknown_field().value() >> 3) == 7);
+    CHECK((r.unknown_field().value() & 7) == uint64_t(ppb::wire_type::varint));
+}
+
+static void
+test_unknown_field_detects_via_prescan()
+{
+    ppb::reader<KnownPlusUnknownSchema> r(known_plus_unknown_wire, sizeof(known_plus_unknown_wire));
+
+    CHECK(r.prescan() > 0);
+    CHECK(r.error() == PPB_OK);
+    CHECK(r.unknown_field() == 56);
+}
+
+// Only an i32 unknown -> the i32 catch-all entry is what triggers.
+static void
+test_unknown_field_first_write_wins()
+{
+    static const uint8_t i32_only_unknown[] = {
+        0x4d, 0x2a, 0x00, 0x00, 0x00, /* field 9 i32 42 (tag = 9*8 + 5 = 77) */
+    };
+
+    ppb::reader<KnownPlusUnknownSchema> r(i32_only_unknown, sizeof(i32_only_unknown));
+
+    CHECK(r.parse([](const ppb::reader<KnownPlusUnknownSchema> &) -> ppb_error { return PPB_OK; }) == PPB_OK);
+    CHECK(r.unknown_field() == 77);
+}
+
+// Sticky across `reset_fields()`, like `error_field()`.
+static void
+test_unknown_field_sticky_across_reset_fields()
+{
+    ppb::reader<KnownPlusUnknownSchema> r(known_plus_unknown_wire, sizeof(known_plus_unknown_wire));
+
+    CHECK(r.parse([](const ppb::reader<KnownPlusUnknownSchema> &) -> ppb_error { return PPB_OK; }) == PPB_OK);
+    CHECK(r.unknown_field() == 56);
+
+    r.reset_fields();
+    CHECK(r.unknown_field() == 56);
+}
+
+// Known handlers still run when unknown tags are also present.
+static void
+test_unknown_field_known_handlers_still_run()
+{
+    ppb::reader<KnownPlusUnknownSchema> r(known_plus_unknown_wire, sizeof(known_plus_unknown_wire));
+
+    int known_calls = 0;
+    uint64_t known_value = 0;
+
+    CHECK(r.parse([](const ppb::reader<KnownPlusUnknownSchema> &) -> ppb_error { return PPB_OK; }, {},
+              ppb::on<1, ppb::wire_type::varint>(
+                  [&](const ppb_field &f) -> ppb_error
+                  {
+                      known_calls++;
+                      known_value = f.v.u64;
+                      return PPB_OK;
+                  })) == PPB_OK);
+    CHECK(known_calls == 1);
+    CHECK(known_value == 150);
+    CHECK(r.unknown_field() == 56);
+}
+
 int
 main()
 {
@@ -2115,6 +2220,13 @@ main()
     test_prescan_sticky_error();
     test_parse_init_error_branch();
     test_reader_too_large_input();
+
+    test_unknown_field_baseline_no_catchalls();
+    test_unknown_field_detects_via_parse();
+    test_unknown_field_detects_via_prescan();
+    test_unknown_field_first_write_wins();
+    test_unknown_field_sticky_across_reset_fields();
+    test_unknown_field_known_handlers_still_run();
 
     std::printf("\n%d checks, %d failures\n", g_check_count, g_fail_count);
     return g_fail_count > 0 ? 1 : 0;

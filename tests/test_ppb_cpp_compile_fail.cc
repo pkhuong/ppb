@@ -212,3 +212,24 @@ static_assert(sizeof(ppb::auto_schema<std::tuple<>>) > 0);
 #ifdef PPB_FAIL_AUTO_SCHEMA_DIFFERENT_KEYS
 static_assert(sizeof(ppb::auto_schema<ppb::varint<1>, ppb::varint<1L>>) > 0);
 #endif
+
+// unknown<>: only the four real wire types are accepted.
+
+/* expect-error: ppb::unknown wire type must be one of varint, i64, len, or i32 */
+#ifdef PPB_FAIL_UNKNOWN_WIRE_ANY
+static_assert(sizeof(ppb::unknown<ppb::wire_type::any>) > 0);
+#endif
+
+/* expect-error: ppb::unknown wire type must be one of varint, i64, len, or i32 */
+#ifdef PPB_FAIL_UNKNOWN_WIRE_BOGUS
+static_assert(sizeof(ppb::unknown<static_cast<ppb::wire_type>(3)>) > 0);
+#endif
+
+// Manual schema with a catch-all placed *before* a real field violates
+// the strict-ascending check (catch-all encoded tag bits are larger
+// than any real-field tag).
+
+/* expect-error: schema fields must be listed in strictly ascending order */
+#ifdef PPB_FAIL_UNKNOWN_BEFORE_REAL_FIELD
+static_assert(sizeof(ppb::schema<ppb::unknown<ppb::wire_type::varint>, ppb::varint<1>>) > 0);
+#endif
