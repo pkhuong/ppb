@@ -492,6 +492,30 @@ on(Fn &&handler)
     return detail::value_handler<Key, wire, std::decay_t<Fn>> { std::forward<Fn>(handler) };
 }
 
+// Wraps `handler` as a catch-all (unknown-tag) handler.  Fires once
+// per occurrence for any tag that matches a `ppb::unknown<wire>`
+// entry in the schema (i.e., any tag the schema doesn't otherwise
+// recognize, with the given wire type).
+//
+// The handler is invoked with `const ppb_field &`; `field.v.ptr`
+// points at the original tag byte in the input buffer, so callers
+// who need the original field number can recover it via
+// `ppb_decode_varint`.
+//
+// `wire` defaults to `wire_type::any`, matching every catch-all wire
+// type the schema registered.  Specify a concrete wire type to bind
+// to one bucket; mixing per-wire `on_unknown` factories in a single
+// `parse()` call is supported.
+//
+// Like value handlers, the return value is folded first-write-wins
+// into the reader's sticky error.
+template <wire_type wire = wire_type::any, typename Fn>
+[[nodiscard]] constexpr detail::unknown_handler<wire, std::decay_t<Fn>>
+on_unknown(Fn &&handler)
+{
+    return detail::unknown_handler<wire, std::decay_t<Fn>> { std::forward<Fn>(handler) };
+}
+
 // Stateful reader for a schema and a byte span.
 //
 // Holds a span of unconsumed input, a sticky `ppb_error`, an optional
@@ -1016,12 +1040,23 @@ reader<schema<Fs...>>::run_handler_for_idx(std::tuple<Hs...> &handlers, uintptr_
 
     using Field = decltype(Schema::template field<idx>());
 
-    // Catch-all entries have no `Key` and are never bound to user
-    // handlers in the baseline; skip the handler-matching machinery
-    // entirely (which would static_assert on the missing key_type).
+    // Catch-all entries have no `Key`, so they go through the
+    // wire-only `find_unknown_handler` machinery instead of
+    // `find_value_handler` (which static_asserts on key_type
+    // matching the dispatch Key).
     if constexpr (Field::is_unknown())
     {
-        return;
+        constexpr std::optional<size_t> handler_idx =
+            detail::find_unknown_handler<Field::wire(), const ppb_field &, Hs...>();
+        if constexpr (handler_idx.has_value())
+        {
+            if (reinterpret_cast<uintptr_t>(field.v.ptr) - lower_bound > range_size_inclusive) [[unlikely]]
+                return;
+
+            enum ppb_error result = std::get<handler_idx.value()>(handlers).handler(field);
+            if (result != PPB_OK) [[unlikely]]
+                m_error = (m_error == PPB_OK) ? result : m_error;
+        }
     }
     else
     {

@@ -233,3 +233,23 @@ static_assert(sizeof(ppb::unknown<static_cast<ppb::wire_type>(3)>) > 0);
 #ifdef PPB_FAIL_UNKNOWN_BEFORE_REAL_FIELD
 static_assert(sizeof(ppb::schema<ppb::unknown<ppb::wire_type::varint>, ppb::varint<1>>) > 0);
 #endif
+
+// on_unknown: ambiguous handlers (multiple match the same wire and
+// both are invocable with the dispatch arg).
+
+/* expect-error: multiple unknown_handlers match the wire type and accept the argument type; ambiguous */
+#ifdef PPB_FAIL_ON_UNKNOWN_AMBIGUOUS
+constexpr auto bad = ppb::detail::find_unknown_handler<ppb::wire_type::varint, const ppb_field &,
+    decltype(ppb::on_unknown([](const ppb_field &) -> ppb_error { return PPB_OK; })),
+    decltype(ppb::on_unknown([](const ppb_field &) -> ppb_error { return PPB_OK; }))>();
+#endif
+
+// on_unknown: handlers that match the wire but none accepts the
+// dispatch arg.  Both lambdas take incompatible argument types.
+
+/* expect-error: unknown_handlers match the wire type, but none is invocable with the argument type */
+#ifdef PPB_FAIL_ON_UNKNOWN_NONE_INVOCABLE
+constexpr auto bad = ppb::detail::find_unknown_handler<ppb::wire_type::varint, const ppb_field &,
+    decltype(ppb::on_unknown([](int) -> ppb_error { return PPB_OK; })),
+    decltype(ppb::on_unknown([](const char *) -> ppb_error { return PPB_OK; }))>();
+#endif

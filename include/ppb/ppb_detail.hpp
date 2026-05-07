@@ -534,6 +534,7 @@ template <auto K, wire_type W, typename Fn> struct value_handler
 
     static constexpr key_type key() { return K; }
     static constexpr wire_type wire() { return W; }
+    static constexpr bool is_unknown_handler() { return false; }
 
     // Does this value handler match the key.
     static constexpr bool matches(key_type other_key, wire_type other_w)
@@ -543,6 +544,30 @@ template <auto K, wire_type W, typename Fn> struct value_handler
 
         return (W == wire_type::any) || (W == other_w);
     }
+
+    Fn handler;
+};
+
+// Sibling of `value_handler` for catch-all dispatch via
+// `ppb::on_unknown<wire>(fn)`.  Carries no `key_type` (catch-alls
+// have no schema-side Key), so `find_value_handler`'s "all handlers
+// share the dispatch Key's type" check skips it.
+//
+// The handler is invoked with `const ppb_field &` (the raw match
+// from the C lexer); `field.v.ptr` points at the original tag byte
+// in the input buffer so callers who care can recover the encoded
+// tag via `ppb_decode_varint`, just like `unknown_field()`.
+template <wire_type W, typename Fn> struct unknown_handler
+{
+    using handler_type = Fn;
+
+    static constexpr wire_type wire() { return W; }
+    static constexpr bool is_unknown_handler() { return true; }
+
+    // Wire-only match for catch-all dispatch.  `wire_type::any` here
+    // means "every catch-all wire", mirroring the value_handler
+    // semantics for typed handlers.
+    static constexpr bool matches_wire(wire_type other_w) { return (W == wire_type::any) || (W == other_w); }
 
     Fn handler;
 };
@@ -558,17 +583,34 @@ template <auto K, wire_type W, typename Fn> struct value_handler
 // When multiple handlers match by (Key, W), disambiguates by
 // std::is_invocable_v<handler_type, Arg> and requires that exactly
 // one survivor remain; static_asserts otherwise.
-//
-// Type-list form: takes only template parameters, so the call is a
-// core constant expression even when its result is consumed inside a
-// function whose own parameters are runtime values (clang rejects
-// consteval calls that bind references to runtime parameters, even
-// when the body never reads them).
+template <typename H, typename DispatchKey>
+consteval bool
+handler_key_type_ok()
+{
+    if constexpr (H::is_unknown_handler())
+        return true;
+    else
+        return std::is_same_v<std::decay_t<typename H::key_type>, std::decay_t<DispatchKey>>;
+}
+
+// Per-handler `(Key, wire)` match for `find_value_handler`'s key_mask,
+// tolerant of `unknown_handler`s (which never match a typed dispatch
+// key).
+template <typename H, auto Key, wire_type W>
+consteval bool
+handler_matches_key_wire()
+{
+    if constexpr (H::is_unknown_handler())
+        return false;
+    else
+        return H::matches(Key, W);
+}
+
 template <auto Key, wire_type W, typename Arg, typename... Hs>
 consteval std::optional<size_t>
 find_value_handler()
 {
-    static_assert((std::is_same_v<std::decay_t<typename Hs::key_type>, std::decay_t<decltype(Key)>> && ...),
+    static_assert((handler_key_type_ok<Hs, decltype(Key)>() && ...),
         "every value_handler in the tuple must use the same key type as the dispatch Key");
 
     constexpr size_t N = sizeof...(Hs);
@@ -596,7 +638,7 @@ find_value_handler()
         return r;
     };
 
-    constexpr std::array<bool, N> key_mask = { Hs::matches(Key, W)... };
+    constexpr std::array<bool, N> key_mask = { handler_matches_key_wire<Hs, Key, W>()... };
     constexpr hit key_hit = scan(key_mask, key_mask);
 
     if constexpr (key_hit.count == 0)
@@ -631,6 +673,77 @@ consteval std::optional<size_t>
 find_value_handler(const std::tuple<Hs...> &)
 {
     return find_value_handler<Key, W, Arg, Hs...>();
+}
+
+// Per-handler wire-only match for `find_unknown_handler`'s wire_mask.
+// Mirrors `handler_matches_key_wire` but only fires for
+// `unknown_handler`s (which is what catch-all dispatch consumes).
+template <typename H, wire_type W>
+consteval bool
+unknown_handler_matches_wire()
+{
+    if constexpr (H::is_unknown_handler())
+        return H::matches_wire(W);
+    else
+        return false;
+}
+
+// Selects the `unknown_handler` in `Hs...` whose `wire()` matches `W`
+// (or is `wire_type::any`) and is invocable with `Arg`.  Same
+// structure as `find_value_handler`, except no match on key, only on
+// wire type.
+template <wire_type W, typename Arg, typename... Hs>
+consteval std::optional<size_t>
+find_unknown_handler()
+{
+    constexpr size_t N = sizeof...(Hs);
+
+    struct hit
+    {
+        size_t count;
+        size_t first;
+    };
+
+    constexpr auto scan = [](const std::array<bool, N> &m1, const std::array<bool, N> &m2) -> hit
+    {
+        hit r = { 0, N };
+        for (size_t i = 0; i < N; i++)
+        {
+            if (!(m1[i] && m2[i]))
+                continue;
+
+            if (r.count == 0)
+                r.first = i;
+
+            r.count++;
+        }
+
+        return r;
+    };
+
+    constexpr std::array<bool, N> wire_mask = { unknown_handler_matches_wire<Hs, W>()... };
+    constexpr hit wire_hit = scan(wire_mask, wire_mask);
+
+    if constexpr (wire_hit.count == 0)
+    {
+        return std::nullopt;
+    }
+    else if constexpr (wire_hit.count == 1)
+    {
+        return wire_hit.first;
+    }
+    else
+    {
+        constexpr std::array<bool, N> arg_mask = { std::is_invocable_v<typename Hs::handler_type, Arg>... };
+        constexpr hit arg_hit = scan(wire_mask, arg_mask);
+
+        static_assert(arg_hit.count != 0,
+            "unknown_handlers match the wire type, but none is invocable with the argument type");
+        static_assert(arg_hit.count <= 1,
+            "multiple unknown_handlers match the wire type and accept the argument type; ambiguous");
+
+        return arg_hit.first;
+    }
 }
 
 // Decode policies for packed varint iterators.
