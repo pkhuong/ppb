@@ -819,6 +819,28 @@ reader<schema<Fs...>>::parse(Init &&init, limit bounds, Hs &&...handlers)
     bool need_lexn = false;
     [&]<size_t... Is>(std::index_sequence<Is...>)
     {
+        // Compile-time check: does the handler pack carry a handler
+        // for this schema field?  We use this to skip the lexn-pass
+        // forcing logic for fields that wouldn't dispatch anyway --
+        // forcing lexn only to silently drop every occurrence is pure
+        // waste.  Always-on `field_semantics::error` checking is
+        // independent and stays unconditional.
+        constexpr auto has_handler_for = []<typename Field>() consteval
+        {
+            if constexpr (Field::is_unknown())
+            {
+                return detail::find_unknown_handler<Field::wire(), const ppb_field &, std::decay_t<Hs>...>()
+                    .has_value();
+            }
+            else
+            {
+                using V = decltype(Field::extract_value(std::declval<const ppb_field &>(),
+                    std::declval<ppb_error *>()));
+                return detail::find_value_handler<Field::tag(), Field::wire(), V, std::decay_t<Hs>...>()
+                    .has_value();
+            }
+        };
+
         auto scan = [&]<size_t I>(std::integral_constant<size_t, I>)
         {
             using Field = decltype(Schema::template field<I>());
@@ -836,6 +858,11 @@ reader<schema<Fs...>>::parse(Init &&init, limit bounds, Hs &&...handlers)
 
                 return;
             }
+
+            // Fields without a registered handler can't dispatch, so
+            // there's no reason to force a lexn pass on their behalf.
+            if constexpr (!has_handler_for.template operator()<Field>())
+                return;
 
             if constexpr (semantics == field_semantics::always_lexn)
             {
