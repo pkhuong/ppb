@@ -615,6 +615,29 @@ test_reader_lexn_handler_error_runs_full_batch()
     CHECK(r.error() == PPB_ERROR_CORRUPT_TAG);
 }
 
+// lexn error (not a handler error, but a decoding error from the C
+// lexer itself) bails before invoking any handlers.
+static void
+test_reader_lexn_decode_error_skips_handlers()
+{
+    // Just a tag byte with no value: valid tag for field 1 varint,
+    // but no bytes left to decode the varint value.
+    static const uint8_t truncated[] = { 0x08 };
+
+    ppb::reader<OneFieldSchema> r(truncated, sizeof(truncated));
+
+    int handler_calls = 0;
+    CHECK(r.lexn({},
+              ppb::on<1>(
+                  [&](const ppb_field &) -> ppb_error
+                  {
+                      handler_calls++;
+                      return PPB_OK;
+                  })) == PPB_ERROR_TRUNCATED_DATA);
+    CHECK(handler_calls == 0);
+    CHECK(r.error() == PPB_ERROR_TRUNCATED_DATA);
+}
+
 // parse(): prescan -> init(const reader&) -> lex+dispatch in batches.
 //
 // Reuses LexnSchema / lexn_two_batches_wire (two `{varint<1>, len<2>}`
@@ -2115,6 +2138,33 @@ test_unknown_field_sticky_across_reset_fields()
     CHECK(r.unknown_field() == 56);
 }
 
+// Sticky across messages: after parse() sets unknown_field() from a
+// first message, parsing a second message does not overwrite the value.
+// We use a soft byte limit to isolate the first message from the
+// concatenated buffer; the second parse() picks up the unconsumed tail.
+static void
+test_unknown_field_sticky_across_messages()
+{
+    // Two concatenated single-field messages.  First: field 7 varint
+    // (tag 56).  Second: field 8 varint (tag 64).
+    static const uint8_t two_messages[] = {
+        0x38, 0x07, /* field 7 varint 7 */
+        0x40, 0x08, /* field 8 varint 8 */
+    };
+
+    ppb::reader<KnownPlusUnknownSchema> r(two_messages, sizeof(two_messages));
+
+    // First message only: soft limit at 2 bytes.
+    CHECK(r.parse([](const ppb::reader<KnownPlusUnknownSchema> &) -> ppb_error { return PPB_OK; },
+              ppb::limit::soft(2)) == PPB_OK);
+    CHECK(r.unknown_field() == 56);
+
+    // Second message from the unconsumed tail.
+    CHECK(r.size() == 2);
+    CHECK(r.parse([](const ppb::reader<KnownPlusUnknownSchema> &) -> ppb_error { return PPB_OK; }) == PPB_OK);
+    CHECK(r.unknown_field() == 56);
+}
+
 // Known handlers still run when unknown tags are also present.
 static void
 test_unknown_field_known_handlers_still_run()
@@ -2257,6 +2307,7 @@ main()
 
     test_reader_lexn_decode_dispatch_consume();
     test_reader_lexn_handler_error_runs_full_batch();
+    test_reader_lexn_decode_error_skips_handlers();
 
     test_reader_parse_happy_path();
     test_reader_parse_init_error_does_not_consume();
@@ -2312,6 +2363,7 @@ main()
     test_unknown_field_detects_via_prescan();
     test_unknown_field_first_write_wins();
     test_unknown_field_sticky_across_reset_fields();
+    test_unknown_field_sticky_across_messages();
     test_unknown_field_known_handlers_still_run();
     test_on_unknown_dispatches_per_occurrence();
     test_on_unknown_per_wire_dispatch();
