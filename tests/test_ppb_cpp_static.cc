@@ -327,6 +327,69 @@ static_assert(std::is_same_v<ppb::auto_schema<ppb::int32<2>, ppb::utf8string<1>>
 
 }  // namespace test_auto_schema
 
+// Catch-all / unknown<> field type. Negative counterpart in
+// PPB_FAIL_UNKNOWN_*.
+namespace test_unknown_field
+{
+
+// All four wire types instantiate.
+static_assert(sizeof(ppb::unknown<ppb::wire_type::varint>) > 0);
+static_assert(sizeof(ppb::unknown<ppb::wire_type::i64>) > 0);
+static_assert(sizeof(ppb::unknown<ppb::wire_type::len>) > 0);
+static_assert(sizeof(ppb::unknown<ppb::wire_type::i32>) > 0);
+
+// Catch-all encoded tags match the C-side `PPB_TAG_BITS(-1, wire)`.
+static_assert(ppb::unknown<ppb::wire_type::varint>::encoded_tag().bits == PPB_TAG_BITS(uint64_t(-1), 0));
+static_assert(ppb::unknown<ppb::wire_type::i64>::encoded_tag().bits == PPB_TAG_BITS(uint64_t(-1), 1));
+static_assert(ppb::unknown<ppb::wire_type::len>::encoded_tag().bits == PPB_TAG_BITS(uint64_t(-1), 2));
+static_assert(ppb::unknown<ppb::wire_type::i32>::encoded_tag().bits == PPB_TAG_BITS(uint64_t(-1), 5));
+
+// `is_unknown()` returns true on catch-alls, false on real fields.
+static_assert(ppb::unknown<ppb::wire_type::varint>::is_unknown());
+static_assert(!ppb::varint<1>::is_unknown());
+static_assert(!ppb::int32<1>::is_unknown());
+static_assert(!ppb::field_generic_base::is_unknown());
+
+// `auto_schema` flatten + sort places `detect_unknown_fields` at the tail
+// of the schema in wire-type order.
+using auto_with_catchalls = ppb::auto_schema<ppb::varint<1>, ppb::detect_unknown_fields>;
+static_assert(auto_with_catchalls::num_fields() == 5);
+// Tail four entries should be the catch-alls in varint/i64/len/i32 order.
+static_assert(auto_with_catchalls::s_encoded_tags[1].bits == PPB_TAG_BITS(uint64_t(-1), 0));
+static_assert(auto_with_catchalls::s_encoded_tags[2].bits == PPB_TAG_BITS(uint64_t(-1), 1));
+static_assert(auto_with_catchalls::s_encoded_tags[3].bits == PPB_TAG_BITS(uint64_t(-1), 2));
+static_assert(auto_with_catchalls::s_encoded_tags[4].bits == PPB_TAG_BITS(uint64_t(-1), 5));
+
+// Manual schemas with catch-alls last (in wire-type order) also compile.
+static_assert(
+    sizeof(
+        ppb::schema<ppb::varint<1>, ppb::unknown<ppb::wire_type::varint>, ppb::unknown<ppb::wire_type::i64>,
+            ppb::unknown<ppb::wire_type::len>, ppb::unknown<ppb::wire_type::i32>>) > 0);
+
+// Mixed enum-class Key types compose with the (Key-less) catch-alls.
+namespace enum_key
+{
+enum class K : uint64_t
+{
+    one = 1,
+    two = 2
+};
+using S = ppb::auto_schema<ppb::varint<K::one>, ppb::i64<K::two>, ppb::detect_unknown_fields>;
+static_assert(S::num_fields() == 6);
+static_assert(std::is_same_v<S::Key, K>);
+}  // namespace enum_key
+
+// `unknown<>` also accepts a non-default field_semantics.
+static_assert(sizeof(ppb::unknown<ppb::wire_type::varint, ppb::field_semantics::last_write_wins>) > 0);
+
+// Catch-all-only schemas compile: `key_of` skips fields without a
+// `Key` typedef, so the schema resolves to the empty-pack default
+// (`int`) and the same-Key-type check passes vacuously.
+static_assert(sizeof(ppb::schema<ppb::unknown<ppb::wire_type::varint>>) > 0);
+static_assert(sizeof(ppb::auto_schema<ppb::detect_unknown_fields>) > 0);
+
+}  // namespace test_unknown_field
+
 int
 main()
 {

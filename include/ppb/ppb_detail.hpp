@@ -10,26 +10,36 @@
 namespace ppb
 {
 
-// Base for every field descriptor.  Fields inherit via
-// `field_base<K, wire_type>`, which static-asserts the (K, wire_type)
-// constraints and exposes `tag()`, `wire()`, and `encoded_tag()`.
+// Base for every field descriptor.  Most fields inherit via
+// `field_base<K, wire_type>` (typed scalars, the four raw wire-typed
+// primitives), which adds the `(K, wire_type)` static_asserts and
+// exposes `tag()`, `wire()`, and `encoded_tag()`.  Catch-alls
+// (`ppb::unknown<wire>`) inherit from `field_generic_base` directly
+// so they can bypass the `[1, 2**29 - 1]` key-range constraint and
+// skip the schema-wide same-Key-type check.
 //
-// `extract_value(field, error*)` is the customization point: typed
-// scalars override it to decode the matched `ppb_field` into a
-// natural C++ type, optionally writing to `*error` for soft failures
-// (e.g. a misaligned LEN payload for `bytes<K, Element>`).  When a
-// field type doesn't override `extract_value`, the inherited version
-// hands the handler a `const ppb_field &` instead.
-//
-// Field-tag constraints (enforced by static_assert):
-//   - K convertible to uint64_t
-//   - 1 <= K <= 2^29 - 1 (the protobuf-spec field-number range)
+// All static methods are shadowed statically as needed.
 struct field_generic_base
 {
     static constexpr const ppb_field &extract_value(const ppb_field &field, ppb_error *) { return field; }
     static constexpr field_semantics semantics() { return field_semantics::always_lexn; }
+
+    // Catch-all marker: shadowed by `ppb::unknown<>` to return true.
+    // The reader uses this to identify catch-all entries during the
+    // post-prescan field walk and the per-field handler dispatch,
+    // without needing a separate trait.
+    static constexpr bool is_unknown() { return false; }
 };
 
+// Common base for fields with a real (in-range) field number.
+// Enforces the protobuf field-number range and a valid wire type.
+//
+// Field-tag constraints (enforced by static_assert):
+//   - K convertible to uint64_t
+//   - 1 <= K <= 2^29 - 1 (the protobuf-spec field-number range)
+//
+// Catch-all entries (`ppb::unknown<wire>`) sidestep this base and
+// derive from `field_generic_base` directly.
 template <auto K, wire_type type> struct field_base : public field_generic_base
 {
     static_assert(static_cast<uint64_t>(K) - 1 < (uint64_t(1) << 29) - 1,
@@ -67,6 +77,34 @@ template <auto K, field_semantics sem> struct len : public field_base<K, wire_ty
 template <auto K, field_semantics sem> struct i32 : public field_base<K, wire_type::i32>
 {
     static constexpr field_semantics semantics() { return sem; }
+};
+
+// Catch-all descriptor for the C lexer's `PPB_TAG(-1, wire)` entry:
+// matches any tag with the given wire type that doesn't already have
+// a dedicated descriptor in the schema.  Derives directly from
+// `field_generic_base` so it bypasses `field_base`'s `[1, 2**29 - 1]`
+// key-range check, and intentionally exposes no `Key` typedef so the
+// schema-wide same-Key-type assertion ignores it.
+//
+// The default `field_semantics::repeated` makes it `on_unknown` handlers,
+// when registered, see every single matching unknown field.  When there
+// is no such handler, we won't lexn solely for unknown fields.
+template <wire_type type, field_semantics sem> struct unknown : public field_generic_base
+{
+    static_assert(type == wire_type::varint || type == wire_type::i64 || type == wire_type::len ||
+            type == wire_type::i32,
+        "ppb::unknown wire type must be one of varint, i64, len, or i32");
+
+    static constexpr uint64_t tag() { return UINT64_MAX; }
+    static constexpr wire_type wire() { return type; }
+
+    static constexpr ppb_encoded_tag encoded_tag()
+    {
+        return ppb_encoded_tag { .bits = PPB_TAG_BITS(UINT64_MAX, uint64_t(type)) };
+    }
+
+    static constexpr field_semantics semantics() { return sem; }
+    static constexpr bool is_unknown() { return true; }
 };
 
 // Nicer scalar types (wrappers around the 4 wire types above)
@@ -235,14 +273,44 @@ le_packed<T>::value() const
 namespace detail
 {
 
+// Resolves the schema's `Key` type by walking the field pack and
+// returning the first field's `Key` typedef.  Catch-all entries
+// (`ppb::unknown<wire>`) have no `Key`, so they're skipped: a schema
+// with catch-alls only resolves to the empty-pack fallback (`int`),
+// which is harmless because catch-all-only schemas never need to
+// match a typed dispatch Key.
 template <typename...> struct key_of
 {
     using type = int;
 };
+
 template <typename First, typename... Rest> struct key_of<First, Rest...>
 {
-    using type = typename First::Key;
+private:
+    static consteval auto pick()
+    {
+        if constexpr (requires { typename First::Key; })
+            return std::type_identity<typename First::Key> {};
+        else
+            return std::type_identity<typename key_of<Rest...>::type> {};
+    }
+
+public:
+    using type = typename decltype(pick())::type;
 };
+
+template <typename F, typename Key>
+consteval bool
+field_key_matches()
+{
+    // Catch-all entries (e.g. `ppb::unknown<wire>`) intentionally
+    // expose no `Key` typedef so we can treat them as matching any
+    // Key type.
+    if constexpr (requires { typename F::Key; })
+        return std::is_same_v<typename F::Key, Key>;
+    else
+        return true;
+}
 
 template <typename... Fs> struct schema_impl
 {
@@ -254,10 +322,7 @@ template <typename... Fs> struct schema_impl
 
     static consteval bool fields_are_fields() { return (std::is_base_of_v<field_generic_base, Fs> && ...); }
 
-    static consteval bool fields_have_same_key_type()
-    {
-        return (std::is_same_v<typename Fs::Key, Key> && ...);
-    }
+    static consteval bool fields_have_same_key_type() { return (field_key_matches<Fs, Key>() && ...); }
 
     static consteval std::array<ppb_encoded_tag, sizeof...(Fs)> encoded_tags()
     {
