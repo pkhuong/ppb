@@ -73,10 +73,36 @@ using S = ppb::schema<ppb::varint<1>, ppb::len<2>, ppb::i32<3>>;
 Constraints (all enforced by `static_assert`):
 - At least one field.
 - Every field's `Key` type must match (e.g. all plain `int`, or all the
-  same `enum class`).
+  same `enum class`).  Catch-all entries (see below) are exempt.
 - Field tags must be strictly ascending in encoded-tag order.  When the
   same field number appears with multiple wire types, list them in
-  `enum ppb_wire_type` order (varint, i64, len, i32).
+  `enum ppb_wire_type` order (varint, i64, len, i32).  Catch-all
+  entries (`ppb::unknown<wire>`) carry an `UINT64_MAX` sentinel tag,
+  so they always sort to the tail of the list.
+
+### `ppb::auto_schema<...>`: flatten and sort
+
+`ppb::auto_schema<Ts...>` is an adapter that accepts a list of field
+descriptors and/or (possibly nested) `std::tuple<...>` collections of
+field descriptors, flattens them, validates that every leaf is a
+`field_generic_base` subclass, sorts them ascending by
+`(field_number, wire_type)`, and yields the corresponding
+`ppb::schema<...>`.
+
+It is handy when assembling a schema from reusable sub-tuples without
+worrying about the strictly-ascending-tag invariant:
+
+```cpp
+using shared_fields = std::tuple<ppb::varint<3>, ppb::len<7>>;
+using my_schema = ppb::auto_schema<
+    ppb::varint<1>,
+    shared_fields,
+    ppb::i32<2>>;
+// == ppb::schema<ppb::varint<1>, ppb::i32<2>, ppb::varint<3>, ppb::len<7>>
+```
+
+Duplicate `(field_number, wire_type)` pairs after sorting are still
+rejected by `schema<>`'s strictly-ascending check.
 
 Wire-typed primitives
 ---------------------
@@ -148,6 +174,36 @@ appears multiple times on the wire:
 
 Packed fields are always `repeated`.
 
+### Catch-alls and unknown-field detection
+
+Schemas can register a catch-all entry per wire type via
+`ppb::unknown<wire>`.  These map onto the C library's
+`PPB_TAG(-1, wire)` entries, so any tag of that wire type the schema
+doesn't otherwise recognize routes to the catch-all bucket instead of
+being silently skipped.
+
+`ppb::detect_unknown_fields` is a `std::tuple` of all four
+`unknown<wire>` entries (varint, i64, len, i32), suitable for dropping
+into `auto_schema`:
+
+```cpp
+using S = ppb::auto_schema<MyFields..., ppb::detect_unknown_fields>;
+```
+
+`unknown<wire>` carries no `Key` typedef, so it composes neutrally
+with any user Key type.  Manual schemas place the four catch-alls at
+the tail in wire-type order; `auto_schema` does that for you.
+
+Once registered, unknown-field activity surfaces in two complementary
+ways:
+- `reader::unknown_field()` returns an `optional<uint64_t>` set to the
+  first unknown tag's full encoded value (`field_number * 8 + wire_type`),
+  recovered by re-decoding the varint at the catch-all's stored
+  `v.ptr` after prescan.  See **Error reporting** below.
+- `ppb::on_unknown<wire = wire_type::any>(callable)` registers a
+  per-occurrence handler that receives `const ppb_field &`.  See
+  **Handlers** below.
+
 Reading a message
 -----------------
 
@@ -168,7 +224,10 @@ ppb_error parse(Init init, ppb::limit bounds = {}, Handlers... handlers);
 
 1. Runs `ppb_prescan` over the input subject to `bounds`.
 2. Checks `field_semantics::error` fields and decides whether the lexn
-   pass is needed.
+   pass is needed.  Fields without a registered handler (catch-alls
+   included) don't force a lexn pass on their own, so opting into
+   `detect_unknown_fields` for the soft `unknown_field()` flag alone
+   has no extra cost.
 3. Calls `init(std::as_const(*this))`; the snapshot lets you call
    `meta<Key>()` to size buffers.  If `init` returns non-`PPB_OK`, the
    error is recorded and the input span is **not** consumed.
@@ -224,6 +283,34 @@ ppb::on<Key, wire = wire_type::any>(callable)
   ambiguity is reported at compile time.
 - Handlers must return `ppb_error`.
 
+### `ppb::on_unknown<>()`
+
+```cpp
+ppb::on_unknown<wire = wire_type::any>(callable)
+```
+
+Registers a handler that fires once per occurrence of any catch-all
+field that's been added to the schema (see "Catch-alls and
+unknown-field detection" above).  The handler receives
+`const ppb_field &`; `field.v.ptr` points at the original tag byte in
+the input buffer, so callers who need the wire-side field number can
+recover it via `ppb_decode_varint`.
+
+`wire` defaults to `wire_type::any` (matches every catch-all the
+schema registered).  Specify a concrete wire type to bind a handler
+to one bucket; mixing per-wire `on_unknown` factories in a single
+`parse()` call is supported, as is mixing `ppb::on_unknown(...)` with
+typed `ppb::on<Key>(...)` handlers.
+
+Ambiguity rules mirror `ppb::on<>`: multiple `on_unknown<wire>`
+handlers that all accept the dispatch argument type are a compile
+error, and at most one may match each catch-all entry.
+
+`parse()` only forces a per-occurrence lexn pass when at least one
+handler is registered for a given field (catch-all or otherwise);
+schemas that opt into `detect_unknown_fields` for the soft flag alone
+pay no extra cost.
+
 Error reporting
 ---------------
 
@@ -234,6 +321,17 @@ The reader carries a single sticky `ppb_error`:
 - `error_field()` returns an `optional<uint32_t>` set when a
   `field_semantics::error` field appeared on the wire.  The value is
   the encoded tag, i.e. `field_number * 8 + wire_type`.
+- `unknown_field()` returns an `optional<uint64_t>` set when a
+  catch-all (`ppb::unknown<wire>`) entry saw at least one occurrence.
+  Same encoding as `error_field()` (`field_number * 8 + wire_type`)
+  but recovered from the wire by re-decoding the catch-all's stored
+  varint, so it tells you the original field number too.  Sticky and
+  first-write-wins, like `error_field()`.  Detection is **soft**: it
+  does not set the reader's sticky error or abort dispatch; callers
+  who want a hard error should layer their own check after `parse()`
+  returns.  Updated by `parse()` and `prescan()` (which run prescan,
+  the only path that aggregates per-field occurrence counts);
+  standalone `lexn()` does not update it.
 
 ### Resetting between messages
 
@@ -275,10 +373,6 @@ builders.
 Limitations / known gaps
 -----------------------
 
-- **No catch-all support.** The C library's `PPB_TAG(-1, wire)` matches
-  any unknown field of a wire type, but the C++ schema's tag-range
-  static-assert excludes negative / `UINT64_MAX` keys.  Use the C API
-  directly if you need catch-all dispatch.
 - **GCC/Clang only.** `le_packed<T>` uses `[[gnu::packed]]`, so MSVC
   is not currently supported.
 - **No bounds checking on `enumerated`.** Wire values that don't name
@@ -294,14 +388,18 @@ and their messages:
 |----------------------------------|------------------------------------------------------------|
 | `varint<0>`, `varint<1<<29>`     | `field tag key must be convertible to uint64_t`            |
 | `field_base<K, wire_type(3)>`    | `field wire type must be one of varint, i64, len, or i32`  |
+| `unknown<wire_type::any>`        | `ppb::unknown wire type must be one of varint, i64, len, or i32` |
 | `schema<>`                       | `schema must include at least one field`                   |
 | `schema<int>                   ` | `schema template arguments must be field_generic_base`     |
 | `schema<varint<1>, varint<1L>>`  | `schema fields must all have the same Key type`            |
 | `schema<varint<2>, i64<1>>`      | `schema fields must be listed in strictly ascending order` |
+| `auto_schema<varint<1>, int>`    | `auto_schema arguments must be field_generic_base (possibly nested in std::tuple)` |
 | `r.meta<absent>()`               | `Key not found in schema`                                  |
 | Handler key type mismatch        | `every value_handler in the tuple must use the same key type as the dispatch Key` |
 | Two handlers, none invocable     | `value_handlers match (Key, wire), but none is invocable with the argument type` |
 | Two handlers, both invocable     | `multiple value_handlers match (Key, wire) and accept the argument type; ambiguous` |
+| Two `on_unknown`, none invocable | `unknown_handlers match the wire type, but none is invocable with the argument type` |
+| Two `on_unknown`, both invocable | `multiple unknown_handlers match the wire type and accept the argument type; ambiguous` |
 
 Matching positive and negative tests live in
 `tests/test_ppb_cpp_static.cc` and `tests/test_ppb_cpp_compile_fail.cc`.
