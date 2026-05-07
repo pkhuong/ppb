@@ -293,6 +293,40 @@ static_assert(disambiguated.has_value() && *disambiguated == 1);
 
 }  // namespace test_find_value_handler
 
+// auto_schema: flatten + sort. Counterparts in PPB_FAIL_AUTO_SCHEMA_* tests.
+namespace test_auto_schema
+{
+
+// Already-ordered single field is preserved.
+static_assert(std::is_same_v<ppb::auto_schema<ppb::varint<1>>, ppb::schema<ppb::varint<1>>>);
+
+// Out-of-order top-level fields are sorted.
+static_assert(
+    std::is_same_v<ppb::auto_schema<ppb::i64<2>, ppb::varint<1>>, ppb::schema<ppb::varint<1>, ppb::i64<2>>>);
+
+// Same field number, different wire types: sorted by wire type.
+static_assert(
+    std::is_same_v<ppb::auto_schema<ppb::i64<1>, ppb::varint<1>>, ppb::schema<ppb::varint<1>, ppb::i64<1>>>);
+
+// Single nested tuple is flattened.
+static_assert(std::is_same_v<ppb::auto_schema<std::tuple<ppb::i64<2>, ppb::varint<1>>>,
+    ppb::schema<ppb::varint<1>, ppb::i64<2>>>);
+
+// Mix of leaf fields and tuples, including a deeply nested tuple.
+static_assert(
+    std::is_same_v<ppb::auto_schema<std::tuple<std::tuple<ppb::i64<2>>, ppb::varint<1>>, ppb::len<3>>,
+        ppb::schema<ppb::varint<1>, ppb::i64<2>, ppb::len<3>>>);
+
+// Empty nested tuples disappear; surrounding fields still sort.
+static_assert(std::is_same_v<ppb::auto_schema<ppb::i32<4>, std::tuple<>, ppb::varint<1>>,
+    ppb::schema<ppb::varint<1>, ppb::i32<4>>>);
+
+// Typed scalars (subclasses of varint/i64/...) are accepted as fields.
+static_assert(std::is_same_v<ppb::auto_schema<ppb::int32<2>, ppb::utf8string<1>>,
+    ppb::schema<ppb::utf8string<1>, ppb::int32<2>>>);
+
+}  // namespace test_auto_schema
+
 int
 main()
 {

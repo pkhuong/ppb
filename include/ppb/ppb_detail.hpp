@@ -802,4 +802,76 @@ struct packed_enumerated : public len<K, field_semantics::repeated>
     }
 };
 
+namespace detail
+{
+
+// `flatten_one<T>::type` is `std::tuple<T>` for a leaf type, and
+// recursively flattens any `std::tuple<...>` wrapper.  The result of
+// `flatten_t<Ts...>` is a single `std::tuple<...>` whose elements are
+// the leaves of the input list, in left-to-right order.
+template <typename T> struct flatten_one
+{
+    using type = std::tuple<T>;
+};
+
+template <typename... Ts> struct flatten_one<std::tuple<Ts...>>
+{
+    using type = decltype(std::tuple_cat(typename flatten_one<Ts>::type {}...));
+};
+
+template <typename... Ts> using flatten_t = decltype(std::tuple_cat(typename flatten_one<Ts>::type {}...));
+
+template <typename Tuple> struct sort_fields;
+
+// Validates that every element of the flattened tuple is a
+// `field_generic_base` subclass, then computes the permutation that
+// sorts them lexicographically by `(uint64_t(key), wire, original index)`.
+// That ordering matches the strictly-ascending encoded-tag invariant
+// downstream `schema<>` enforces.
+//
+// `to<Tmpl>` rebinds the sorted field pack onto an arbitrary
+// `template <typename...> class` continuation.  The public
+// `auto_schema` alias uses this to splice the sorted pack directly
+// into `schema<...>` without exposing a `std::make_index_sequence`
+// parameter on its own signature.
+template <typename... Fs> struct sort_fields<std::tuple<Fs...>>
+{
+    static_assert((std::is_base_of_v<field_generic_base, Fs> && ...),
+        "auto_schema arguments must be field_generic_base (possibly nested in std::tuple)");
+
+    static consteval std::array<size_t, sizeof...(Fs)> permutation()
+    {
+        constexpr size_t n = sizeof...(Fs);
+        using entry = std::tuple<uint64_t, uint8_t, size_t>;
+
+        return [&]<size_t... Is>(std::index_sequence<Is...>)
+        {
+            std::array<entry, n> entries = { entry { static_cast<uint64_t>(Fs::tag()),
+                static_cast<uint8_t>(Fs::wire()), Is }... };
+
+            std::sort(entries.begin(), entries.end());
+
+            std::array<size_t, n> perm = {};
+            for (size_t i = 0; i < n; i++)
+                perm[i] = std::get<2>(entries[i]);
+            return perm;
+        }(std::make_index_sequence<n> {});
+    }
+
+    template <template <typename...> class Tmpl, typename Idx> struct rebind;
+
+    template <template <typename...> class Tmpl, size_t... Is> struct rebind<Tmpl, std::index_sequence<Is...>>
+    {
+        using type = Tmpl<std::tuple_element_t<permutation()[Is], std::tuple<Fs...>>...>;
+    };
+
+    template <template <typename...> class Tmpl>
+    using to = typename rebind<Tmpl, std::make_index_sequence<sizeof...(Fs)>>::type;
+};
+
+// Convenience interface: flattens the input pack and forwards to `sort_fields`.
+// `sorted_fields<Ts...>::template to<Tmpl>` yields `Tmpl<sorted Fs...>`.
+template <typename... Ts> using sorted_fields = sort_fields<flatten_t<Ts...>>;
+
+}  // namespace detail
 }  // namespace ppb

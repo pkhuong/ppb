@@ -171,3 +171,44 @@ constexpr auto bad = ppb::reader<SmokeSchema>(smoke_wire, sizeof(smoke_wire))
 constexpr auto bad = ppb::reader<SmokeSchema>(smoke_wire, sizeof(smoke_wire))
                          .prescan({}, ppb::on<1L>([](const ppb_field &) -> ppb_error { return PPB_OK; }));
 #endif
+
+// auto_schema: a non-field leaf (top-level) is rejected.
+
+/* expect-error: auto_schema arguments must be field_generic_base */
+#ifdef PPB_FAIL_AUTO_SCHEMA_NOT_A_FIELD
+static_assert(sizeof(ppb::auto_schema<ppb::varint<1>, int>) > 0);
+#endif
+
+// auto_schema: a non-field leaf nested inside a tuple is rejected.
+
+/* expect-error: auto_schema arguments must be field_generic_base */
+#ifdef PPB_FAIL_AUTO_SCHEMA_NESTED_NOT_A_FIELD
+static_assert(sizeof(ppb::auto_schema<std::tuple<ppb::varint<1>, int>>) > 0);
+#endif
+
+// auto_schema: duplicate (key, wire) pair is caught by schema's
+// strict-ascending check after sorting.
+
+/* expect-error: schema fields must be listed in strictly ascending order */
+#ifdef PPB_FAIL_AUTO_SCHEMA_DUPLICATE
+static_assert(sizeof(ppb::auto_schema<ppb::varint<2>, ppb::varint<2>>) > 0);
+#endif
+
+// auto_schema: empty input flattens to an empty schema, which is rejected.
+
+/* expect-error: schema must include at least one field */
+#ifdef PPB_FAIL_AUTO_SCHEMA_EMPTY
+static_assert(sizeof(ppb::auto_schema<>) > 0);
+#endif
+
+/* expect-error: schema must include at least one field */
+#ifdef PPB_FAIL_AUTO_SCHEMA_EMPTY_TUPLE
+static_assert(sizeof(ppb::auto_schema<std::tuple<>>) > 0);
+#endif
+
+// auto_schema: heterogeneous Key types are still rejected post-sort.
+
+/* expect-error: schema fields must all have the same Key type */
+#ifdef PPB_FAIL_AUTO_SCHEMA_DIFFERENT_KEYS
+static_assert(sizeof(ppb::auto_schema<ppb::varint<1>, ppb::varint<1L>>) > 0);
+#endif
