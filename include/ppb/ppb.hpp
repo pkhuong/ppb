@@ -2,6 +2,7 @@
 
 #include "ppb.h"
 
+#include <algorithm>
 #include <array>
 #include <bit>
 #include <cstddef>
@@ -343,6 +344,23 @@ public:
     using impl::find_field_range;
     using typename impl::field_range;
 };
+
+// Adapter that accepts a list of field types and/or (possibly nested)
+// `std::tuple<...>` collections of fields, flattens them into a
+// single type list, validates that every leaf is a `field_generic_base`
+// subclass, sorts them ascending by `(field number, wire type)`, and
+// yields the corresponding `ppb::schema<...>`.
+//
+// Use this when assembling a schema from reusable sub-tuples: callers
+// no longer need to manually keep field declarations in tag order.
+//
+//   using shared = std::tuple<ppb::varint<3>, ppb::len<7>>;
+//   using my_schema = ppb::auto_schema<ppb::varint<1>, shared, ppb::i32<2>>;
+//   // == ppb::schema<ppb::varint<1>, ppb::i32<2>, ppb::varint<3>, ppb::len<7>>
+
+// Duplicate `(key, wire)` pairs are rejected by `schema<>`'s
+// strictly-ascending check.
+template <typename... Ts> using auto_schema = typename detail::sorted_fields<Ts...>::template to<schema>;
 
 // Bundles the `(max_fields, max_bytes, error_on_bytes)` triple for
 // `ppb_prescan_*` / `ppb_lexn_*`.
