@@ -29,6 +29,11 @@ struct field_generic_base
     // post-prescan field walk and the per-field handler dispatch,
     // without needing a separate trait.
     static constexpr bool is_unknown() { return false; }
+
+    [[gnu::always_inline]] static constexpr void maybe_flag_unknown_field(const ppb_field &,
+        std::span<const std::byte>, std::optional<uint64_t> *)
+    {
+    }
 };
 
 // Common base for fields with a real (in-range) field number.
@@ -105,6 +110,23 @@ template <wire_type type, field_semantics sem> struct unknown : public field_gen
 
     static constexpr field_semantics semantics() { return sem; }
     static constexpr bool is_unknown() { return true; }
+
+    [[gnu::always_inline]] static constexpr void maybe_flag_unknown_field(const ppb_field &field,
+        std::span<const std::byte> input, std::optional<uint64_t> *unknown_field)
+    {
+        if (field.m.num_occurrences == 0 || unknown_field->has_value())
+            return;
+
+        const auto *ptr = static_cast<const std::byte *>(field.v.ptr);
+        const std::byte *end = input.data() + input.size();
+
+        size_t available = (uintptr_t(ptr) - uintptr_t(input.data()) <= input.size()) ? size_t(end - ptr) : 0;
+        ppb_buf buf = { .buf = ptr, .size = available };
+        ppb_error err = PPB_OK;
+        uint64_t tag = ppb_decode_varint(&buf, &err);
+        if (err == PPB_OK)
+            *unknown_field = tag;
+    }
 };
 
 // Nicer scalar types (wrappers around the 4 wire types above)

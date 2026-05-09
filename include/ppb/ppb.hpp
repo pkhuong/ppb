@@ -754,29 +754,13 @@ private:
 
         [&]<size_t... Is>(std::index_sequence<Is...>)
         {
-            auto check = [&]<size_t I>(std::integral_constant<size_t, I>)
-            {
-                using Field = decltype(Schema::template field<I>());
-
-                if constexpr (Field::is_unknown())
+            (
+                [&]<size_t I>(std::integral_constant<size_t, I>)
                 {
-                    if (m_fields[I].m.num_occurrences == 0 || m_unknown_field.has_value())
-                        return;
-
-                    const auto *ptr = static_cast<const std::byte *>(m_fields[I].v.ptr);
-                    const std::byte *end = m_input.data() + m_input.size();
-
-                    size_t available = (uintptr_t(ptr) - uintptr_t(m_input.data()) <= m_input.size()) ?
-                        size_t(end - ptr) :
-                        0;
-                    ppb_buf buf = { .buf = ptr, .size = available };
-                    ppb_error err = PPB_OK;
-                    uint64_t tag = ppb_decode_varint(&buf, &err);
-                    if (err == PPB_OK)
-                        m_unknown_field = tag;
-                }
-            };
-            (check(std::integral_constant<size_t, Is> {}), ...);
+                    using Field = decltype(Schema::template field<I>());
+                    Field::maybe_flag_unknown_field(m_fields[I], m_input, &m_unknown_field);
+                }(std::integral_constant<size_t, Is> {}),
+                ...);
         }(std::make_index_sequence<Schema::num_fields()> {});
     }
 
