@@ -2203,6 +2203,107 @@ test_reader_getters()
     CHECK(TestSchema::num_fields() == 4);
 }
 
+// Corrupt the message buffer in init (between prescan and lexn).
+// Repeated semantics forces the lexn path; we just want to confirm
+// we don't crash walking a buffer that mutated underneath us.
+static void
+test_parse_corrupt_underlying_in_init()
+{
+    using S = ppb::schema<ppb::varint<1, ppb::field_semantics::repeated>>;
+
+    // Mutable stack buffer — init will overwrite it after prescan.
+    uint8_t wire[] = {
+        0x08, 0x01, /* field 1 varint 1 */
+        0x08, 0x02, /* field 1 varint 2 */
+    };
+
+    ppb::reader<S> r(reinterpret_cast<const std::byte *>(wire), sizeof(wire));
+
+    int handler_calls = 0;
+
+    ppb_error rc = r.parse(
+        [&wire](const ppb::reader<S> &) -> ppb_error
+        {
+            memset(wire, 0xFF, sizeof(wire));
+            return PPB_OK;
+        },
+        {},
+        ppb::on<1>(
+            [&](const ppb_field &) -> ppb_error
+            {
+                handler_calls++;
+                return PPB_OK;
+            }));
+
+    // Lexn should detect the corrupted buffer and set an error.
+    CHECK(int(rc) < 0);
+    CHECK(r.error() != PPB_OK);
+    (void)handler_calls;
+}
+
+static void
+test_dispatch_when_ok_and_when_error()
+{
+    using S = ppb::schema<ppb::varint<1>>;
+    static const uint8_t wire[] = { 0x08, 0x01 }; /* field 1 varint 1 */
+
+    ppb::reader<S> r(wire, sizeof(wire));
+    CHECK(r.prescan() > 0);
+    CHECK(r.error() == PPB_OK);
+
+    // First dispatch: handler fires, returns an error to set sticky state.
+    int first_calls = 0;
+    CHECK(r.dispatch(ppb::on<1>(
+              [&](const ppb_field &) -> ppb_error
+              {
+                  first_calls++;
+                  return PPB_ERROR_CORRUPT_TAG;
+              })) == PPB_ERROR_CORRUPT_TAG);
+    CHECK(first_calls == 1);
+    CHECK(r.error() == PPB_ERROR_CORRUPT_TAG);
+
+    // Second dispatch: reader already in error state, exits early.
+    int second_calls = 0;
+    CHECK(r.dispatch(ppb::on<1>(
+              [&](const ppb_field &) -> ppb_error
+              {
+                  second_calls++;
+                  return PPB_OK;
+              })) == PPB_ERROR_CORRUPT_TAG);
+    CHECK(second_calls == 0);
+    CHECK(r.error() == PPB_ERROR_CORRUPT_TAG);
+}
+
+// Reuse a reader for two parses without reset_fields() between them.
+// The first parse is capped by max_fields; the second hits an unknown
+// field.  Must not crash, and unknown_field() must be set after the
+// second parse.
+static void
+test_reuse_reader_without_reset_fields()
+{
+    using S = ppb::auto_schema<ppb::varint<1>, ppb::detect_unknown_fields>;
+
+    // Two concatenated single-field messages: field 1 varint, then
+    // field 7 varint (unknown — not in the schema).
+    static const uint8_t two_messages[] = {
+        0x08, 0x96, 0x01, /* message 1: field 1 varint 150 */
+        0x38, 0x01, /* message 2: field 7 varint 1 */
+    };
+
+    ppb::reader<S> r(two_messages, sizeof(two_messages));
+
+    // First parse: cap at one field.
+    CHECK(r.parse([](const ppb::reader<S> &) -> ppb_error { return PPB_OK; }, ppb::limit::max_fields(1)) ==
+        PPB_OK);
+    CHECK(r.error() == PPB_OK);
+    CHECK(!r.unknown_field().has_value());
+
+    // Second parse without reset_fields(): picks up the tail.
+    CHECK(r.parse([](const ppb::reader<S> &) -> ppb_error { return PPB_OK; }) == PPB_OK);
+    CHECK(r.error() == PPB_OK);
+    CHECK(r.unknown_field().has_value());
+}
+
 // parse() with empty input: prescan reads 0 bytes, takes the num_bytes <= 0 path.
 static void
 test_parse_empty_prescan()
@@ -2801,6 +2902,9 @@ main()
 
     test_packed_varint_iter_default_constructed();
     test_merge_meta();
+    test_parse_corrupt_underlying_in_init();
+    test_dispatch_when_ok_and_when_error();
+    test_reuse_reader_without_reset_fields();
     test_parse_empty_prescan();
 
     test_dispatch_limit_multiple_of_16();
