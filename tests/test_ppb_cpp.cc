@@ -63,6 +63,15 @@ test_reader_ptr_construct()
 }
 
 static void
+test_reader_ptr_construct_parse()
+{
+    ppb::reader<TestSchema> r(four_field_wire, sizeof(four_field_wire));
+
+    CHECK(r.prescan() == ptrdiff_t(sizeof(four_field_wire)));
+    CHECK(r.error() == PPB_OK);
+}
+
+static void
 test_reader_prescan_ok()
 {
     ppb::reader<TestSchema> r(four_field_wire, sizeof(four_field_wire));
@@ -2177,10 +2186,13 @@ test_reader_getters()
     CHECK(r.size() == sizeof(four_field_wire));
     CHECK(!r.empty());
     CHECK(!r.error_field().has_value());
+    CHECK(!r.unknown_field().has_value());
 
     ppb::reader<TestSchema> r2;
     CHECK(r2.size() == 0);
     CHECK(r2.empty());
+    CHECK(!r2.error_field().has_value());
+    CHECK(!r2.unknown_field().has_value());
 
     ppb::limit lim = ppb::limit::hard(100, 10);
     CHECK(lim.bytes() == 100);
@@ -2466,6 +2478,16 @@ test_reader_too_large_input()
     CHECK(r.error() == PPB_ERROR_TRUNCATED_DATA);
 }
 
+// (const void *, size_t) constructor likewise rejects size > PTRDIFF_MAX.
+static void
+test_reader_too_large_input_ptr()
+{
+    ppb::reader<TestSchema> r(static_cast<const void *>(nullptr),
+        size_t(std::numeric_limits<ptrdiff_t>::max()) + 1);
+
+    CHECK(r.error() == PPB_ERROR_TRUNCATED_DATA);
+}
+
 /*
  * Catch-all / unknown-field detection tests.
  *
@@ -2690,6 +2712,7 @@ main()
     test_reader_default_construct();
     test_reader_span_construct();
     test_reader_ptr_construct();
+    test_reader_ptr_construct_parse();
     test_reader_prescan_ok();
     test_reader_prescan_empty();
     test_reader_prescan_with_max_fields();
@@ -2791,6 +2814,7 @@ main()
     test_prescan_sticky_error();
     test_parse_init_error_branch();
     test_reader_too_large_input();
+    test_reader_too_large_input_ptr();
 
     test_unknown_field_baseline_no_catchalls();
     test_unknown_field_detects_via_parse();
