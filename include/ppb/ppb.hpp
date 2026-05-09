@@ -853,48 +853,14 @@ reader<schema<Fs...>>::parse(Init &&init, limit bounds, Hs &&...handlers)
         auto scan = [&]<size_t I>(std::integral_constant<size_t, I>)
         {
             using Field = decltype(Schema::template field<I>());
-            const field_semantics semantics = Field::semantics();
-            const auto &meta = m_fields[I].m;
-
-            if constexpr (semantics == field_semantics::error)
+            constexpr bool has_handler = has_handler_for.template operator()<Field>();
+            std::optional<uint32_t> err =
+                Field::template classify_field_before_lexn<has_handler>(m_fields[I].m, &need_lexn);
+            if (err.has_value()) [[unlikely]]
             {
-                if (meta.num_occurrences > 0)
-                {
-                    has_error = true;
-                    m_error_field = static_cast<uint32_t>(Field::tag()) * 8 +
-                        static_cast<uint32_t>(Field::wire());
-                }
-
-                return;
+                has_error = true;
+                m_error_field = *err;
             }
-
-            // Fields without a registered handler can't dispatch, so
-            // there's no reason to force a lexn pass on their behalf.
-            if constexpr (!has_handler_for.template operator()<Field>())
-                return;
-
-            if constexpr (semantics == field_semantics::always_lexn)
-            {
-                need_lexn |= meta.num_occurrences > 0;
-                return;
-            }
-
-            if (meta.num_occurrences <= 1)
-                return;  // single-occurrence never forces lexn
-
-            if constexpr (semantics == field_semantics::repeated)
-            {
-                need_lexn = true;
-                return;
-            }
-
-            if constexpr (semantics == field_semantics::singular)
-            {
-                if (Field::wire() == wire_type::len || meta.lost_distinct_u64)
-                    need_lexn = true;
-            }
-
-            // last_write_wins / proto3_zero_default: never forces lexn
         };
         (scan(std::integral_constant<size_t, Is> {}), ...);
     }(std::make_index_sequence<Schema::num_fields()> {});
