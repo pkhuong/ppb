@@ -1984,6 +1984,160 @@ static const uint8_t wide_wire[] = {
     0x01,
 };
 
+// dispatch() runtime tests: the compile-time-bounded dispatch
+// helper is exercised at runtime to cover block boundaries and
+// limits that are / are-not multiples of 16.  Each test loops
+// over all end bounds up to the hardcoded maximum to exercise
+// every possible cut point within and across dispatch_16 blocks.
+
+static void
+test_dispatch_limit_multiple_of_16()
+{
+    for (size_t end = 0; end <= 16; end++)
+    {
+        for (size_t begin = 0; begin <= end + 1; begin++)
+        {
+            size_t n = 0;
+
+            ppb::detail::dispatch<16>(begin, end,
+                [&]<size_t I>(std::integral_constant<size_t, I>)
+                {
+                    CHECK(I == begin + n);
+                    n++;
+                    return true;
+                });
+            CHECK(n == (begin < end ? end - begin : 0));
+        }
+    }
+}
+
+static void
+test_dispatch_limit_non_multiple_of_16()
+{
+    for (size_t end = 0; end <= 20; end++)
+    {
+        for (size_t begin = 0; begin <= end + 1; begin++)
+        {
+            size_t n = 0;
+
+            ppb::detail::dispatch<20>(begin, end,
+                [&]<size_t I>(std::integral_constant<size_t, I>)
+                {
+                    CHECK(I == begin + n);
+                    n++;
+                    return true;
+                });
+            CHECK(n == (begin < end ? end - begin : 0));
+        }
+    }
+}
+
+static void
+test_dispatch_range_2_40_of_48()
+{
+    /*
+     * limit=48 (3 blocks of 16).
+     * Block 0 visits 2..15, block 1 visits 16..31, block 2 visits 32..39.
+     */
+    for (size_t end = 2; end <= 40; end++)
+    {
+        for (size_t begin = 2; begin <= end + 1; begin++)
+        {
+            size_t n = 0;
+
+            ppb::detail::dispatch<48>(begin, end,
+                [&]<size_t I>(std::integral_constant<size_t, I>)
+                {
+                    CHECK(I == begin + n);
+                    n++;
+                    return true;
+                });
+            CHECK(n == (begin < end ? end - begin : 0));
+        }
+    }
+}
+
+static void
+test_dispatch_early_exit()
+{
+    for (size_t stop_after = 0; stop_after < 20; stop_after++)
+    {
+        for (size_t begin = 0; begin <= stop_after + 1; begin++)
+        {
+            size_t n = 0;
+
+            ppb::detail::dispatch<20>(begin, 20,
+                [&]<size_t I>(std::integral_constant<size_t, I>)
+                {
+                    CHECK(I == begin + n);
+                    n++;
+                    return n <= stop_after;
+                });
+            size_t limited = begin < 20 ? 20 - begin : 0;
+            size_t expected = stop_after + 1 < limited ? stop_after + 1 : limited;
+            CHECK(n == expected);
+        }
+    }
+}
+
+static void
+test_dispatch_limit_0()
+{
+    // limit=0: num_blocks=0, fold is a no-op.  No handler runs
+    // regardless of begin/end values.
+    struct Case
+    {
+        size_t begin;
+        size_t end;
+    };
+
+    for (auto [begin, end] : { Case { 0, 0 }, Case { 0, 1 }, Case { 10, 5 }, Case { 5, 10 } })
+    {
+        size_t n = 0;
+
+        ppb::detail::dispatch<0>(begin, end,
+            [&n]<size_t I>(std::integral_constant<size_t, I>)
+            {
+                n++;
+                return true;
+            });
+        CHECK(n == 0);
+    }
+}
+
+static void
+test_dispatch_limit_1()
+{
+    struct Case
+    {
+        size_t begin;
+        size_t end;
+        size_t expected;
+    };
+
+    for (auto [begin, end, expected] : {
+             Case { 0, 0, 0 },
+             Case { 0, 1, 1 },
+             Case { 1, 0, 0 },
+             Case { 1, 1, 0 },
+             Case { 5, 3, 0 },
+             Case { 5, 10, 0 },
+             Case { 0, 1000, 1 },
+         })
+    {
+        size_t n = 0;
+
+        ppb::detail::dispatch<1>(begin, end,
+            [&n]<size_t I>(std::integral_constant<size_t, I>)
+            {
+                CHECK(I == 0);
+                n++;
+                return true;
+            });
+        CHECK(n == expected);
+    }
+}
+
 static void
 test_dispatch_high_indices()
 {
@@ -2352,6 +2506,12 @@ main()
 
     test_parse_empty_prescan();
 
+    test_dispatch_limit_multiple_of_16();
+    test_dispatch_limit_non_multiple_of_16();
+    test_dispatch_range_2_40_of_48();
+    test_dispatch_early_exit();
+    test_dispatch_limit_0();
+    test_dispatch_limit_1();
     test_dispatch_high_indices();
     test_lexn_sticky_error();
     test_prescan_sticky_error();
