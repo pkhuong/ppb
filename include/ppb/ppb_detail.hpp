@@ -497,7 +497,10 @@ dispatch(size_t begin, size_t end, Fn &&handler)
             }
             else
             {
-                return false;
+                // we have a guard at the top: if the block isn't
+                // runnable, we skip early.  After that, the previous
+                // entry would exit early before getting here.
+                __builtin_unreachable();  // LCOV_EXCL_LINE
             }
         };
 
