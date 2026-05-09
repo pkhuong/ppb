@@ -586,7 +586,17 @@ template <typename... Fs> struct reader<schema<Fs...>>
     // or `nullopt` if no such trigger has occurred.  The encoding matches
     // the protobuf wire tag: `field_number * 8 + wire_type`.  Only set by
     // `parse()` for `field_semantics::error`; not cleared by `reset_fields()`.
-    [[nodiscard]] constexpr std::optional<uint32_t> error_field() const noexcept { return m_error_field; }
+    //
+    // Returns an `optional<uint64_t>` for regularity, but
+    // `ppb::field`s guarantee at compile-time that the return value
+    // would always fits in a `uint32_t`.
+    [[nodiscard]] constexpr std::optional<uint64_t> error_field() const noexcept
+    {
+        if (m_error_field != 0)
+            return m_error_field;
+
+        return {};
+    }
 
     // Decoded encoded tag (`field_number * 8 + wire_type`) of the first
     // catch-all (`ppb::unknown<wire>`) entry that saw at least one
@@ -606,11 +616,15 @@ template <typename... Fs> struct reader<schema<Fs...>>
     // who want a hard error should layer their own check on top of
     // `parse()` returning successfully.
     //
-    // Updated by `parse()` and `prescan()` (which both run prescan, the
-    // only path that aggregates per-field occurrence counts).  The
-    // standalone `lexn()` does not update this flag; stream-style
-    // callers should call `prescan()` first.
-    [[nodiscard]] constexpr std::optional<uint64_t> unknown_field() const noexcept { return m_unknown_field; }
+    // Populated by `parse()` and `prescan()`, *not* by the standalone
+    // `lexn()`.
+    [[nodiscard]] constexpr std::optional<uint64_t> unknown_field() const noexcept
+    {
+        if (m_unknown_field != 0)
+            return m_unknown_field;
+
+        return {};
+    }
 
     // Zeroes the per-field metadata array so the reader can process
     // a fresh message.
@@ -749,7 +763,7 @@ private:
     // varint at `field.v.ptr`
     void detect_unknown_field() noexcept
     {
-        if (m_unknown_field.has_value())
+        if (m_unknown_field != 0)
             return;
 
         [&]<size_t... Is>(std::index_sequence<Is...>)
@@ -766,8 +780,19 @@ private:
 
     std::span<const std::byte> m_input;
     ppb_error m_error = PPB_OK;
-    std::optional<uint32_t> m_error_field;
-    std::optional<uint64_t> m_unknown_field;
+    // m_error_field and m_unknown_field are initially zero, when we
+    // haven't detected any error or unknown field (a zero field would
+    // be rejected at compile-time for a field, or at runtime as
+    // invalid wire encoding during prescan or lexn).
+    //
+    // m_error_field is a uint32_t because we check that fields fit in
+    // that range (tag < 2**29) at compile-time; no such guarantee for
+    // arbitrary fields on the wire (we could reject large tag values
+    // as invalid encoding too, but we currently don't).
+    //
+    // First non-zero value is sticky.
+    uint32_t m_error_field = 0;
+    uint64_t m_unknown_field = 0;
     std::array<ppb_field, Schema::num_fields()> m_fields = {};
 };
 
