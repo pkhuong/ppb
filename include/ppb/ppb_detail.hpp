@@ -234,7 +234,7 @@ template <auto K, typename Element, field_semantics sem> struct bytes : public l
     {
         if (f.v.payload.size % sizeof(Element) != 0) [[unlikely]]
         {
-            if (error && *error == PPB_OK)
+            if (*error == PPB_OK)
                 *error = PPB_ERROR_TRUNCATED_DATA;
 
             return {};
@@ -877,7 +877,7 @@ private:
 
         if (err != PPB_OK) [[unlikely]]
         {
-            if (m_error && *m_error == PPB_OK)
+            if (*m_error == PPB_OK)
                 *m_error = err;
 
             m_pos = m_end;
