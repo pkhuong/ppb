@@ -7,7 +7,7 @@ jobs:
     runs-on: ubuntu-slim
     steps:
       - name: install deps
-        run: sudo apt-get update && sudo apt-get install -y gcovr g++ clang xxd
+        run: sudo apt-get update && sudo apt-get install -y g++ clang xxd
       - name: checkout
         uses: actions/checkout@v4
       - name: build and test
@@ -17,13 +17,13 @@ jobs:
       - name: build and test (msan)
         run: make CC=clang CXX=clang++ EXTRA_FLAGS="-mbmi2 -fsanitize=memory -fno-omit-frame-pointer" test unit_cpp
       - name: gather coverage
-        run: export EXTRA_FLAGS=-mbmi2 ; ./coverage.sh
+        run: export EXTRA_FLAGS=-mbmi2 ; GCDA_ONLY=1 ./coverage.sh
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v5
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: "build/coverage/*.gc*"
-          gcov_include: "src/*.[ch]"
+          gcov_include: "src/*.[ch] include/ppb/*.hpp"
 
   i686:
     runs-on: ubuntu-slim
@@ -41,7 +41,7 @@ jobs:
     runs-on: ubuntu-24.04-arm
     steps:
       - name: install deps
-        run: sudo apt-get update && sudo apt-get install -y gcovr g++ clang xxd
+        run: sudo apt-get update && sudo apt-get install -y g++ clang xxd
       - name: checkout
         uses: actions/checkout@v4
       - name: build and test
@@ -51,13 +51,13 @@ jobs:
       - name: build and test (msan)
         run: make CC=clang CXX=clang++ EXTRA_FLAGS="-fsanitize=memory -fno-omit-frame-pointer" test unit_cpp
       - name: gather coverage
-        run: ./coverage.sh
+        run: GCDA_ONLY=1 ./coverage.sh
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v5
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: "build/coverage/*.gc*"
-          gcov_include: "src/*.[ch]"
+          gcov_include: "src/*.[ch] include/ppb/*.hpp"
 
   s390x-be:
     runs-on: ubuntu-latest
