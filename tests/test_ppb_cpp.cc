@@ -1662,6 +1662,42 @@ test_typed_bytes_misaligned_size_sets_error()
 }
 
 static void
+test_packed_fixed32_misaligned_error_semantics_sticky()
+{
+    /*
+     * Schema order: error-semantics field then packed_fixed32.
+     * Both fields appear on the wire.  dispatch_tuple visits in
+     * schema order, so the error handler fires first — CORRUPT_TAG
+     * sticks, and the packed field's extract_value (which would
+     * set TRUNCATED_DATA) is silenced.
+     */
+    using S = ppb::schema<ppb::varint<1, ppb::field_semantics::error>, ppb::packed_fixed32<2>>;
+
+    static const uint8_t wire[] = {
+        0x08, 0x01, /* field 1 varint 1 (error semantics: present → corrupt) */
+        0x12, 0x07, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, /* field 2 LEN 7 bytes */
+    };
+
+    ppb::reader<S> r(wire, sizeof(wire));
+
+    bool packed_called = false;
+    size_t observed_size = 999;
+
+    (void)r.prescan({}, ppb::on<1>([](const ppb_field &) -> ppb_error { return PPB_ERROR_CORRUPT_TAG; }),
+        ppb::on<2>(
+            [&](std::span<const ppb::le_packed<uint32_t>> s) -> ppb_error
+            {
+                packed_called = true;
+                observed_size = s.size();
+                return PPB_OK;
+            }));
+
+    CHECK(packed_called);
+    CHECK(observed_size == 0);
+    CHECK(r.error() == PPB_ERROR_CORRUPT_TAG);
+}
+
+static void
 test_typed_packed_fixed_fields()
 {
     using S = ppb::schema<ppb::packed_fixed32<1>, ppb::packed_sfixed64<2>, ppb::packed_f32<3>>;
@@ -1809,6 +1845,227 @@ test_typed_packed_varint_fields()
     CHECK(u64s.size() == 2);
     CHECK(u64s[0] == 100);
     CHECK(u64s[1] == 200);
+}
+
+// Helpers for sticky-error + packed payload tests.
+//
+// check_corrupt_after_sticky: schema has error-semantics field 1
+// then a packed-varint field 2.  The wire carries field 1 (triggers
+// CORRUPT_TAG) and a 3-byte packed payload whose final varint is
+// truncated.  The packed handler must fire (schema order dispatch),
+// iterating two valid values before hitting the corrupt varint, but
+// the sticky CORRUPT_TAG prevents TRUNCATED_DATA from overwriting it.
+template <typename PackedField>
+static void
+check_corrupt_after_sticky()
+{
+    using S = ppb::schema<ppb::varint<1, ppb::field_semantics::error>, PackedField>;
+
+    static const uint8_t wire[] = {
+        0x08, 0x01, /* field 1 varint 1 */
+        0x12, 0x03, 0x01, 0x02, 0x80, /* field 2 LEN 3 bytes, truncated varint at end */
+    };
+
+    ppb::reader<S> r(wire, sizeof(wire));
+
+    size_t values_seen = 0;
+
+    (void)r.prescan({}, ppb::on<1>([](const ppb_field &) -> ppb_error { return PPB_ERROR_CORRUPT_TAG; }),
+        ppb::on<2>(
+            [&](auto view) -> ppb_error
+            {
+                for (auto v : view)
+                {
+                    (void)v;
+                    values_seen++;
+                }
+                return PPB_OK;
+            }));
+
+    CHECK(values_seen == 2);
+    CHECK(r.error() == PPB_ERROR_CORRUPT_TAG);
+}
+
+// check_empty_payload: packed-varint field 1 with a 0-byte LEN
+// payload.  Handler fires, iterates zero elements, no error.
+template <typename PackedField>
+static void
+check_empty_payload()
+{
+    using S = ppb::schema<PackedField>;
+
+    static const uint8_t wire[] = {
+        0x0a, 0x00, /* f1 LEN 0 bytes */
+    };
+
+    ppb::reader<S> r(wire, sizeof(wire));
+
+    size_t values_seen = 999;
+
+    CHECK(r.parse([](const ppb::reader<S> &) -> ppb_error { return PPB_OK; }, {},
+              ppb::on<1>(
+                  [&](auto view) -> ppb_error
+                  {
+                      values_seen = 0;
+                      for (auto v : view)
+                      {
+                          (void)v;
+                          values_seen++;
+                      }
+                      return PPB_OK;
+                  })) == PPB_OK);
+    CHECK(values_seen == 0);
+    CHECK(r.error() == PPB_OK);
+}
+
+static void
+test_packed_varint_iter_default_constructed()
+{
+    using iter = ppb::detail::packed_varint_iter<int32_t, ppb::detail::identity_decode>;
+
+    iter it;
+    // Default-constructed: dereference returns zero-initialized T.
+    CHECK(*it == 0);
+
+    // Advancing: m_pos == m_next == nullptr, so m_pos < m_end is
+    // false and decode() is skipped.  Must not crash.
+    ++it;
+    CHECK(*it == 0);
+
+    // Post-increment: saves current state, pre-increments (no-op),
+    // returns copy of saved state.
+    iter it2 = it++;
+    CHECK(*it == 0);
+    CHECK(*it2 == 0);
+
+    // Two default-constructed iterators compare equal (both m_pos == nullptr).
+    iter it3;
+    CHECK(it == it3);
+    CHECK(!(it != it3));
+
+    // end() from a default-constructed iterator also produces m_pos == nullptr.
+    CHECK(it == it.end());
+}
+
+static void
+test_merge_meta()
+{
+    // acc empty, upd present: full copy.
+    {
+        ppb_field_meta acc {};
+        ppb_field_meta upd { .lost_distinct_u64 = 0,
+            .num_occurrences = 1,
+            .total_bytes = 5,
+            .min_nonzero_bytes = 3,
+            .max_bytes = 5 };
+        ppb::detail::merge_meta(acc, upd);
+        CHECK(acc.num_occurrences == 1);
+        CHECK(acc.lost_distinct_u64 == 0);
+        CHECK(acc.total_bytes == 5);
+        CHECK(acc.min_nonzero_bytes == 3);
+        CHECK(acc.max_bytes == 5);
+    }
+
+    // acc present, upd empty: no-op.
+    {
+        ppb_field_meta acc { .lost_distinct_u64 = 0,
+            .num_occurrences = 2,
+            .total_bytes = 10,
+            .min_nonzero_bytes = 4,
+            .max_bytes = 6 };
+        ppb_field_meta upd {};
+        ppb::detail::merge_meta(acc, upd);
+        CHECK(acc.num_occurrences == 2);
+        CHECK(acc.lost_distinct_u64 == 0);
+        CHECK(acc.total_bytes == 10);
+        CHECK(acc.min_nonzero_bytes == 4);
+        CHECK(acc.max_bytes == 6);
+    }
+
+    // Both present: sums, lost_distinct_u64 forced true, min is min,
+    // max is max.
+    {
+        ppb_field_meta acc { .lost_distinct_u64 = 0,
+            .num_occurrences = 3,
+            .total_bytes = 12,
+            .min_nonzero_bytes = 4,
+            .max_bytes = 8 };
+        ppb_field_meta upd { .lost_distinct_u64 = 0,
+            .num_occurrences = 2,
+            .total_bytes = 7,
+            .min_nonzero_bytes = 3,
+            .max_bytes = 7 };
+        ppb::detail::merge_meta(acc, upd);
+        CHECK(acc.num_occurrences == 5);
+        CHECK(acc.lost_distinct_u64 == 1);
+        CHECK(acc.total_bytes == 19);
+        CHECK(acc.min_nonzero_bytes == 3);
+        CHECK(acc.max_bytes == 8);
+    }
+
+    // Both present, acc.min_nonzero_bytes == 0: takes upd's value.
+    {
+        ppb_field_meta acc { .lost_distinct_u64 = 0,
+            .num_occurrences = 1,
+            .total_bytes = 3,
+            .min_nonzero_bytes = 0,
+            .max_bytes = 3 };
+        ppb_field_meta upd { .lost_distinct_u64 = 0,
+            .num_occurrences = 1,
+            .total_bytes = 4,
+            .min_nonzero_bytes = 4,
+            .max_bytes = 4 };
+        ppb::detail::merge_meta(acc, upd);
+        CHECK(acc.min_nonzero_bytes == 4);
+    }
+
+    // Both present, upd.min_nonzero_bytes == 0: keeps acc's value.
+    {
+        ppb_field_meta acc { .lost_distinct_u64 = 0,
+            .num_occurrences = 1,
+            .total_bytes = 5,
+            .min_nonzero_bytes = 5,
+            .max_bytes = 5 };
+        ppb_field_meta upd { .lost_distinct_u64 = 0,
+            .num_occurrences = 1,
+            .total_bytes = 2,
+            .min_nonzero_bytes = 0,
+            .max_bytes = 2 };
+        ppb::detail::merge_meta(acc, upd);
+        CHECK(acc.min_nonzero_bytes == 5);
+    }
+
+    // Both present, both min_nonzero_bytes == 0: stays 0.
+    {
+        ppb_field_meta acc { .lost_distinct_u64 = 0,
+            .num_occurrences = 1,
+            .total_bytes = 3,
+            .min_nonzero_bytes = 0,
+            .max_bytes = 3 };
+        ppb_field_meta upd { .lost_distinct_u64 = 0,
+            .num_occurrences = 1,
+            .total_bytes = 4,
+            .min_nonzero_bytes = 0,
+            .max_bytes = 4 };
+        ppb::detail::merge_meta(acc, upd);
+        CHECK(acc.min_nonzero_bytes == 0);
+    }
+
+    // Both present, equal min_nonzero_bytes: keeps the value.
+    {
+        ppb_field_meta acc { .lost_distinct_u64 = 0,
+            .num_occurrences = 1,
+            .total_bytes = 3,
+            .min_nonzero_bytes = 3,
+            .max_bytes = 3 };
+        ppb_field_meta upd { .lost_distinct_u64 = 0,
+            .num_occurrences = 1,
+            .total_bytes = 4,
+            .min_nonzero_bytes = 3,
+            .max_bytes = 4 };
+        ppb::detail::merge_meta(acc, upd);
+        CHECK(acc.min_nonzero_bytes == 3);
+    }
 }
 
 static void
@@ -2498,12 +2755,29 @@ main()
     test_typed_bytes_default_element();
     test_typed_bytes_uint32_element();
     test_typed_bytes_misaligned_size_sets_error();
+    test_packed_fixed32_misaligned_error_semantics_sticky();
     test_typed_packed_fixed_fields();
     test_typed_packed_varint_fields();
+    // Empty packed payloads.
+    check_empty_payload<ppb::packed_int32<1>>();
+    check_empty_payload<ppb::packed_sint32<1>>();
+    check_empty_payload<ppb::packed_uint64<1>>();
+    check_empty_payload<ppb::packed_boolean<1>>();
+    check_empty_payload<ppb::packed_enumerated<1, Color>>();
+
+    // Corrupt packed payload with sticky error already set.
+    check_corrupt_after_sticky<ppb::packed_int32<2>>();
+    check_corrupt_after_sticky<ppb::packed_sint32<2>>();
+    check_corrupt_after_sticky<ppb::packed_uint64<2>>();
+    check_corrupt_after_sticky<ppb::packed_boolean<2>>();
+    check_corrupt_after_sticky<ppb::packed_enumerated<2, Color>>();
+
     test_typed_packed_enumerated_field();
     test_typed_packed_varint_truncated_payload();
     test_unpacked_aliases_compile_and_decode();
 
+    test_packed_varint_iter_default_constructed();
+    test_merge_meta();
     test_parse_empty_prescan();
 
     test_dispatch_limit_multiple_of_16();
