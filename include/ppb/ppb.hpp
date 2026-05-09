@@ -660,7 +660,7 @@ template <typename... Fs> struct reader<schema<Fs...>>
     //    `meta<Key>()` and preallocate per-message storage.  If `init`
     //    returns non-`PPB_OK`, the error is recorded and the input span
     //    is *not* advanced; the next call to `parse()` will short-circuit
-    //    on the sticky error.
+    //    on the sticky error.  Pass `std::nullopt` as init to no-op.
     // 4. If no lexn pass is needed: dispatch handlers once with the
     //    prescan-aggregated values, then advance the input past the
     //    prescanned bytes.
@@ -873,7 +873,11 @@ reader<schema<Fs...>>::parse(Init &&init, limit bounds, Hs &&...handlers)
 
     std::tuple<std::decay_t<Hs>...> tup(std::forward<Hs>(handlers)...);
 
-    m_error = init(std::as_const(*this));
+    if constexpr (!std::is_same_v<std::decay_t<Init>, std::nullopt_t>)
+    {
+        m_error = init(std::as_const(*this));
+    }
+
     if (m_error != PPB_OK || num_bytes == 0) [[unlikely]]
         return m_error;
 
