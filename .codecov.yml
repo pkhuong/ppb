@@ -1,3 +1,17 @@
 ignore:
   - "tests/*"
   - "examples/*"
+
+coverage:
+  status:
+    project:
+      default:
+        target: 89%
+      directory_src:
+        paths: ["src"]
+        target: 100%
+    patch:
+      default:
+        target:  100% # Minimum coverage for a PR
+        threshold: 1% # wiggle room
+        informational: true
