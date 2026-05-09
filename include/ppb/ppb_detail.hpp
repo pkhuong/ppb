@@ -31,7 +31,7 @@ struct field_generic_base
     static constexpr bool is_unknown() { return false; }
 
     [[gnu::always_inline]] static constexpr void maybe_flag_unknown_field(const ppb_field &,
-        std::span<const std::byte>, std::optional<uint64_t> *)
+        std::span<const std::byte>, uint64_t *)
     {
     }
 };
@@ -112,9 +112,9 @@ template <wire_type type, field_semantics sem> struct unknown : public field_gen
     static constexpr bool is_unknown() { return true; }
 
     [[gnu::always_inline]] static constexpr void maybe_flag_unknown_field(const ppb_field &field,
-        std::span<const std::byte> input, std::optional<uint64_t> *unknown_field)
+        std::span<const std::byte> input, uint64_t *unknown_field)
     {
-        if (field.m.num_occurrences == 0 || unknown_field->has_value())
+        if (field.m.num_occurrences == 0 || *unknown_field != 0)
             return;
 
         const auto *ptr = static_cast<const std::byte *>(field.v.ptr);
