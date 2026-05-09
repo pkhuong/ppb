@@ -919,7 +919,12 @@ reader<schema<Fs...>>::parse(Init &&init, limit bounds, Hs &&...handlers)
             Schema::s_encoded_tags.data(), m_fields.data(), std::numeric_limits<size_t>::max());
 
         size_t range_size = size_t(reinterpret_cast<const std::byte *>(buf.buf) - base);
-        if (ret.status != PPB_OK || range_size == 0) [[unlikely]]
+
+        // look for an error (prescan should have caught any wire encoding issue,
+        // but maybe the bytes changed along the way... `range_size == 0` can only
+        // happen on error (we already checked the input is before the hard limit,
+        // and the C library guarantees progress), but a little defensiveness is good
+        if (ret.status != PPB_OK || range_size == 0) [[unlikely]]  // LCOV_EXCL_LINE
         {
             m_error = ret.status;
             break;
