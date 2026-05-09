@@ -36,6 +36,53 @@ struct field_generic_base
     }
 };
 
+// Core of the prescan-before-lexn decision: given a field's compile-time
+// tag, wire type, semantics, and whether a handler is registered, decide
+// whether the field forces a lexn pass and/or triggers an error.
+//
+// Called from `reader::parse()` via the `classify_field_before_lexn`
+// forwarding method on each field type.
+template <uint32_t tag, wire_type wire, field_semantics sem, bool has_handler>
+[[gnu::always_inline]] static constexpr std::optional<uint32_t>
+classify_field_before_lexn_impl(const ppb_field_meta &meta, bool *need_lexn)
+{
+    if constexpr (sem == field_semantics::error)
+    {
+        if (meta.num_occurrences > 0) [[unlikely]]
+            return 8 * tag + static_cast<uint32_t>(wire);
+
+        return {};
+    }
+
+    if constexpr (!has_handler)
+        return {};
+
+    if constexpr (sem == field_semantics::always_lexn)
+    {
+        *need_lexn |= meta.num_occurrences > 0;
+        return {};
+    }
+
+    // Unless we force always_lexn, <= 1 occurrences can be handled
+    // with prescan.
+    if (meta.num_occurrences <= 1)
+        return {};
+
+    if constexpr (sem == field_semantics::repeated)
+    {
+        *need_lexn = true;
+    }
+    else if constexpr (sem == field_semantics::singular)
+    {
+        // lost_distinct_u64 isn't populated for LEN wire type; assume the worst.
+        if (wire == wire_type::len || meta.lost_distinct_u64)
+            *need_lexn = true;
+    }
+    // last_write_wins / proto3_zero_default: never forces lexn
+
+    return {};
+}
+
 // Common base for fields with a real (in-range) field number.
 // Enforces the protobuf field-number range and a valid wire type.
 //
@@ -67,21 +114,53 @@ template <auto K, wire_type type> struct field_base : public field_generic_base
 template <auto K, field_semantics sem> struct varint : public field_base<K, wire_type::varint>
 {
     static constexpr field_semantics semantics() { return sem; }
+
+    template <bool has_handler>
+    [[gnu::always_inline]] static constexpr std::optional<uint32_t>
+    classify_field_before_lexn(const ppb_field_meta &meta, bool *need_lexn)
+    {
+        return classify_field_before_lexn_impl<uint32_t(varint::tag()), varint::wire(), varint::semantics(),
+            has_handler>(meta, need_lexn);
+    }
 };
 
 template <auto K, field_semantics sem> struct i64 : public field_base<K, wire_type::i64>
 {
     static constexpr field_semantics semantics() { return sem; }
+
+    template <bool has_handler>
+    [[gnu::always_inline]] static constexpr std::optional<uint32_t>
+    classify_field_before_lexn(const ppb_field_meta &meta, bool *need_lexn)
+    {
+        return classify_field_before_lexn_impl<uint32_t(i64::tag()), i64::wire(), i64::semantics(),
+            has_handler>(meta, need_lexn);
+    }
 };
 
 template <auto K, field_semantics sem> struct len : public field_base<K, wire_type::len>
 {
     static constexpr field_semantics semantics() { return sem; }
+
+    template <bool has_handler>
+    [[gnu::always_inline]] static constexpr std::optional<uint32_t>
+    classify_field_before_lexn(const ppb_field_meta &meta, bool *need_lexn)
+    {
+        return classify_field_before_lexn_impl<uint32_t(len::tag()), len::wire(), len::semantics(),
+            has_handler>(meta, need_lexn);
+    }
 };
 
 template <auto K, field_semantics sem> struct i32 : public field_base<K, wire_type::i32>
 {
     static constexpr field_semantics semantics() { return sem; }
+
+    template <bool has_handler>
+    [[gnu::always_inline]] static constexpr std::optional<uint32_t>
+    classify_field_before_lexn(const ppb_field_meta &meta, bool *need_lexn)
+    {
+        return classify_field_before_lexn_impl<uint32_t(i32::tag()), i32::wire(), i32::semantics(),
+            has_handler>(meta, need_lexn);
+    }
 };
 
 // Catch-all descriptor for the C lexer's `PPB_TAG(-1, wire)` entry:
@@ -111,6 +190,17 @@ template <wire_type type, field_semantics sem> struct unknown : public field_gen
     static constexpr field_semantics semantics() { return sem; }
     static constexpr bool is_unknown() { return true; }
 
+    template <bool has_handler>
+    [[gnu::always_inline]] static constexpr std::optional<uint32_t>
+    classify_field_before_lexn(const ppb_field_meta &meta, bool *need_lexn)
+    {
+        // truncating tag is fine: it's only used for
+        // field_semantics::error, and we don't do that here.
+        return classify_field_before_lexn_impl<uint32_t(unknown::tag()), unknown::wire(),
+            unknown::semantics(), has_handler>(meta, need_lexn);
+    }
+
+    // We also have a quick prescan-only report for just one arbitrary unknown field.
     [[gnu::always_inline]] static constexpr void maybe_flag_unknown_field(const ppb_field &field,
         std::span<const std::byte> input, uint64_t *unknown_field)
     {
