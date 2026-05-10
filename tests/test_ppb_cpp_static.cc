@@ -1,4 +1,5 @@
 #include <ppb/ppb.hpp>
+#include <vector>
 
 /*
  * Positive static tests: these must all compile.
@@ -511,6 +512,47 @@ static_assert(ppb::detail::handler_matches_some_field<HU_varint, ppb::varint<1>,
 static_assert(!ppb::detail::handler_matches_some_field<HU_varint, ppb::unknown<ppb::wire_type::i64>>());
 
 }  // namespace test_handler_matches_some_field
+
+// `ppb::store`, `ppb::push_back`, `ppb::emplace_back` produce the same
+// value_handler shape as `ppb::on` and compose with existing dispatch.
+namespace test_handler_factories
+{
+
+static int dest = 0;
+static std::vector<int> vec;
+
+using H_store = decltype(ppb::store<1>(&dest));
+using H_push = decltype(ppb::push_back<1>(&vec));
+using H_emplace = decltype(ppb::emplace_back<1>(&vec));
+
+// All three are value_handlers, not unknown_handlers.
+static_assert(!H_store::is_unknown_handler());
+static_assert(!H_push::is_unknown_handler());
+static_assert(!H_emplace::is_unknown_handler());
+
+// Default wire = any; key = 1.
+static_assert(H_store::key() == 1);
+static_assert(H_store::wire() == ppb::wire_type::any);
+
+// find_value_handler resolves them by (Key, wire, argument type).
+constexpr auto s = ppb::detail::find_value_handler<1, ppb::wire_type::any, int, H_store>();
+static_assert(s.has_value() && *s == 0);
+
+constexpr auto p = ppb::detail::find_value_handler<1, ppb::wire_type::any, int, H_push>();
+static_assert(p.has_value() && *p == 0);
+
+constexpr auto e = ppb::detail::find_value_handler<1, ppb::wire_type::any, int, H_emplace>();
+static_assert(e.has_value() && *e == 0);
+
+// handler_matches_some_field: store matches int32 for key 1.
+static_assert(ppb::detail::handler_matches_some_field<H_store, ppb::int32<1>>());
+static_assert(ppb::detail::handler_matches_some_field<H_push, ppb::unpacked_int32<1>>());
+static_assert(ppb::detail::handler_matches_some_field<H_emplace, ppb::unpacked_int32<1>>());
+
+// Key mismatch: store<1> does not match key 2 fields.
+static_assert(!ppb::detail::handler_matches_some_field<H_store, ppb::int32<2>>());
+
+}  // namespace test_handler_factories
 
 int
 main()

@@ -521,6 +521,44 @@ on(Fn &&handler)
     return detail::value_handler<Key, wire, std::decay_t<Fn>> { {}, std::forward<Fn>(handler) };
 }
 
+// Handler shortcuts for common destination patterns.
+// The destination must outlive the parse() / lexn() / dispatch() call.
+template <auto Key, wire_type wire = wire_type::any, typename T>
+[[nodiscard]] constexpr auto
+store(T *dst)
+{
+    return on<Key, wire>(
+        [dst](auto v) -> ppb_error
+        {
+            (*dst) = std::move(v);
+            return PPB_OK;
+        });
+}
+
+template <auto Key, wire_type wire = wire_type::any, typename C>
+[[nodiscard]] constexpr auto
+push_back(C *container)
+{
+    return on<Key, wire>(
+        [container](auto v) -> ppb_error
+        {
+            container->push_back(std::move(v));
+            return PPB_OK;
+        });
+}
+
+template <auto Key, wire_type wire = wire_type::any, typename C>
+[[nodiscard]] constexpr auto
+emplace_back(C *container)
+{
+    return on<Key, wire>(
+        [container](auto v) -> ppb_error
+        {
+            container->emplace_back(std::move(v));
+            return PPB_OK;
+        });
+}
+
 // Wraps `handler` as a catch-all (unknown-tag) handler.  Fires once
 // per occurrence for any tag that matches a `ppb::unknown<wire>`
 // entry in the schema (i.e., any tag the schema doesn't otherwise

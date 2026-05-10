@@ -50,9 +50,9 @@ ppb_error parse_message(std::span<const std::byte> bytes)
     ppb::reader<Schema> r(bytes);
 
     return r.parse(
-        ppb::on<MyMessage::count>  ([&](int32_t v)                   { count   = v; return PPB_OK; }),
-        ppb::on<MyMessage::name>   ([&](std::string_view v)          { name    = v; return PPB_OK; }),
-        ppb::on<MyMessage::payload>([&](std::span<const std::byte> v){ payload = v; return PPB_OK; }));
+        ppb::store<MyMessage::count>(&count),
+        ppb::store<MyMessage::name>(&name),
+        ppb::store<MyMessage::payload>(&payload));
 }
 ```
 
