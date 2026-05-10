@@ -2806,6 +2806,33 @@ test_on_unknown_handler_error_propagates()
     CHECK(r.error() == PPB_ERROR_TRUNCATED_DATA);
 }
 
+// proto3_uint32 alias: absent field dispatches with zero, matching the
+// explicit proto3_zero_default spelling.
+static void
+test_proto3_uint32_parse_absent_dispatches_zero()
+{
+    using S = ppb::schema<ppb::proto3_uint32<1>>;
+    static const uint8_t wire[] = {
+        0x10, 0x01, /* field 2 varint 1 (not field 1) */
+    };
+    ppb::reader<S> r(wire, sizeof(wire));
+
+    int calls = 0;
+    uint32_t seen = 99;
+
+    CHECK(r.parse([](const ppb::reader<S> &) -> ppb_error { return PPB_OK; }, {},
+              ppb::on<1>(
+                  [&](uint32_t v) -> ppb_error
+                  {
+                      calls++;
+                      seen = v;
+                      return PPB_OK;
+                  })) == PPB_OK);
+    CHECK(calls == 1);
+    CHECK(seen == 0);
+    CHECK(r.empty());
+}
+
 int
 main()
 {
@@ -2861,6 +2888,7 @@ main()
     test_reader_parse_semantics_proto3_zero_default_multi();
     test_reader_parse_semantics_proto3_zero_default_len_absent();
     test_reader_parse_semantics_proto3_zero_default_in_lexn_path();
+    test_proto3_uint32_parse_absent_dispatches_zero();
     test_reader_prescan_semantics_proto3_zero_default_absent();
     test_reader_prescan_semantics_proto3_zero_default_present();
     test_reader_prescan_semantics_lww_absent();

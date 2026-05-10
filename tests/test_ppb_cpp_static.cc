@@ -47,6 +47,45 @@ static_assert(sizeof(ppb::schema<ppb::int32<1, ppb::field_semantics::proto3_zero
 static_assert(sizeof(ppb::schema<ppb::int32<1, ppb::field_semantics::proto3_zero_default>,
                   ppb::varint<2, ppb::field_semantics::repeated>>) > 0);
 
+// proto3_* aliases are exactly the corresponding scalar with proto3_zero_default semantics.
+namespace test_proto3_aliases
+{
+using enum ppb::field_semantics;
+
+// Varint-backed
+static_assert(std::is_same_v<ppb::proto3_int32<1>, ppb::int32<1, proto3_zero_default>>);
+static_assert(std::is_same_v<ppb::proto3_int64<2>, ppb::int64<2, proto3_zero_default>>);
+static_assert(std::is_same_v<ppb::proto3_sint32<3>, ppb::sint32<3, proto3_zero_default>>);
+static_assert(std::is_same_v<ppb::proto3_sint64<4>, ppb::sint64<4, proto3_zero_default>>);
+static_assert(std::is_same_v<ppb::proto3_uint32<5>, ppb::uint32<5, proto3_zero_default>>);
+static_assert(std::is_same_v<ppb::proto3_uint64<6>, ppb::uint64<6, proto3_zero_default>>);
+static_assert(std::is_same_v<ppb::proto3_boolean<7>, ppb::boolean<7, proto3_zero_default>>);
+
+// Varint + enum
+enum class test_enum : int
+{
+    a = 0,
+    b = 1
+};
+static_assert(
+    std::is_same_v<ppb::proto3_enumerated<8, test_enum>, ppb::enumerated<8, test_enum, proto3_zero_default>>);
+
+// I32-backed
+static_assert(std::is_same_v<ppb::proto3_fixed32<9>, ppb::fixed32<9, proto3_zero_default>>);
+static_assert(std::is_same_v<ppb::proto3_sfixed32<10>, ppb::sfixed32<10, proto3_zero_default>>);
+static_assert(std::is_same_v<ppb::proto3_f32<11>, ppb::f32<11, proto3_zero_default>>);
+
+// I64-backed
+static_assert(std::is_same_v<ppb::proto3_fixed64<12>, ppb::fixed64<12, proto3_zero_default>>);
+static_assert(std::is_same_v<ppb::proto3_sfixed64<13>, ppb::sfixed64<13, proto3_zero_default>>);
+static_assert(std::is_same_v<ppb::proto3_f64<14>, ppb::f64<14, proto3_zero_default>>);
+
+// LEN-backed
+static_assert(std::is_same_v<ppb::proto3_utf8string<15>, ppb::utf8string<15, proto3_zero_default>>);
+static_assert(std::is_same_v<ppb::proto3_bytes<16>, ppb::bytes<16, std::byte, proto3_zero_default>>);
+static_assert(std::is_same_v<ppb::proto3_bytes<17, char>, ppb::bytes<17, char, proto3_zero_default>>);
+}  // namespace test_proto3_aliases
+
 // Schema public API: num_fields()
 static_assert(ppb::schema<ppb::varint<1>>::num_fields() == 1);
 static_assert(ppb::schema<ppb::varint<1>, ppb::i64<2>>::num_fields() == 2);
