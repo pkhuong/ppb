@@ -111,14 +111,14 @@ static_assert(sizeof(ppb::schema<ppb::i32<K::f1>, ppb::varint<K::f1>>) > 0);
 
 // meta() with a key absent from the schema
 
-/* expect-error: Key not found in schema */
+/* expect-error: Key/wire combination not found in schema */
 #ifdef PPB_FAIL_META_KEY_NOT_FOUND
 constexpr ppb_field_meta bad = ppb::reader<ppb::schema<ppb::varint<K::f1>>> {}.meta<K::f2>();
 #endif
 
 // meta() with a key present in the schema, but a wire type not associated with it
 
-/* expect-error: Key not found in schema */
+/* expect-error: Key/wire combination not found in schema */
 #ifdef PPB_FAIL_META_WIRE_TYPE_NOT_FOUND
 constexpr ppb_field_meta bad =
     ppb::reader<ppb::schema<ppb::varint<K::f1>>> {}.meta<K::f1, ppb::wire_type::len>();
