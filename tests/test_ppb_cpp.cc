@@ -647,6 +647,156 @@ test_reader_lexn_decode_error_skips_handlers()
     CHECK(r.error() == PPB_ERROR_TRUNCATED_DATA);
 }
 
+// lex_all: drains the entire input with repeated lexn batches.
+
+static void
+test_lex_all_multi_batch()
+{
+    int field1_calls = 0;
+    int field2_calls = 0;
+
+    ppb::reader<LexnSchema> r(lexn_two_batches_wire, sizeof(lexn_two_batches_wire));
+
+    CHECK(r.lex_all(ppb::limit {},
+              ppb::on<1>(
+                  [&](const ppb_field &) -> ppb_error
+                  {
+                      field1_calls++;
+                      return PPB_OK;
+                  }),
+              ppb::on<2>(
+                  [&](const ppb_field &) -> ppb_error
+                  {
+                      field2_calls++;
+                      return PPB_OK;
+                  })) == PPB_OK);
+    CHECK(field1_calls == 2);
+    CHECK(field2_calls == 2);
+    CHECK(r.empty());
+    CHECK(r.error() == PPB_OK);
+}
+
+static void
+test_lex_all_empty_input()
+{
+    ppb::reader<LexnSchema> r(nullptr, 0);
+
+    int called = 0;
+    CHECK(r.lex_all(ppb::limit {},
+              ppb::on<1>(
+                  [&](const ppb_field &) -> ppb_error
+                  {
+                      called++;
+                      return PPB_OK;
+                  })) == PPB_OK);
+    CHECK(called == 0);
+    CHECK(r.error() == PPB_OK);
+}
+
+static void
+test_lex_all_handler_error()
+{
+    int field1_calls = 0;
+    int field2_calls = 0;
+
+    ppb::reader<LexnSchema> r(lexn_two_batches_wire, sizeof(lexn_two_batches_wire));
+
+    CHECK(r.lex_all(ppb::limit {},
+              ppb::on<1>(
+                  [&](const ppb_field &) -> ppb_error
+                  {
+                      field1_calls++;
+                      return PPB_ERROR_CORRUPT_TAG;
+                  }),
+              ppb::on<2>(
+                  [&](const ppb_field &) -> ppb_error
+                  {
+                      field2_calls++;
+                      return PPB_ERROR_TRUNCATED_DATA;
+                  })) == PPB_ERROR_CORRUPT_TAG);
+    // Both handlers in the first batch must still fire.
+    CHECK(field1_calls == 1);
+    CHECK(field2_calls == 1);
+    // Input span points past the batch whose handler errored.
+    CHECK(r.input().data() == reinterpret_cast<const std::byte *>(lexn_two_batches_wire) + 6);
+    CHECK(r.input().size() == 6);
+    CHECK(r.error() == PPB_ERROR_CORRUPT_TAG);
+}
+
+// lexn decode error in lex_all bails before invoking any handlers.
+static void
+test_lex_all_decode_error()
+{
+    static const uint8_t truncated[] = { 0x08 };
+
+    ppb::reader<OneFieldSchema> r(truncated, sizeof(truncated));
+
+    int handler_calls = 0;
+    CHECK(r.lex_all(ppb::limit {},
+              ppb::on<1>(
+                  [&](const ppb_field &) -> ppb_error
+                  {
+                      handler_calls++;
+                      return PPB_OK;
+                  })) == PPB_ERROR_TRUNCATED_DATA);
+    CHECK(handler_calls == 0);
+    CHECK(r.error() == PPB_ERROR_TRUNCATED_DATA);
+}
+
+// lex_all applies its `limit` per batch, not cumulatively: with
+// max_fields(1), each internal lexn dispatches at most one field
+// while lex_all keeps iterating until the input drains.
+static void
+test_lex_all_per_batch_limit()
+{
+    int field1_calls = 0;
+    int field2_calls = 0;
+
+    ppb::reader<LexnSchema> r(lexn_two_batches_wire, sizeof(lexn_two_batches_wire));
+
+    CHECK(r.lex_all(ppb::limit::max_fields(1),
+              ppb::on<1>(
+                  [&](const ppb_field &) -> ppb_error
+                  {
+                      field1_calls++;
+                      return PPB_OK;
+                  }),
+              ppb::on<2>(
+                  [&](const ppb_field &) -> ppb_error
+                  {
+                      field2_calls++;
+                      return PPB_OK;
+                  })) == PPB_OK);
+
+    // All four fields dispatched; a cumulative limit would stop after one.
+    CHECK(field1_calls == 2);
+    CHECK(field2_calls == 2);
+    CHECK(r.empty());
+    CHECK(r.error() == PPB_OK);
+}
+
+// lex_all on an already-errored reader short-circuits.
+static void
+test_lex_all_sticky_error()
+{
+    ppb::reader<LexnSchema> r(lexn_two_batches_wire, sizeof(lexn_two_batches_wire));
+
+    // First, trigger an error via a handler.
+    (void)r.lexn({}, ppb::on<1>([&](const ppb_field &) -> ppb_error { return PPB_ERROR_CORRUPT_TAG; }));
+    CHECK(r.error() == PPB_ERROR_CORRUPT_TAG);
+
+    // lex_all should short-circuit.
+    int called = 0;
+    CHECK(r.lex_all(ppb::limit {},
+              ppb::on<1>(
+                  [&](const ppb_field &) -> ppb_error
+                  {
+                      called++;
+                      return PPB_OK;
+                  })) == PPB_ERROR_CORRUPT_TAG);
+    CHECK(called == 0);
+}
+
 // parse(): prescan -> init(const reader&) -> lex+dispatch in batches.
 //
 // Reuses LexnSchema / lexn_two_batches_wire (two `{varint<1>, len<2>}`
@@ -2983,6 +3133,13 @@ main()
     test_reader_lexn_decode_dispatch_consume();
     test_reader_lexn_handler_error_runs_full_batch();
     test_reader_lexn_decode_error_skips_handlers();
+
+    test_lex_all_multi_batch();
+    test_lex_all_empty_input();
+    test_lex_all_handler_error();
+    test_lex_all_decode_error();
+    test_lex_all_sticky_error();
+    test_lex_all_per_batch_limit();
 
     test_reader_parse_happy_path();
     test_reader_parse_init_error_does_not_consume();

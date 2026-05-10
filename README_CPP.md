@@ -254,6 +254,10 @@ bytes consumed by prescan or lexn).
 - `lexn(limit, handlers...)`: runs one `ppb_lexn` batch and dispatches
   handlers for that batch.  Advances the input span.  Call in a loop
   until the input is empty or an error is set.
+- `lex_all(limit, handlers...)`: drains the entire input with repeated
+  `lexn` batches.  `limit` applies *per batch*, not cumulatively.
+  Handler dispatch and the sticky-error contract are identical to
+  `lexn()`.
 - `dispatch(handlers...)`: re-dispatches handlers against the current
   field state without re-reading from the wire.  Mostly useful for
   tests.
@@ -353,6 +357,9 @@ for (;;) {
     r = ppb::reader<Schema>(next_message);  // or r.reset_fields() if reusing the span
 }
 ```
+
+For sub-message streams where a prescan pass isn't needed, `lex_all()`
+replaces the manual `while`-`lexn` loop (see lower-level entry points).
 
 Limits
 ------
