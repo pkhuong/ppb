@@ -1,39 +1,31 @@
-// Private implementation details for the PPB C++ wrapper
+// Private implementation details for the PPB C++ wrapper.
 //
-// This header is included exactly once by <ppb/ppb.hpp>, at the point
-// where the public forward declarations are visible but the
-// `ppb::schema`/`ppb::reader` definitions are not yet introduced.  Do
-// not include it directly; nothing in here is a stable API.
-//
-// Identifiers in `ppb::detail::` are not part of the API surface and
-// may change without notice.
+// Included exactly once by <ppb/ppb.hpp>, after the public forward
+// declarations but before the `ppb::schema`/`ppb::reader` definitions.
+// Do not include directly; nothing here is a stable API.
 namespace ppb
 {
 
-// Forward declarations for `submessage_handler::invoke` (defined out of
-// line below).  `limit` and `reader` are introduced after this header
-// is included; only their names are needed for declarations here.
+// Forward declarations for `submessage_handler::invoke`, which is
+// defined out-of-line in ppb.hpp once `limit` and `reader` exist.
 struct limit;
 template <typename Schema> struct reader;
 
-// Base for every field descriptor.  Most fields inherit via
-// `field_base<K, wire_type>` (typed scalars, the four raw wire-typed
-// primitives), which adds the `(K, wire_type)` static_asserts and
-// exposes `tag()`, `wire()`, and `encoded_tag()`.  Catch-alls
-// (`ppb::unknown<wire>`) inherit from `field_generic_base` directly
-// so they can bypass the `[1, 2**29 - 1]` key-range constraint and
-// skip the schema-wide same-Key-type check.
+// Base for every field descriptor.  Typed fields inherit via
+// `field_base<K, wire_type>` (which adds the field-number range and
+// wire-type static_asserts plus `tag()`/`wire()`/`encoded_tag()`).
+// Catch-alls (`ppb::unknown<wire>`) inherit from this directly to
+// bypass the key-range check and skip the same-Key-type assertion.
 //
-// All static methods are shadowed statically as needed.
+// Defaults here are shadowed by derived classes as needed.
 struct field_generic_base
 {
     static constexpr const ppb_field &extract_value(const ppb_field &field, ppb_error *) { return field; }
     static constexpr field_semantics semantics() { return field_semantics::always_lexn; }
 
-    // Catch-all marker: shadowed by `ppb::unknown<>` to return true.
-    // The reader uses this to identify catch-all entries during the
-    // post-prescan field walk and the per-field handler dispatch,
-    // without needing a separate trait.
+    // Catch-all marker; shadowed by `ppb::unknown<>` to return true.
+    // Used by the reader to identify catch-all entries during dispatch
+    // and the post-prescan field walk, without a separate trait.
     static constexpr bool is_unknown() { return false; }
 
     [[gnu::always_inline]] static constexpr void maybe_flag_unknown_field(const ppb_field &,
@@ -42,12 +34,25 @@ struct field_generic_base
     }
 };
 
-// Core of the prescan-before-lexn decision: given a field's compile-time
-// tag, wire type, semantics, and whether a handler is registered, decide
-// whether the field forces a lexn pass and/or triggers an error.
+// Core of the prescan-before-lexn decision.  Given a field's
+// compile-time tag, wire type, semantics, and whether a handler is
+// registered, decide whether the field forces a lexn pass and/or
+// triggers a `field_semantics::error` failure.  Called by
+// `reader::parse()` via each field type's `classify_field_before_lexn`
+// thunk (which just plugs its own constants in).
 //
-// Called from `reader::parse()` via the `classify_field_before_lexn`
-// forwarding method on each field type.
+// Decision table (has_handler = true, multiple occurrences):
+//
+//   semantics            forces lexn?   notes
+//   ---------           -------------   -----
+//   error                no             returns error tag immediately
+//   always_lexn          yes            even on single occurrence
+//   repeated             yes            single occurrence stays on fast path
+//   singular             yes*           * only when LEN or lost_distinct_u64
+//   last_write_wins      no
+//   proto3_zero_default  no
+//
+// Without a handler, nothing forces lexn.
 template <uint32_t tag, wire_type wire, field_semantics sem, bool has_handler>
 [[gnu::always_inline]] static constexpr std::optional<uint32_t>
 classify_field_before_lexn_impl(const ppb_field_meta &meta, bool *need_lexn)
@@ -90,14 +95,13 @@ classify_field_before_lexn_impl(const ppb_field_meta &meta, bool *need_lexn)
 }
 
 // Common base for fields with a real (in-range) field number.
-// Enforces the protobuf field-number range and a valid wire type.
-//
-// Field-tag constraints (enforced by static_assert):
+// Static_asserts:
 //   - K convertible to uint64_t
-//   - 1 <= K <= 2^29 - 1 (the protobuf-spec field-number range)
+//   - 1 <= K <= 2**29 - 1 (the protobuf field-number range)
+//   - `type` is one of `varint`, `i64`, `len`, `i32`
 //
-// Catch-all entries (`ppb::unknown<wire>`) sidestep this base and
-// derive from `field_generic_base` directly.
+// Catch-all entries (`ppb::unknown<wire>`) bypass these checks by
+// deriving from `field_generic_base` directly.
 template <auto K, wire_type type> struct field_base : public field_generic_base
 {
     static_assert(static_cast<uint64_t>(K) - 1 < (uint64_t(1) << 29) - 1,
@@ -169,16 +173,16 @@ template <auto K, field_semantics sem> struct i32 : public field_base<K, wire_ty
     }
 };
 
-// Catch-all descriptor for the C lexer's `PPB_TAG(-1, wire)` entry:
-// matches any tag with the given wire type that doesn't already have
-// a dedicated descriptor in the schema.  Derives directly from
-// `field_generic_base` so it bypasses `field_base`'s `[1, 2**29 - 1]`
-// key-range check, and intentionally exposes no `Key` typedef so the
-// schema-wide same-Key-type assertion ignores it.
+// Catch-all descriptor mapped onto the C lexer's `PPB_TAG(-1, wire)`
+// entry: matches any tag of the given wire type that the schema
+// doesn't otherwise list.  Derives from `field_generic_base` directly
+// to bypass the `[1, 2**29 - 1]` key-range check, and intentionally
+// exposes no `Key` typedef so the schema's same-Key-type assertion
+// skips it.
 //
-// The default `field_semantics::repeated` makes it `on_unknown` handlers,
-// when registered, see every single matching unknown field.  When there
-// is no such handler, we won't lexn solely for unknown fields.
+// Defaults to `field_semantics::repeated` so any registered
+// `on_unknown` handler sees every matching occurrence.  Without such
+// a handler, we don't force a lexn pass solely for unknown fields.
 template <wire_type type, field_semantics sem> struct unknown : public field_generic_base
 {
     static_assert(type == wire_type::varint || type == wire_type::i64 || type == wire_type::len ||
@@ -200,13 +204,18 @@ template <wire_type type, field_semantics sem> struct unknown : public field_gen
     [[gnu::always_inline]] static constexpr std::optional<uint32_t>
     classify_field_before_lexn(const ppb_field_meta &meta, bool *need_lexn)
     {
-        // truncating tag is fine: it's only used for
-        // field_semantics::error, and we don't do that here.
+        // Truncating the sentinel tag is mostly fine: it's used for
+        // `field_semantics::error`, which catch-alls may use, but
+        // it's pretty rare to have 2**29 - 1 as a valid field number.
         return classify_field_before_lexn_impl<uint32_t(unknown::tag()), unknown::wire(),
             unknown::semantics(), has_handler>(meta, need_lexn);
     }
 
-    // We also have a quick prescan-only report for just one arbitrary unknown field.
+    // Cheap prescan-only report: re-decode the original tag varint
+    // at `field.v.ptr` to populate `reader::unknown_field()` with the
+    // first unknown tag seen.  The C lexer rewrites the per-field
+    // state's tag to a wire-only sentinel, so this re-decode is the
+    // only way to recover the field number.
     [[gnu::always_inline]] static constexpr void maybe_flag_unknown_field(const ppb_field &field,
         std::span<const std::byte> input, uint64_t *unknown_field)
     {
@@ -225,7 +234,8 @@ template <wire_type type, field_semantics sem> struct unknown : public field_gen
     }
 };
 
-// Nicer scalar types (wrappers around the 4 wire types above)
+// Typed scalar wrappers: each decodes its wire-typed base into a
+// native C++ value via `extract_value`.
 template <auto K, field_semantics sem> struct int32 : public varint<K, sem>
 {
     static constexpr int32_t extract_value(const ppb_field &f, ppb_error *)
@@ -279,10 +289,9 @@ struct enumerated : public varint<K, sem>
 {
     static_assert(std::is_enum_v<Enum>, "enumerated field type requires an enum type parameter");
 
-    // Cast through the underlying type before reaching `Enum`.  This
-    // is well-defined for any 64-bit input regardless of `Enum`'s
-    // value range; out-of-range values reach the handler as the
-    // corresponding bit pattern in `Enum`'s underlying type.
+    // Cast through `UnderlyingType` first so the final cast to `Enum`
+    // is well-defined for any 64-bit input.  Out-of-range values
+    // reach the handler as the corresponding bit pattern.
     static constexpr Enum extract_value(const ppb_field &f, ppb_error *)
     {
         return static_cast<Enum>(static_cast<UnderlyingType>(f.v.u64));
@@ -334,6 +343,9 @@ template <auto K, field_semantics sem> struct f64 : public i64<K, sem>
     }
 };
 
+// LEN field exposed as a `std::string_view` over the payload bytes.
+// The wrapper does *not* validate UTF-8; callers who care must check
+// themselves.
 template <auto K, field_semantics sem> struct utf8string : public len<K, sem>
 {
     static constexpr std::string_view extract_value(const ppb_field &f, ppb_error *)
@@ -346,9 +358,10 @@ template <auto K, typename Element, field_semantics sem> struct bytes : public l
 {
     static_assert(alignof(Element) == 1, "bytes element type must be byte-aligned");
 
-    // Reinterpret the LEN payload as a span of `Element`; this is
-    // only safe for unaligned `Element`, and only works when the
-    // payload buffer size is a multiple of the element size.
+    // Reinterpret the LEN payload as a span of `Element`.  Safe only
+    // when `alignof(Element) == 1` (enforced above) and the payload
+    // length is a multiple of `sizeof(Element)`; otherwise we set
+    // `PPB_ERROR_TRUNCATED_DATA` and hand back an empty span.
     static constexpr std::span<const Element> extract_value(const ppb_field &f, ppb_error *error)
     {
         if (f.v.payload.size % sizeof(Element) != 0) [[unlikely]]
@@ -364,11 +377,12 @@ template <auto K, typename Element, field_semantics sem> struct bytes : public l
     }
 };
 
-// Sub-message field: a `bytes`-shaped field that additionally remembers
-// the schema describing its payload.  On the wire it is identical to a
-// plain `bytes` field; the only added information is the
-// `inner_schema` typedef, which `ppb::on_submessage<K, S>` checks
-// against its `S` argument at compile time.
+// Sub-message field: a `bytes`-shaped field that additionally
+// carries its payload's schema as `inner_schema`.  Identical to
+// `bytes` on the wire; `ppb::on_submessage<K, S>` cross-checks `S`
+// against `inner_schema` at compile time.  `on_submessage<K, S>`
+// also binds to plain `bytes<K>` / `utf8string<K>` / `len<K>`
+// fields, but without the static schema check.
 template <auto K, typename InnerSchema, field_semantics sem> struct message : public bytes<K, std::byte, sem>
 {
     static_assert(sem != field_semantics::proto3_zero_default,
@@ -419,16 +433,14 @@ le_packed<T>::value() const
 namespace detail
 {
 
-// True when field type `F` is a `ppb::message<...>` (i.e. a sub-message
-// field that knows its inner schema).
+// True when `F` is a `ppb::message<...>` (sub-message field that
+// carries its inner schema).
 template <typename F> inline constexpr bool is_message_field_v = requires { typename F::inner_schema; };
 
-// Resolves the schema's `Key` type by walking the field pack and
-// returning the first field's `Key` typedef.  Catch-all entries
-// (`ppb::unknown<wire>`) have no `Key`, so they're skipped: a schema
-// with catch-alls only resolves to the empty-pack fallback (`int`),
-// which is harmless because catch-all-only schemas never need to
-// match a typed dispatch Key.
+// Picks the schema's `Key` as the first field's `Key` typedef.
+// Catch-alls (`ppb::unknown<wire>`) have none and are skipped; a
+// catch-all-only schema falls back to `int`, which is harmless since
+// such schemas never dispatch on a typed Key.
 template <typename...> struct key_of
 {
     using type = int;
@@ -453,9 +465,7 @@ template <typename F, typename Key>
 consteval bool
 field_key_matches()
 {
-    // Catch-all entries (e.g. `ppb::unknown<wire>`) intentionally
-    // expose no `Key` typedef so we can treat them as matching any
-    // Key type.
+    // Catch-alls expose no `Key`; treat them as matching everything.
     if constexpr (requires { typename F::Key; })
         return std::is_same_v<typename F::Key, Key>;
     else
@@ -499,7 +509,9 @@ template <typename... Fs> struct schema_impl
         size_t count = 0;
     };
 
-    // returns a field_range for the tags that match `k`.
+    // Returns a field_range covering all schema entries that match
+    // `k`.  When `wire` is not `wire_type::any`, only entries with
+    // that concrete wire type are counted.
     static consteval field_range find_field_range(Key k, wire_type wire)
     {
         uint64_t wanted = PPB_TAG_BITS(static_cast<uint64_t>(k), 0) / 8;  // drop wire type
@@ -533,10 +545,10 @@ template <typename... Fs> struct schema_impl
     }
 };
 
-// Folds `upd` into `acc`.  Used by `reader::meta<key>()` to combine
-// per-wire-type metadata when the schema has multiple entries sharing
-// a field number.  Always sets `lost_distinct_u64` when both sides
-// have at least one occurrence: we can't tell, so better to be
+// Folds `upd` into `acc`.  Used by `reader::meta<key>()` to merge
+// metadata across wire types when one field number is listed under
+// several.  When both sides have occurrences we set
+// `lost_distinct_u64`: we can't compare across wire types, so be
 // conservative.
 constexpr void
 merge_meta(ppb_field_meta &acc, ppb_field_meta upd) noexcept
@@ -553,6 +565,7 @@ merge_meta(ppb_field_meta &acc, ppb_field_meta upd) noexcept
     acc.num_occurrences += upd.num_occurrences;
     acc.lost_distinct_u64 = true;
     acc.total_bytes += upd.total_bytes;
+    // (x - 1) maps 0 to SIZE_MAX so a 0 never replaces a real value.
     acc.min_nonzero_bytes = (acc.min_nonzero_bytes - 1 > upd.min_nonzero_bytes - 1) ? upd.min_nonzero_bytes :
                                                                                       acc.min_nonzero_bytes;
     acc.max_bytes = (acc.max_bytes < upd.max_bytes) ? upd.max_bytes : acc.max_bytes;
@@ -562,14 +575,13 @@ merge_meta(ppb_field_meta &acc, ppb_field_meta upd) noexcept
 //
 // The body is split into 16-wide blocks; within each block a switch
 // on the local offset jumps into a fall-through chain that invokes
-// `handler(integral_constant<size_t, I>{})` for each I in the block
-// from the entry point onward.  The handler returns `bool`:
-//   - `true`  to continue with the next index;
-//   - `false` to stop early.  The outer `dispatch` then returns
-//             `false` and skips later blocks.
+// `handler(integral_constant<size_t, I>{})` for each I from the entry
+// point onward.  The handler returns `bool`: `true` to continue,
+// `false` to stop early (the outer `dispatch` then skips later
+// blocks).
 //
-// `beging` and `end` are runtime bounds, so the same instantiation
-// handles arbitrary half-open subranges of [0, limit).
+// `begin` and `end` are runtime bounds, so a single instantiation
+// covers every half-open subrange of [0, limit).
 template <typename Fn>
 [[gnu::always_inline]] constexpr bool
 dispatch_16(size_t begin, Fn &&handler)
@@ -647,9 +659,9 @@ dispatch(size_t begin, size_t end, Fn &&handler)
             }
             else
             {
-                // we have a guard at the top: if the block isn't
-                // runnable, we skip early.  After that, the previous
-                // entry would exit early before getting here.
+                // Unreachable: the preceding I (where
+                // `base + I + 1 == limit`) returns false, stopping
+                // `dispatch_16`'s fall-through chain before we get here.
                 __builtin_unreachable();  // LCOV_EXCL_LINE
             }
         };
@@ -665,27 +677,15 @@ dispatch(size_t begin, size_t end, Fn &&handler)
     return ok;
 }
 
-// `value_handler<Key, W, Fn>` pairs a callable with the (Key, wire)
-// pattern it matches.  Built by `ppb::on<Key, wire>(callable)`.
-//
-// `find_value_handler<Key, W, Arg, Hs...>()` selects the handler in
-// `Hs...` that matches `(Key, W)` and is invocable with `Arg`:
-//   - returns `nullopt` when no handler matches (Key, W) -- silently
-//     dropping unhandled fields is fine;
-//   - returns the index when exactly one handler matches;
-//   - when multiple handlers match (Key, W), disambiguates by
-//     `is_invocable_v<handler, Arg>` and requires exactly one
-//     survivor.  Zero or many survivors are static_assert errors.
-//
-// All handlers in the pack must share the dispatch `Key`'s C++ type;
-// mixing (e.g.) a plain `int` literal with an `enum class`-keyed
-// schema is a static_assert error.
-// Empty tag base shared by value_handler and unknown_handler.
-// Used by detail::is_handler_v to identify handler types at compile time.
+// Empty tag base shared by `value_handler`, `unknown_handler`, and
+// `submessage_handler`.  `detail::is_handler_v` checks for it.
 struct handler_base
 {
 };
 
+// `value_handler<Key, W, Fn>` pairs a callable with the (Key, wire)
+// pattern it matches.  Built by `ppb::on<Key, wire>(callable)`; the
+// matching/dispatch logic lives in `find_value_handler` below.
 template <auto K, wire_type W, typename Fn> struct value_handler : handler_base
 {
     using key_type = decltype(K);
@@ -696,7 +696,7 @@ template <auto K, wire_type W, typename Fn> struct value_handler : handler_base
     static constexpr bool is_unknown_handler() { return false; }
     static constexpr bool is_submessage_handler() { return false; }
 
-    // Does this value handler match the key.
+    // True when this handler's (Key, wire) matches the field's.
     static constexpr bool matches(key_type other_key, wire_type other_w)
     {
         if (K != other_key)
@@ -709,14 +709,10 @@ template <auto K, wire_type W, typename Fn> struct value_handler : handler_base
 };
 
 // Sibling of `value_handler` for catch-all dispatch via
-// `ppb::on_unknown<wire>(fn)`.  Carries no `key_type` (catch-alls
-// have no schema-side Key), so `find_value_handler`'s "all handlers
-// share the dispatch Key's type" check skips it.
-//
-// The handler is invoked with `const ppb_field &` (the raw match
-// from the C lexer); `field.v.ptr` points at the original tag byte
-// in the input buffer so callers who care can recover the encoded
-// tag via `ppb_decode_varint`, just like `unknown_field()`.
+// `ppb::on_unknown<wire>(fn)`.  Carries no `key_type` so the
+// same-Key-type check in `find_value_handler` skips it.  The handler
+// receives the raw `const ppb_field &` from the C lexer; callers can
+// recover the encoded tag at `field.v.ptr` via `ppb_decode_varint`.
 template <wire_type W, typename Fn> struct unknown_handler : handler_base
 {
     using handler_type = Fn;
@@ -725,40 +721,36 @@ template <wire_type W, typename Fn> struct unknown_handler : handler_base
     static constexpr bool is_unknown_handler() { return true; }
     static constexpr bool is_submessage_handler() { return false; }
 
-    // Wire-only match for catch-all dispatch.  `wire_type::any` here
-    // means "every catch-all wire", mirroring the value_handler
-    // semantics for typed handlers.
+    // Wire-only match.  `wire_type::any` matches every catch-all
+    // wire, mirroring `value_handler::matches`.
     static constexpr bool matches_wire(wire_type other_w) { return (W == wire_type::any) || (W == other_w); }
 
     Fn handler;
 };
 
-// True when T (after decay) is a value_handler or unknown_handler.
+// True when T (after decay) is one of our handler types: a
+// value_handler, unknown_handler, or submessage_handler.
 template <typename T> inline constexpr bool is_handler_v = std::is_base_of_v<handler_base, std::decay_t<T>>;
 
-// Synthetic `handler_type` for `submessage_handler`.  Only exists so
-// `find_value_handler`'s `is_invocable_v<handler_type, Arg>`
-// disambiguation never rejects a submessage handler regardless of what
-// `Arg` the matching schema field would normally produce: every LEN
-// extract_value (string_view from utf8string, span<std::byte> from
-// bytes/unpacked_bytes, const ppb_field & from len) satisfies this.
-//
-// Never actually invoked: dispatch routes submessage handlers through
-// `submessage_handler::invoke(...)` instead of `handler(arg)`.
+// Synthetic `handler_type` for `submessage_handler`: invocable with
+// any `Arg`, so `find_value_handler`'s `is_invocable_v` check never
+// rejects a submessage handler regardless of which LEN-shaped field
+// it's matched to (string_view, span<std::byte>, const ppb_field &).
+// Never actually called: real dispatch goes through
+// `submessage_handler::invoke(...)`.
 struct submessage_invoker
 {
     template <typename T> ppb_error operator()(T &&) const noexcept { return PPB_OK; }
 };
 
-// Handler factory product for `ppb::on_submessage<K, InnerSchema>`.
-// Inherits from `value_handler<K, wire_type::len, submessage_invoker>`
-// so all of `find_value_handler`'s key/wire matching is reused; the
-// override of `is_submessage_handler()` flips dispatch to the
-// `invoke(payload, bounds, outer_end)` arm in `run_handler_for_idx`.
+// Product of `ppb::on_submessage<K, InnerSchema>`.  Inherits from
+// `value_handler<K, wire_type::len, submessage_invoker>` to reuse
+// `find_value_handler`'s key/wire matching; the
+// `is_submessage_handler()` override routes dispatch to `invoke()`
+// in `run_handler_for_idx` instead of the usual `handler(arg)` path.
 //
-// `Init` is `std::nullopt_t` when no init was supplied; in that case
-// `inner.parse(std::nullopt, ...)` short-circuits the init call inside
-// the inner reader.
+// `Init = std::nullopt_t` when no init was supplied; inner
+// `parse(std::nullopt, ...)` then skips the inner-init call.
 template <auto K, typename InnerSchema, typename Init, typename... Hs>
 struct submessage_handler : public value_handler<K, wire_type::len, submessage_invoker>
 {
@@ -780,17 +772,8 @@ struct submessage_handler : public value_handler<K, wire_type::len, submessage_i
         const limit &active_bounds, const std::byte *outer_end);
 };
 
-// Selects the value_handler in `Hs...` that matches the (Key, W) pair
-// and is invocable with `Arg`.
-//
-// Returns std::nullopt when no handler matches the (Key, W) pair --
-// silently dropping unhandled fields is fine.
-//
-// When exactly one handler matches by (Key, W), returns its index.
-//
-// When multiple handlers match by (Key, W), disambiguates by
-// std::is_invocable_v<handler_type, Arg> and requires that exactly
-// one survivor remain; static_asserts otherwise.
+// Does `H`'s key type match `DispatchKey`?  Always true for
+// `unknown_handler`, which has no `key_type`.
 template <typename H, typename DispatchKey>
 consteval bool
 handler_key_type_ok()
@@ -801,9 +784,8 @@ handler_key_type_ok()
         return std::is_same_v<std::decay_t<typename H::key_type>, std::decay_t<DispatchKey>>;
 }
 
-// Per-handler `(Key, wire)` match for `find_value_handler`'s key_mask,
-// tolerant of `unknown_handler`s (which never match a typed dispatch
-// key).
+// Per-handler `(Key, wire)` match.  Returns false for
+// `unknown_handler`, which never participates in typed dispatch.
 template <typename H, auto Key, wire_type W>
 consteval bool
 handler_matches_key_wire()
@@ -814,6 +796,14 @@ handler_matches_key_wire()
         return H::matches(Key, W);
 }
 
+// Picks the handler in `Hs...` that matches the `(Key, W)` pair and
+// is invocable with `Arg`.
+//   - `nullopt` when no handler matches `(Key, W)`: silently dropping
+//     unhandled fields is fine.
+//   - exactly one match -> return its index.
+//   - multiple `(Key, W)` matches -> disambiguate by
+//     `is_invocable_v<handler_type, Arg>` and require a single
+//     survivor; zero or many survivors are `static_assert` errors.
 template <auto Key, wire_type W, typename Arg, typename... Hs>
 consteval std::optional<size_t>
 find_value_handler()
@@ -871,11 +861,10 @@ find_value_handler()
     }
 }
 
-// Tuple-deducing shorthand: the parameter is only used to deduce
-// `Hs...` from a tuple expression that the caller already has.  Only
-// safe to call from a context where the tuple is itself a constant
-// expression (e.g., test files); inside a function whose tuple is a
-// runtime value, call the type-list form directly.
+// Tuple-deducing shorthand: the parameter just deduces `Hs...` from a
+// tuple the caller already has.  Only valid when the tuple is itself
+// a constant expression (e.g. in tests); inside a function with a
+// runtime tuple, call the type-list form directly.
 template <auto Key, wire_type W, typename Arg, typename... Hs>
 consteval std::optional<size_t>
 find_value_handler(const std::tuple<Hs...> &)
@@ -883,9 +872,8 @@ find_value_handler(const std::tuple<Hs...> &)
     return find_value_handler<Key, W, Arg, Hs...>();
 }
 
-// Per-handler wire-only match for `find_unknown_handler`'s wire_mask.
-// Mirrors `handler_matches_key_wire` but only fires for
-// `unknown_handler`s (which is what catch-all dispatch consumes).
+// Per-handler wire-only match for catch-all dispatch.  Returns false
+// for everything that isn't an `unknown_handler`.
 template <typename H, wire_type W>
 consteval bool
 unknown_handler_matches_wire()
@@ -896,10 +884,10 @@ unknown_handler_matches_wire()
         return false;
 }
 
-// Selects the `unknown_handler` in `Hs...` whose `wire()` matches `W`
-// (or is `wire_type::any`) and is invocable with `Arg`.  Same
-// structure as `find_value_handler`, except no match on key, only on
-// wire type.
+// `find_value_handler`'s sibling for catch-alls: picks the
+// `unknown_handler` in `Hs...` whose `wire()` matches `W` and is
+// invocable with `Arg`.  Same match/disambiguation rules, minus the
+// key check.
 template <wire_type W, typename Arg, typename... Hs>
 consteval std::optional<size_t>
 find_unknown_handler()
@@ -954,9 +942,9 @@ find_unknown_handler()
     }
 }
 
-// Checks that handler H matches at least one field in Fs...
-// Used by reader::run_handlers to catch useless on()/on_unknown()
-// handlers at compile time.
+// True when handler `H` matches at least one field in `Fs...`.
+// `reader::run_handlers` uses this to flag orphaned
+// `on()`/`on_unknown()` handlers as compile errors.
 template <typename H, typename... Fs>
 consteval bool
 handler_matches_some_field()
@@ -979,13 +967,10 @@ handler_matches_some_field()
             else if constexpr (!std::is_same_v<std::decay_t<typename H::key_type>,
                                    std::decay_t<typename F::Key>>)
             {
-                /*
-                 * The handler's Key type differs from this field's Key
-                 * type, so H::matches() wouldn't compile.  Return true
-                 * here: we want the dedicated key-type static_assert in
-                 * find_value_handler to fire with a clearer diagnostic
-                 * than "handler does not match any schema field".
-                 */
+                // Key-type mismatch would make `H::matches()` fail to
+                // compile.  Return true so the dedicated key-type
+                // assert in `find_value_handler` fires with a clearer
+                // diagnostic than "handler matches no schema field".
                 return true;
             }
             else
@@ -1017,15 +1002,13 @@ template <typename UnderlyingType> struct enum_decode
     }
 };
 
-// Lazily decoded view over a packed-varint LEN payload.
-//
-// Used for handlers that take `auto view` for `packed_int32`,
-// `packed_uint64`, etc.  The view captures `&reader::m_error`; on a
-// decode failure (`PPB_ERROR_TRUNCATED_DATA`/`_CORRUPT_VARINT`) the
-// iterator sets the reader's error first-write-wins and exhausts.
-//
-// The captured byte range lives in the original input span and the
-// error pointer points into the reader.
+// Lazily decoded view over a packed-varint LEN payload, handed to
+// handlers for `packed_int32`/`packed_uint64`/etc.  Captures
+// `&reader::m_error`: on decode failure
+// (`PPB_ERROR_TRUNCATED_DATA`/`_CORRUPT_VARINT`) the iterator folds
+// the error into the reader (first-write-wins) and exhausts.  The
+// captured byte range lives in the input span; the error pointer
+// lives in the reader.
 template <typename T, typename Policy> class packed_varint_iter
 {
 public:
@@ -1071,11 +1054,9 @@ public:
     bool operator!=(const packed_varint_iter &other) const noexcept { return m_pos != other.m_pos; }
 
 private:
-    /*
-     * Decode the varint at `m_pos` into `m_current` and set `m_next`
-     * to its end.  `m_pos` is left untouched so equality with the end
-     * iterator only triggers after `operator++` consumes the value.
-     */
+    // Decode the varint at `m_pos` into `m_current` and point `m_next`
+    // at its end.  `m_pos` is left untouched so end-iterator equality
+    // only triggers after `operator++` consumes the current value.
     void decode() noexcept
     {
         size_t remaining = size_t(m_end - m_pos);
@@ -1133,8 +1114,9 @@ inline constexpr bool is_packed_range_v<packed_varint_view<T, Policy>> = true;
 
 }  // namespace detail
 
-// Packed repeated field types: some need the packed_varint_view above.
-// (these first few can just give a span back, so that's nice)
+// Packed repeated field types.  Fixed-width variants decode into a
+// span of `le_packed<T>`; varint variants below use the lazy
+// `packed_varint_view`.
 
 template <auto K> struct packed_fixed32 : public bytes<K, le_packed<uint32_t>, field_semantics::repeated>
 {
@@ -1248,10 +1230,10 @@ struct packed_enumerated : public len<K, field_semantics::repeated>
 namespace detail
 {
 
-// `flatten_one<T>::type` is `std::tuple<T>` for a leaf type, and
-// recursively flattens any `std::tuple<...>` wrapper.  The result of
-// `flatten_t<Ts...>` is a single `std::tuple<...>` whose elements are
-// the leaves of the input list, in left-to-right order.
+// `flatten_one<T>::type` is `std::tuple<T>` for a leaf and the
+// recursive flattening of any `std::tuple<...>`.  `flatten_t<Ts...>`
+// then yields one `std::tuple<...>` of the leaves in left-to-right
+// order.
 template <typename T> struct flatten_one
 {
     using type = std::tuple<T>;
@@ -1266,16 +1248,14 @@ template <typename... Ts> using flatten_t = decltype(std::tuple_cat(typename fla
 
 template <typename Tuple> struct sort_fields;
 
-// Validates that every element of the flattened tuple is a
-// `field_generic_base` subclass, then computes the permutation that
-// sorts them lexicographically by `(uint64_t(key), wire, original index)`.
-// That ordering matches the strictly-ascending encoded-tag invariant
-// downstream `schema<>` enforces.
+// Validates every leaf as a `field_generic_base` subclass, then
+// computes the permutation that sorts them by
+// `(uint64_t(key), wire, original_index)` -- the strictly-ascending
+// encoded-tag order that `schema<>` will then re-check.
 //
-// `to<Tmpl>` rebinds the sorted field pack onto an arbitrary
-// `template <typename...> class` continuation.  The public
-// `auto_schema` alias uses this to splice the sorted pack directly
-// into `schema<...>` without exposing a `std::make_index_sequence`
+// `to<Tmpl>` rebinds the sorted pack onto an arbitrary
+// `template <typename...> class`, letting `auto_schema` splice the
+// sorted fields into `schema<...>` without exposing an index-sequence
 // parameter on its own signature.
 template <typename... Fs> struct sort_fields<std::tuple<Fs...>>
 {

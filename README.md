@@ -6,6 +6,37 @@ PPB: Pico Protobuf
        src="https://scan.coverity.com/projects/33051/badge.svg"/>
 </a>
 
+When to use PPB
+---------------
+
+**Reach for PPB when** you parse protobuf from an untrusted producer
+(adversarial bytes are a tested input), when you want to explicitly
+issue every heap allocation yourself, with enough information to
+right-size containers before any field is dispatched, when message
+shapes are stable and you're happy to declare them in code, or when
+"fast enough but predictable" beats "fastest on average."
+
+**Look elsewhere when** you also need to encode protobuf, when you
+need full protobuf features (groups, runtime descriptors, reflection,
+first-class maps), when `.proto` files are your source of truth and
+code generation fits your workflow (e.g.,
+[nanopb](https://github.com/nanopb/nanopb), Google's libprotobuf),
+when you can't get the message into a single contiguous read-only
+buffer, or when non-gcc/clang (e.g., MSVC) support matters.
+
+PPB itself never calls `malloc`; it only writes through the caller's
+`fields[]` array.  When *your* code needs to allocate output storage,
+`ppb_prescan` first aggregates per-field counts and payload-byte
+totals so you can size every container exactly once before any
+field-by-field dispatch runs.  PPB never decides when to allocate, and
+gives you the data to allocate the right amount when you do.  Your
+handlers must hold up their end: pre-`reserve()` your `std::vector`s,
+prefer `std::string_view` over `std::string`, and you'll contain the
+impact of protobuf parsing on heap state.
+
+About PPB
+---------
+
 PPB is an allocation-free non-recursive lexer for protobuf binary
 encoding (v2/v3, no groups); like [many protobuf implementations](https://github.com/protocolbuffers/protobuf/blob/a06e1d39528ef6e549153528b80365903ff12a3e/src/google/protobuf/varint_shuffle.h#L119-L122),
 it silently discards bits 1-6 of byte 10 in 10-byte varints (only bit
@@ -23,35 +54,30 @@ code, but almost all of it is consteval)
 This library is designed for applications that require predictable
 performance more than maximum average throughput, and reliability,
 even in the face of adversarially corrupt "protobuf" bytes, even at
-the expense of ease of use.  The library itself doesn't allocate
-memory (and has a maximum stack footprint < 400B on gcc 12/x86-64),
-and the "prescan" interface is designed to support right-sizing a bulk
-allocation before fully decoding a message.  While the correctness of
-the lexing is merely tested, the safety of the code (i.e., progress
-guarantees and lack of undefined behavior or out-of-bound accesses)
-is tested, fuzzed, and verified with
-[Frama-C's WP](https://www.frama-c.com/fc-plugins/wp.html) plugin.
+the expense of ease of use.  Maximum stack footprint is < 400B on
+gcc 12/x86-64.  While the correctness of the lexing is merely tested,
+the safety of the code (i.e., progress guarantees and lack of
+undefined behavior or out-of-bound accesses) is tested, fuzzed, and
+verified with [Frama-C's WP](https://www.frama-c.com/fc-plugins/wp.html)
+plugin.
 For LEN fields, WP also statically confirms that `field.v.payload` is
 a readable subrange of the input buffer.  Stronger properties
 (`field.v.ptr` and `field.v.payload` fall within the bytes consumed by
 the call, and `payload.buf` sits strictly after the tag byte) are
 checked dynamically by the fuzz harness and `picoscope`.
 
-PPB only *consumes* protobuf bytes; it does not produce them. The
-protobuf wire format is publicly specified, so the obvious choice for
-encoding (and for decoding in programs that don't have PPB's
-constraints) is Google's own protobuf libraries.  When the producer
-side also cares about allocations and copies,
+For encoding, Google's protobuf libraries are the obvious choice.
+When the producer also cares about allocations and copies,
 [ProtoZero](https://perfetto.dev/docs/design-docs/protozero) (the one
 at <https://github.com/google/perfetto/tree/main/include/perfetto/protozero>,
-not to be confused the [mapbox project of the same name](https://github.com/mapbox/protozero/))
+not to be confused with the
+[mapbox project of the same name](https://github.com/mapbox/protozero/))
 pairs well with PPB.
 
-The contents of the input buffer are untrusted and validated as
-needed; other inputs to the library must be zero-initialized on
-allocations, except for the `ppb_encoded_tag` arrays, which are
-assumed to be constructed correctly (check with `ppb_validate_tags`).
-Even invalid trusted inputs (an unsorted tag array, non-zero-initialized
+Other inputs to the library must be zero-initialized on allocations,
+except for the `ppb_encoded_tag` arrays, which are assumed to be
+constructed correctly (check with `ppb_validate_tags`).  Even invalid
+trusted inputs (an unsorted tag array, non-zero-initialized
 `fields[]`, etc.) cause *at worst* surprising results or, in builds
 with assertions enabled, assertion failures; never memory unsafety,
 undefined behavior, non-termination, or successful return without
@@ -543,7 +569,7 @@ wire types and giving up forward compatibility is acceptable.
   a decoded varint, the bits of a fixed64, or a zero-extended fixed32).
 - `u32` / `i32` / `f`: low 32-bit views (for fixed32 fields).
 - `d`: double view of the full 64 bits.
-- `b[8]`: raw bytes of `u64` in host order — *not* the wire encoding.
+- `b[8]`: raw bytes of `u64` in host order, *not* the wire encoding.
 - `payload`: `struct ppb_buf` pointing at the payload of a
   `PPB_WIRE_LEN` field.
 - `ptr`: pointer to the field's tag byte in the original buffer
@@ -628,7 +654,7 @@ encode a protoscope source file to binary) and convert to hex:
         > testdata/my-test.hex
     make regen_test   # writes testdata/my-test.expected
 
-The test suite also automatically truncates every valid message by 1–32
+The test suite also automatically truncates every valid message by 1 to 32
 bytes and checks that picoscope either errors out or produces a prefix of
 the expected output.
 
