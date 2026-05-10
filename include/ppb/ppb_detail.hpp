@@ -642,7 +642,13 @@ dispatch(size_t begin, size_t end, Fn &&handler)
 // All handlers in the pack must share the dispatch `Key`'s C++ type;
 // mixing (e.g.) a plain `int` literal with an `enum class`-keyed
 // schema is a static_assert error.
-template <auto K, wire_type W, typename Fn> struct value_handler
+// Empty tag base shared by value_handler and unknown_handler.
+// Used by detail::is_handler_v to identify handler types at compile time.
+struct handler_base
+{
+};
+
+template <auto K, wire_type W, typename Fn> struct value_handler : handler_base
 {
     using key_type = decltype(K);
     using handler_type = Fn;
@@ -672,7 +678,7 @@ template <auto K, wire_type W, typename Fn> struct value_handler
 // from the C lexer); `field.v.ptr` points at the original tag byte
 // in the input buffer so callers who care can recover the encoded
 // tag via `ppb_decode_varint`, just like `unknown_field()`.
-template <wire_type W, typename Fn> struct unknown_handler
+template <wire_type W, typename Fn> struct unknown_handler : handler_base
 {
     using handler_type = Fn;
 
@@ -686,6 +692,9 @@ template <wire_type W, typename Fn> struct unknown_handler
 
     Fn handler;
 };
+
+// True when T (after decay) is a value_handler or unknown_handler.
+template <typename T> inline constexpr bool is_handler_v = std::is_base_of_v<handler_base, std::decay_t<T>>;
 
 // Selects the value_handler in `Hs...` that matches the (Key, W) pair
 // and is invocable with `Arg`.

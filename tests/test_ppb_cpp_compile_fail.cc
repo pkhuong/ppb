@@ -318,3 +318,31 @@ constexpr auto bad = ppb::detail::find_unknown_handler<ppb::wire_type::varint, c
     decltype(ppb::on_unknown([](int) -> ppb_error { return PPB_OK; })),
     decltype(ppb::on_unknown([](const char *) -> ppb_error { return PPB_OK; }))>();
 #endif
+
+// parse() overload disambiguation: passing a non-handler after a limit
+// must fail — the trailing args must all be handler types.
+
+/* expect-error: constraint|no match.*call|call.*operator */
+#ifdef PPB_FAIL_PARSE_LIMIT_AS_SECOND_ARG_NOT_HANDLER
+static void
+trigger_parse_limit_not_handler()
+{
+    ppb::reader<SmokeSchema> r(smoke_wire, sizeof(smoke_wire));
+    r.parse(ppb::limit::hard(10), ppb::limit::soft(20)); // second arg is limit, not a handler
+}
+#endif
+
+// parse(limit{}) with no handlers: limit is convertible to itself,
+// so Overload A (parse(Init&&, limit, Hs&&...)) is rejected by the
+// !convertible_to<Init, limit> constraint, and no other overload
+// matches.
+
+/* expect-error: constraint|no match.*call|call.*operator */
+#ifdef PPB_FAIL_PARSE_LIMIT_AS_INIT
+static void
+trigger_parse_limit_as_init()
+{
+    ppb::reader<SmokeSchema> r(smoke_wire, sizeof(smoke_wire));
+    r.parse(ppb::limit {});
+}
+#endif
