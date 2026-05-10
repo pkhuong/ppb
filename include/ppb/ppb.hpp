@@ -242,6 +242,32 @@ template <auto K, field_semantics sem = field_semantics::last_write_wins> struct
 template <auto K, typename Element = std::byte, field_semantics sem = field_semantics::last_write_wins>
 struct bytes;
 
+// Convenience aliases that hardcode proto3_zero_default semantics.  Users musn't
+// rely on the behavior being any different than last_write_wins, but it can be a
+// little more efficient to unconditionally handle a zero-filled value.
+template <auto K> using proto3_int32 = int32<K, field_semantics::proto3_zero_default>;
+template <auto K> using proto3_int64 = int64<K, field_semantics::proto3_zero_default>;
+template <auto K> using proto3_sint32 = sint32<K, field_semantics::proto3_zero_default>;
+template <auto K> using proto3_sint64 = sint64<K, field_semantics::proto3_zero_default>;
+template <auto K> using proto3_uint32 = uint32<K, field_semantics::proto3_zero_default>;
+template <auto K> using proto3_uint64 = uint64<K, field_semantics::proto3_zero_default>;
+template <auto K> using proto3_boolean = boolean<K, field_semantics::proto3_zero_default>;
+
+template <auto K, typename Enum>
+using proto3_enumerated = enumerated<K, Enum, field_semantics::proto3_zero_default>;
+
+template <auto K> using proto3_fixed32 = fixed32<K, field_semantics::proto3_zero_default>;
+template <auto K> using proto3_sfixed32 = sfixed32<K, field_semantics::proto3_zero_default>;
+template <auto K> using proto3_f32 = f32<K, field_semantics::proto3_zero_default>;
+
+template <auto K> using proto3_fixed64 = fixed64<K, field_semantics::proto3_zero_default>;
+template <auto K> using proto3_sfixed64 = sfixed64<K, field_semantics::proto3_zero_default>;
+template <auto K> using proto3_f64 = f64<K, field_semantics::proto3_zero_default>;
+
+template <auto K> using proto3_utf8string = utf8string<K, field_semantics::proto3_zero_default>;
+template <auto K, typename Element = std::byte>
+using proto3_bytes = bytes<K, Element, field_semantics::proto3_zero_default>;
+
 // Wraps a fixed-width value stored as little-endian, unaligned bytes
 // (the protobuf wire format for fixed32/sfixed32/fixed64/sfixed64/
 // float/double).  Conversion to `T` returns the host-order value,
