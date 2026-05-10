@@ -814,6 +814,119 @@ test_reader_parse_sticky_error_short_circuits()
     CHECK(init_calls == 0);
 }
 
+// New parse() overloads: bare handlers, limit+handlers, init+handlers,
+// and limit+init+handlers.
+
+static void
+test_parse_bare_handlers()
+{
+    int field1_calls = 0;
+    int field2_calls = 0;
+
+    ppb::reader<LexnSchema> r(lexn_two_batches_wire, sizeof(lexn_two_batches_wire));
+
+    CHECK(r.parse(ppb::on<1>(
+                      [&](const ppb_field &) -> ppb_error
+                      {
+                          field1_calls++;
+                          return PPB_OK;
+                      }),
+              ppb::on<2>(
+                  [&](const ppb_field &) -> ppb_error
+                  {
+                      field2_calls++;
+                      return PPB_OK;
+                  })) == PPB_OK);
+
+    CHECK(field1_calls == 2);
+    CHECK(field2_calls == 2);
+    CHECK(r.empty());
+}
+
+static void
+test_parse_limit_and_handlers()
+{
+    int field1_calls = 0;
+
+    ppb::reader<LexnSchema> r(lexn_two_batches_wire, sizeof(lexn_two_batches_wire));
+
+    // Cap at one field: prescan will only see the first field.
+    CHECK(r.parse(ppb::limit::max_fields(1),
+              ppb::on<1>(
+                  [&](const ppb_field &) -> ppb_error
+                  {
+                      field1_calls++;
+                      return PPB_OK;
+                  })) == PPB_OK);
+
+    CHECK(field1_calls == 1);
+    CHECK(r.error() == PPB_OK);
+}
+
+static void
+test_parse_init_and_handlers()
+{
+    int init_calls = 0;
+    int field1_calls = 0;
+    int field2_calls = 0;
+
+    ppb::reader<LexnSchema> r(lexn_two_batches_wire, sizeof(lexn_two_batches_wire));
+
+    CHECK(r.parse(
+              [&](const ppb::reader<LexnSchema> &snapshot) -> ppb_error
+              {
+                  init_calls++;
+                  CHECK(snapshot.meta<1>().num_occurrences == 2);
+                  return PPB_OK;
+              },
+              ppb::on<1>(
+                  [&](const ppb_field &) -> ppb_error
+                  {
+                      field1_calls++;
+                      return PPB_OK;
+                  }),
+              ppb::on<2>(
+                  [&](const ppb_field &) -> ppb_error
+                  {
+                      field2_calls++;
+                      return PPB_OK;
+                  })) == PPB_OK);
+
+    CHECK(init_calls == 1);
+    CHECK(field1_calls == 2);
+    CHECK(field2_calls == 2);
+    CHECK(r.empty());
+}
+
+static void
+test_parse_limit_init_and_handlers()
+{
+    int init_calls = 0;
+    int field1_calls = 0;
+
+    ppb::reader<LexnSchema> r(lexn_two_batches_wire, sizeof(lexn_two_batches_wire));
+
+    // Limit-first, then init, then handler.
+    CHECK(r.parse(
+              ppb::limit::hard(sizeof(lexn_two_batches_wire)),
+              [&](const ppb::reader<LexnSchema> &snapshot) -> ppb_error
+              {
+                  init_calls++;
+                  CHECK(snapshot.meta<1>().num_occurrences == 2);
+                  return PPB_OK;
+              },
+              ppb::on<1>(
+                  [&](const ppb_field &) -> ppb_error
+                  {
+                      field1_calls++;
+                      return PPB_OK;
+                  })) == PPB_OK);
+
+    CHECK(init_calls == 1);
+    CHECK(field1_calls == 2);
+    CHECK(r.empty());
+}
+
 // Schema with fields A=varint<1> and B=varint<2>.  The wire has field A
 // repeated 4x, then field B once, then field A again.  Since A, B, A is
 // non-monotonic (A < B), lexn splits this into two batches:
@@ -2876,6 +2989,10 @@ main()
     test_reader_parse_prescan_error_skips_init();
     test_reader_parse_handler_error_runs_full_batch();
     test_reader_parse_sticky_error_short_circuits();
+    test_parse_bare_handlers();
+    test_parse_limit_and_handlers();
+    test_parse_init_and_handlers();
+    test_parse_limit_init_and_handlers();
     test_reader_parse_per_batch_dispatch();
 
     test_reader_parse_semantics_error_field_present();

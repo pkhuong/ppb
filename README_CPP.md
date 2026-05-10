@@ -50,11 +50,6 @@ ppb_error parse_message(std::span<const std::byte> bytes)
     ppb::reader<Schema> r(bytes);
 
     return r.parse(
-        [&](const ppb::reader<Schema> &snap) -> ppb_error {
-            // Optional: inspect snap.meta<MyMessage::name>() to preallocate.
-            return PPB_OK;
-        },
-        ppb::limit{},  // no special limit
         ppb::on<MyMessage::count>  ([&](int32_t v)                   { count   = v; return PPB_OK; }),
         ppb::on<MyMessage::name>   ([&](std::string_view v)          { name    = v; return PPB_OK; }),
         ppb::on<MyMessage::payload>([&](std::span<const std::byte> v){ payload = v; return PPB_OK; }));
@@ -219,6 +214,11 @@ field] if you have tens of fields).
 ### `parse()`: the high-level entry point
 
 ```cpp
+// Five equivalent call shapes; they all forward to the last one:
+ppb_error parse(Handlers... handlers);
+ppb_error parse(ppb::limit bounds, Handlers... handlers);
+ppb_error parse(Init init, Handlers... handlers);
+ppb_error parse(ppb::limit bounds, Init init, Handlers... handlers);
 ppb_error parse(Init init, ppb::limit bounds = {}, Handlers... handlers);
 ```
 

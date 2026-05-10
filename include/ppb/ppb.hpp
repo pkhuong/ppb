@@ -42,9 +42,12 @@
 //     encoded tags, in-range field numbers).
 //   - `ppb::reader<Schema>`: stateful driver around a schema and an
 //     input span; owns the per-field state buffer.
-//   - `reader::parse(init, limit, handlers...)`: prescan + optional
-//     lexn-loop + handler dispatch.  Use `init` to inspect prescan
-//     metadata and preallocate.  Lower-level entry points
+//   - `reader::parse(...)`: prescan + optional lexn-loop + handler
+//     dispatch.  Accepts `parse(handlers...)`,
+//     `parse(limit, handlers...)`, `parse(init, handlers...)`,
+//     `parse(limit, init, handlers...)`, and the canonical
+//     `parse(init, limit, handlers...)`.  Use `init` to inspect
+//     prescan metadata and preallocate.  Lower-level entry points
 //     (`prescan`, `lexn`, `dispatch`) are also available.
 //   - `ppb::on<Key, wire = any>(callable)`: handler factory.
 //     Multiple handlers can share a key; the wrapper picks the one
@@ -515,7 +518,7 @@ template <auto Key, wire_type wire = wire_type::any, typename Fn>
 [[nodiscard]] constexpr detail::value_handler<Key, wire, std::decay_t<Fn>>
 on(Fn &&handler)
 {
-    return detail::value_handler<Key, wire, std::decay_t<Fn>> { std::forward<Fn>(handler) };
+    return detail::value_handler<Key, wire, std::decay_t<Fn>> { {}, std::forward<Fn>(handler) };
 }
 
 // Wraps `handler` as a catch-all (unknown-tag) handler.  Fires once
@@ -539,7 +542,7 @@ template <wire_type wire = wire_type::any, typename Fn>
 [[nodiscard]] constexpr detail::unknown_handler<wire, std::decay_t<Fn>>
 on_unknown(Fn &&handler)
 {
-    return detail::unknown_handler<wire, std::decay_t<Fn>> { std::forward<Fn>(handler) };
+    return detail::unknown_handler<wire, std::decay_t<Fn>> { {}, std::forward<Fn>(handler) };
 }
 
 // Stateful reader for a schema and a byte span.
@@ -675,6 +678,16 @@ template <typename... Fs> struct reader<schema<Fs...>>
 
     // High-level driver: prescan + optional lexn pass + handler dispatch.
     //
+    // Accepts five natural call shapes (all equivalent to the last):
+    //
+    //   parse(handlers...)               no init, default limit
+    //   parse(limit, handlers...)        no init, custom limit
+    //   parse(init, handlers...)         init, default limit
+    //   parse(limit, init, handlers...)  limit-first, then init
+    //   parse(init, limit, handlers...)  existing canonical form
+    //
+    // `std::nullopt` as init and `{}` as limit still work.
+    //
     // 1. Run `ppb_prescan` over the input span subject to `bounds`.
     // 2. Inspect each schema entry's `field_semantics`:
     //      - `error` fields seen on the wire: parse() fails with
@@ -706,7 +719,55 @@ template <typename... Fs> struct reader<schema<Fs...>>
     //
     // *Consumes* from the input span!
     template <typename Init, typename... Hs>
-    [[nodiscard]] ppb_error parse(Init &&init, limit bounds = {}, Hs &&...handlers);
+        requires(!detail::is_handler_v<Init> && !std::convertible_to<std::decay_t<Init>, limit> &&
+            (detail::is_handler_v<Hs> && ...))
+    [[nodiscard]] ppb_error parse(Init &&init, limit bounds = {}, Hs &&...handlers)
+    {
+        std::tuple<std::decay_t<Hs>...> tup(std::forward<Hs>(handlers)...);
+        return parse_tuple(std::forward<Init>(init), bounds, tup);
+    }
+
+    // parse(handlers...)  -> parse(nullopt, {}, handlers...)
+    template <typename... Hs>
+        requires(sizeof...(Hs) >= 1 && (detail::is_handler_v<Hs> && ...))
+    [[nodiscard]] ppb_error parse(Hs &&...handlers)
+    {
+        return parse(std::nullopt, limit {}, std::forward<Hs>(handlers)...);
+    }
+
+    // parse(limit, handlers...)  -> parse(nullopt, limit, handlers...)
+    template <typename... Hs>
+        requires(sizeof...(Hs) >= 1 && (detail::is_handler_v<Hs> && ...))
+    [[nodiscard]] ppb_error parse(limit bounds, Hs &&...handlers)
+    {
+        return parse(std::nullopt, bounds, std::forward<Hs>(handlers)...);
+    }
+
+    // parse(init, handlers...)  -> parse(init, {}, handlers...)
+    template <typename Init, typename... Hs>
+        requires(!std::convertible_to<std::decay_t<Init>, limit>) && (!detail::is_handler_v<Init>) &&
+        (sizeof...(Hs) >= 1) && (detail::is_handler_v<Hs> && ...)
+    [[nodiscard]] ppb_error parse(Init &&init, Hs &&...handlers)
+    {
+        return parse(std::forward<Init>(init), limit {}, std::forward<Hs>(handlers)...);
+    }
+
+    // parse(limit, init, handlers...)  -> parse(init, limit, handlers...)
+    template <typename Init, typename... Hs>
+        requires(!std::convertible_to<std::decay_t<Init>, limit>) && (!detail::is_handler_v<Init>) &&
+        (sizeof...(Hs) >= 1) && (detail::is_handler_v<Hs> && ...)
+    [[nodiscard]] ppb_error parse(limit bounds, Init &&init, Hs &&...handlers)
+    {
+        return parse(std::forward<Init>(init), bounds, std::forward<Hs>(handlers)...);
+    }
+
+    // Tuple-accepting variant of `parse(init, bounds, handlers...)`:
+    // lets callers directly reuse a pre-built handler tuple without
+    // unpacking via `std::apply`.  The tuple is taken by mutable
+    // reference to enable stateful handler callbacks.
+    template <typename Init, typename... Hs>
+        requires(detail::is_handler_v<Hs> && ...)
+    [[nodiscard]] ppb_error parse_tuple(Init &&init, limit bounds, std::tuple<Hs...> &handlers);
 
     // Runs `ppb_prescan` over the input span subject to `bounds`.  When
     // any `on()` handlers are passed, dispatches them once using the
@@ -828,8 +889,9 @@ private:
 
 template <typename... Fs>
 template <typename Init, typename... Hs>
+    requires(detail::is_handler_v<Hs> && ...)
 [[nodiscard]] ppb_error
-reader<schema<Fs...>>::parse(Init &&init, limit bounds, Hs &&...handlers)
+reader<schema<Fs...>>::parse_tuple(Init &&init, limit bounds, std::tuple<Hs...> &tup)
 {
     if (m_error != PPB_OK) [[unlikely]]
         return m_error;
@@ -896,8 +958,6 @@ reader<schema<Fs...>>::parse(Init &&init, limit bounds, Hs &&...handlers)
         m_error = PPB_ERROR_CORRUPT_TAG;
         return m_error;
     }
-
-    std::tuple<std::decay_t<Hs>...> tup(std::forward<Hs>(handlers)...);
 
     if constexpr (!std::is_same_v<std::decay_t<Init>, std::nullopt_t>)
     {
