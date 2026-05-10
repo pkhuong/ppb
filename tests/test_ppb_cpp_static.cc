@@ -554,6 +554,124 @@ static_assert(!ppb::detail::handler_matches_some_field<H_store, ppb::int32<2>>()
 
 }  // namespace test_handler_factories
 
+namespace test_on_submessage
+{
+using Inner = ppb::schema<ppb::varint<1>>;
+
+constexpr auto inner_h = ppb::on<1>([](const ppb_field &) -> ppb_error { return PPB_OK; });
+constexpr auto subh = ppb::on_submessage<3, Inner>(inner_h);
+using H_sub = decltype(subh);
+
+// `on_submessage` produces a handler (inherits from handler_base via
+// value_handler).
+static_assert(ppb::detail::is_handler_v<H_sub>);
+
+// It identifies as a submessage handler.
+static_assert(H_sub::is_submessage_handler());
+
+// Plain `on` and `on_unknown` handlers do not.
+static_assert(!decltype(ppb::on<1>(inner_h.handler))::is_submessage_handler());
+static_assert(!decltype(ppb::on_unknown<ppb::wire_type::varint>(
+    [](const ppb_field &) -> ppb_error { return PPB_OK; }))::is_submessage_handler());
+
+// Wire is len; key carries through.
+static_assert(H_sub::wire() == ppb::wire_type::len);
+static_assert(H_sub::key() == 3);
+
+// `find_value_handler` matches it for a LEN-wire field at the same key,
+// against any of the LEN extract_value argument types.
+constexpr auto found_bytes =
+    ppb::detail::find_value_handler<3, ppb::wire_type::len, std::span<const std::byte>, H_sub>();
+static_assert(found_bytes.has_value() && *found_bytes == 0);
+
+constexpr auto found_strv =
+    ppb::detail::find_value_handler<3, ppb::wire_type::len, std::string_view, H_sub>();
+static_assert(found_strv.has_value() && *found_strv == 0);
+
+constexpr auto found_field =
+    ppb::detail::find_value_handler<3, ppb::wire_type::len, const ppb_field &, H_sub>();
+static_assert(found_field.has_value() && *found_field == 0);
+
+// Wrong wire (varint) yields no match.
+constexpr auto no_wire =
+    ppb::detail::find_value_handler<3, ppb::wire_type::varint, std::span<const std::byte>, H_sub>();
+static_assert(!no_wire.has_value());
+
+// Wrong key yields no match.
+constexpr auto no_key =
+    ppb::detail::find_value_handler<4, ppb::wire_type::len, std::span<const std::byte>, H_sub>();
+static_assert(!no_key.has_value());
+
+// `handler_matches_some_field` accepts any LEN-wire field at the
+// matching key, including `ppb::message<K, S>`.
+static_assert(ppb::detail::handler_matches_some_field<H_sub, ppb::bytes<3>>());
+static_assert(ppb::detail::handler_matches_some_field<H_sub, ppb::utf8string<3>>());
+static_assert(ppb::detail::handler_matches_some_field<H_sub, ppb::len<3>>());
+static_assert(ppb::detail::handler_matches_some_field<H_sub, ppb::unpacked_bytes<3>>());
+static_assert(ppb::detail::handler_matches_some_field<H_sub, ppb::message<3, Inner>>());
+
+// `is_message_field_v` only fires for `ppb::message<K, S>` and aliases.
+static_assert(ppb::detail::is_message_field_v<ppb::message<1, Inner>>);
+static_assert(ppb::detail::is_message_field_v<ppb::unpacked_message<1, Inner>>);
+static_assert(!ppb::detail::is_message_field_v<ppb::bytes<1>>);
+static_assert(!ppb::detail::is_message_field_v<ppb::utf8string<1>>);
+static_assert(!ppb::detail::is_message_field_v<ppb::len<1>>);
+static_assert(!ppb::detail::is_message_field_v<ppb::varint<1>>);
+
+// `inner_schema` typedef on `ppb::message<K, S>` round-trips.
+static_assert(std::is_same_v<typename ppb::message<1, Inner>::inner_schema, Inner>);
+static_assert(std::is_same_v<typename ppb::unpacked_message<1, Inner>::inner_schema, Inner>);
+
+// Convenience aliases pin the expected semantics.
+static_assert(ppb::message<1, Inner>::semantics() == ppb::field_semantics::last_write_wins);
+static_assert(ppb::unpacked_message<1, Inner>::semantics() == ppb::field_semantics::repeated);
+
+}  // namespace test_on_submessage
+
+// Positive counterpart to PPB_FAIL_MESSAGE_PROTO3:
+// message<> with last_write_wins (the default) and repeated semantics both compile.
+namespace test_message_valid_semantics
+{
+using Inner = ppb::schema<ppb::varint<1>>;
+
+static_assert(sizeof(ppb::message<1, Inner>) > 0);
+static_assert(ppb::message<1, Inner>::semantics() == ppb::field_semantics::last_write_wins);
+static_assert(sizeof(ppb::message<1, Inner, ppb::field_semantics::repeated>) > 0);
+}  // namespace test_message_valid_semantics
+
+// Positive counterpart to PPB_FAIL_ON_SUBMESSAGE_PROTO3_FIELD:
+// on_submessage with a last_write_wins message field compiles through
+// run_handler_for_idx (the prescan overload triggers the full path).
+namespace test_on_submessage_non_proto3_field
+{
+using Inner = ppb::schema<ppb::varint<1>>;
+using Outer = ppb::schema<ppb::message<1, Inner>>;
+
+void
+trigger()
+{
+    (void)trigger;
+
+    (void)ppb::reader<Outer>().prescan({},
+        ppb::on_submessage<1, Inner>(ppb::on<1>([](const ppb_field &) -> ppb_error { return PPB_OK; })));
+}
+}  // namespace test_on_submessage_non_proto3_field
+
+namespace test_limit_max_depth
+{
+// Default: depth budget is zero (fail-closed).
+static_assert(ppb::limit {}.depth() == 0);
+
+// Builder + factory round-trip.
+static_assert(ppb::limit {}.with_max_depth(7).depth() == 7);
+static_assert(ppb::limit::max_depth(5).depth() == 5);
+
+// Other limit fields are untouched by max_depth.
+static_assert(ppb::limit::max_depth(3).fields() == ppb::limit {}.fields());
+static_assert(ppb::limit::max_depth(3).bytes() == ppb::limit {}.bytes());
+
+}  // namespace test_limit_max_depth
+
 int
 main()
 {

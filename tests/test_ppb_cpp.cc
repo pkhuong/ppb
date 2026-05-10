@@ -2,6 +2,8 @@
 #include <cstdlib>
 #include <cstring>
 #include <ppb/ppb.hpp>
+#include <string>
+#include <string_view>
 #include <vector>
 
 static int g_fail_count = 0;
@@ -3201,6 +3203,244 @@ test_handler_factories()
     }
 }
 
+// ---- on_submessage tests --------------------------------------------------
+
+namespace submsg_tests
+{
+
+// Inner message: field 1 varint, field 2 utf8string.
+using Inner = ppb::schema<ppb::varint<1>, ppb::utf8string<2>>;
+
+// Outer message with raw bytes for the nested payload (no schema check).
+using OuterRaw = ppb::schema<ppb::bytes<1>, ppb::varint<2>>;
+
+// Outer message with `ppb::message<K, S>` for compile-time linkage.
+using OuterTyped = ppb::schema<ppb::message<1, Inner>, ppb::varint<2>>;
+
+// Wire helpers ---------------------------------------------------------------
+
+// Encodes inner = { f1=varint:42, f2="hi" } -> 4 bytes: 08 2a 12 02 68 69
+static const uint8_t inner_wire[] = { 0x08, 0x2a, 0x12, 0x02, 0x68, 0x69 };
+
+// Outer wire: f1 = LEN(inner_wire), f2 = varint 7.
+//   0x0a (tag 1, LEN), 0x06 (len), inner_wire bytes, 0x10 (tag 2, varint), 0x07
+static const uint8_t outer_wire[] = {
+    0x0a, 0x06, 0x08, 0x2a, 0x12, 0x02, 0x68, 0x69,  // 0x0a (tag 1, LEN), 0x06 (len), inner_wire bytes
+    0x10, 0x07,  // 0x10 (tag 2, varint), 0x07
+};
+
+// Three nestings (depth-3): L1{ f1 = LEN(L2{ f1 = LEN(L3{ f1 = LEN(Leaf{ f1 = varint 42 }) }) }) }
+using Leaf = ppb::schema<ppb::varint<1>>;
+using L3 = ppb::schema<ppb::bytes<1>>;
+using L2 = ppb::schema<ppb::bytes<1>>;
+using L1 = ppb::schema<ppb::bytes<1>>;
+
+// Leaf:  08 2a                        (f1 varint 42)               -> 2 bytes
+// L3:    0a 02 08 2a                  (f1 = LEN(2) of leaf)        -> 4 bytes
+// L2:    0a 04 0a 02 08 2a            (f1 = LEN(4) of L3)          -> 6 bytes
+static const uint8_t deep_wire[] = {
+    0x0a, 0x06, 0x0a, 0x04, 0x0a, 0x02, 0x08, 0x2a,  // f1 = LEN(6) of L2
+};
+
+static void
+test_on_submessage_two_level()
+{
+    ppb::reader<OuterRaw> r(outer_wire, sizeof(outer_wire));
+
+    uint64_t inner_v = 0;
+    std::string_view inner_s;
+    uint64_t outer_v = 0;
+
+    auto bounds = ppb::limit::max_depth(4);
+    ppb_error err = r.parse(bounds,
+        ppb::on_submessage<1, Inner>(ppb::on<1>(
+                                         [&](const ppb_field &f) -> ppb_error
+                                         {
+                                             inner_v = f.v.u64;
+                                             return PPB_OK;
+                                         }),
+            ppb::on<2>(
+                [&](std::string_view sv) -> ppb_error
+                {
+                    inner_s = sv;
+                    return PPB_OK;
+                })),
+        ppb::on<2>(
+            [&](const ppb_field &f) -> ppb_error
+            {
+                outer_v = f.v.u64;
+                return PPB_OK;
+            }));
+
+    CHECK(err == PPB_OK);
+    CHECK(inner_v == 42);
+    CHECK(inner_s == "hi");
+    CHECK(outer_v == 7);
+}
+
+static void
+test_on_submessage_three_level_ok_at_depth_3()
+{
+    ppb::reader<L1> r(deep_wire, sizeof(deep_wire));
+
+    uint64_t leaf_v = 0;
+
+    ppb_error err = r.parse(ppb::limit::max_depth(3),
+        ppb::on_submessage<1, L2>(ppb::on_submessage<1, L3>(ppb::on_submessage<1, Leaf>(ppb::on<1>(
+            [&](const ppb_field &f) -> ppb_error
+            {
+                leaf_v = f.v.u64;
+                return PPB_OK;
+            })))));
+
+    CHECK(err == PPB_OK);
+    CHECK(leaf_v == 42);
+}
+
+static void
+test_on_submessage_three_level_fails_at_depth_2()
+{
+    ppb::reader<L1> r(deep_wire, sizeof(deep_wire));
+
+    bool leaf_fired = false;
+
+    ppb_error err = r.parse(ppb::limit::max_depth(2),
+        ppb::on_submessage<1, L2>(ppb::on_submessage<1, L3>(ppb::on_submessage<1, Leaf>(ppb::on<1>(
+            [&](const ppb_field &) -> ppb_error
+            {
+                leaf_fired = true;
+                return PPB_OK;
+            })))));
+
+    CHECK(err == PPB_ERROR_DEPTH_EXCEEDED);
+    CHECK(r.error() == PPB_ERROR_DEPTH_EXCEEDED);
+    CHECK(!leaf_fired);
+}
+
+static void
+test_on_submessage_default_limit_fails_closed()
+{
+    ppb::reader<OuterRaw> r(outer_wire, sizeof(outer_wire));
+
+    bool inner_fired = false;
+    ppb_error err = r.parse(  // default limit{} → max_depth = 0
+        ppb::on_submessage<1, Inner>(ppb::on<1>(
+            [&](const ppb_field &) -> ppb_error
+            {
+                inner_fired = true;
+                return PPB_OK;
+            })));
+
+    CHECK(err == PPB_ERROR_DEPTH_EXCEEDED);
+    CHECK(r.error() == PPB_ERROR_DEPTH_EXCEEDED);
+    CHECK(!inner_fired);
+}
+
+static void
+test_on_submessage_inner_handler_error_propagates()
+{
+    ppb::reader<OuterRaw> r(outer_wire, sizeof(outer_wire));
+
+    ppb_error err = r.parse(ppb::limit::max_depth(2),
+        ppb::on_submessage<1, Inner>(
+            ppb::on<1>([&](const ppb_field &) -> ppb_error { return PPB_ERROR_CORRUPT_TAG; })));
+
+    CHECK(err == PPB_ERROR_CORRUPT_TAG);
+    CHECK(r.error() == PPB_ERROR_CORRUPT_TAG);
+}
+
+// Repeated submessages: outer schema has unpacked_bytes for the nested
+// field, so each occurrence dispatches to a fresh inner reader.
+using OuterRepeated = ppb::schema<ppb::unpacked_bytes<1>, ppb::varint<2>>;
+
+// Two inner instances back-to-back at field 1.
+static const uint8_t outer_repeated_wire[] = {
+    0x0a, 0x06, 0x08, 0x2a, 0x12, 0x02, 0x68, 0x69,  // f1 = inner{42, "hi"}
+    0x0a, 0x06, 0x08, 0x63, 0x12, 0x02, 0x6e, 0x6f,  // f1 = inner{99, "no"}
+    0x10, 0x07,  // f2 = 7
+};
+
+static void
+test_on_submessage_repeated()
+{
+    ppb::reader<OuterRepeated> r(outer_repeated_wire, sizeof(outer_repeated_wire));
+
+    std::vector<uint64_t> inner_vs;
+    std::vector<std::string> inner_ss;
+
+    ppb_error err = r.parse(ppb::limit::max_depth(2),
+        ppb::on_submessage<1, Inner>(ppb::on<1>(
+                                         [&](const ppb_field &f) -> ppb_error
+                                         {
+                                             inner_vs.push_back(f.v.u64);
+                                             return PPB_OK;
+                                         }),
+            ppb::on<2>(
+                [&](std::string_view sv) -> ppb_error
+                {
+                    inner_ss.emplace_back(sv);
+                    return PPB_OK;
+                })));
+
+    CHECK(err == PPB_OK);
+    CHECK(inner_vs.size() == 2);
+    CHECK(inner_vs.size() == 2 && inner_vs[0] == 42 && inner_vs[1] == 99);
+    CHECK(inner_ss.size() == 2 && inner_ss[0] == "hi" && inner_ss[1] == "no");
+}
+
+static void
+test_on_submessage_with_init()
+{
+    ppb::reader<OuterRaw> r(outer_wire, sizeof(outer_wire));
+
+    bool init_fired = false;
+    size_t inner_field1_count = 0;
+    uint64_t v = 0;
+
+    ppb_error err = r.parse(ppb::limit::max_depth(2),
+        ppb::on_submessage<1, Inner>(
+            [&](const ppb::reader<Inner> &ir) -> ppb_error
+            {
+                init_fired = true;
+                inner_field1_count = ir.template meta<1>().num_occurrences;
+                return PPB_OK;
+            },
+            ppb::on<1>(
+                [&](const ppb_field &f) -> ppb_error
+                {
+                    v = f.v.u64;
+                    return PPB_OK;
+                })));
+
+    CHECK(err == PPB_OK);
+    CHECK(init_fired);
+    CHECK(inner_field1_count == 1);
+    CHECK(v == 42);
+}
+
+static void
+test_on_submessage_typed_message_field()
+{
+    // Schema declares `ppb::message<1, Inner>` so the link is checked at
+    // compile time; runtime behavior identical to the raw-bytes case.
+    ppb::reader<OuterTyped> r(outer_wire, sizeof(outer_wire));
+
+    uint64_t inner_v = 0;
+
+    ppb_error err = r.parse(ppb::limit::max_depth(2),
+        ppb::on_submessage<1, Inner>(ppb::on<1>(
+            [&](const ppb_field &f) -> ppb_error
+            {
+                inner_v = f.v.u64;
+                return PPB_OK;
+            })));
+
+    CHECK(err == PPB_OK);
+    CHECK(inner_v == 42);
+}
+
+}  // namespace submsg_tests
+
 int
 main()
 {
@@ -3338,6 +3578,15 @@ main()
     test_on_unknown_dispatches_per_occurrence();
     test_on_unknown_per_wire_dispatch();
     test_on_unknown_handler_error_propagates();
+
+    submsg_tests::test_on_submessage_two_level();
+    submsg_tests::test_on_submessage_three_level_ok_at_depth_3();
+    submsg_tests::test_on_submessage_three_level_fails_at_depth_2();
+    submsg_tests::test_on_submessage_default_limit_fails_closed();
+    submsg_tests::test_on_submessage_inner_handler_error_propagates();
+    submsg_tests::test_on_submessage_repeated();
+    submsg_tests::test_on_submessage_with_init();
+    submsg_tests::test_on_submessage_typed_message_field();
 
     std::printf("\n%d checks, %d failures\n", g_check_count, g_fail_count);
     return g_fail_count > 0 ? 1 : 0;
