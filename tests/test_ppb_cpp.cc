@@ -3096,9 +3096,115 @@ test_proto3_uint32_parse_absent_dispatches_zero()
     CHECK(r.empty());
 }
 
+static void
+test_handler_factories()
+{
+    enum class K : uint8_t
+    {
+        one = 1,
+        two = 2,
+    };
+    // store: scalar field
+    {
+        using S = ppb::schema<ppb::int32<K::one>>;
+        static const uint8_t wire[] = { 0x08, 0x2a }; /* f1 varint = 42 */
+        int32_t v = 0;
+        ppb::reader<S> r(wire, sizeof(wire));
+        CHECK(r.parse(ppb::store<K::one>(&v)) == PPB_OK);
+        CHECK(v == 42);
+    }
+
+    // store: string_view field
+    {
+        using S = ppb::schema<ppb::utf8string<K::one>>;
+        static const uint8_t wire[] = {
+            0x0a, 0x05, 'h', 'e', 'l', 'l', 'o', /* f1 = "hello" */
+        };
+        std::string_view v;
+        ppb::reader<S> r(wire, sizeof(wire));
+        CHECK(r.parse(ppb::store<K::one>(&v)) == PPB_OK);
+        CHECK(v == std::string_view("hello"));
+    }
+
+    // store: bytes field
+    {
+        using S = ppb::schema<ppb::bytes<K::one>>;
+        static const uint8_t wire[] = {
+            0x0a, 0x03, 0xca, 0xfe, 0xbe, /* f1 bytes = {0xCA, 0xFE, 0xBE} */
+        };
+        std::span<const std::byte> v;
+        ppb::reader<S> r(wire, sizeof(wire));
+        CHECK(r.parse(ppb::store<K::one>(&v)) == PPB_OK);
+        CHECK(v.size() == 3);
+        CHECK(static_cast<uint8_t>(v[0]) == 0xca);
+    }
+
+    // push_back: repeated int32 (per-occurrence dispatch)
+    {
+        using S = ppb::schema<ppb::unpacked_int32<K::one>>;
+        static const uint8_t wire[] = {
+            0x08, 0x01, /* f1 = 1 */
+            0x08, 0x02, /* f1 = 2 */
+            0x08, 0x03, /* f1 = 3 */
+        };
+        std::vector<int32_t> v;
+        ppb::reader<S> r(wire, sizeof(wire));
+        CHECK(r.parse(ppb::push_back<K::one>(&v)) == PPB_OK);
+        CHECK(v.size() == 3);
+        CHECK(v[0] == 1);
+        CHECK(v[1] == 2);
+        CHECK(v[2] == 3);
+    }
+
+    // push_back: repeated string_view
+    {
+        using S = ppb::schema<ppb::unpacked_utf8string<K::one>>;
+        static const uint8_t wire[] = {
+            0x0a, 0x03, 'f', 'o', 'o', /* f1 = "foo" */
+            0x0a, 0x03, 'b', 'a', 'r', /* f1 = "bar" */
+        };
+        std::vector<std::string_view> v;
+        ppb::reader<S> r(wire, sizeof(wire));
+        CHECK(r.parse(ppb::push_back<K::one>(&v)) == PPB_OK);
+        CHECK(v.size() == 2);
+        CHECK(v[0] == "foo");
+        CHECK(v[1] == "bar");
+    }
+
+    // emplace_back: repeated int64
+    {
+        using S = ppb::schema<ppb::unpacked_int64<K::one>>;
+        static const uint8_t wire[] = {
+            0x08, 0x01, /* f1 = 1 */
+            0x08, 0x02, /* f1 = 2 */
+        };
+        std::vector<int64_t> v;
+        ppb::reader<S> r(wire, sizeof(wire));
+        CHECK(r.parse(ppb::emplace_back<K::one>(&v)) == PPB_OK);
+        CHECK(v.size() == 2);
+        CHECK(v[0] == 1);
+        CHECK(v[1] == 2);
+    }
+
+    // parse() with two handlers: overload resolution picks Handlers... directly.
+    {
+        using S = ppb::schema<ppb::int32<K::one>, ppb::int32<K::two>>;
+        static const uint8_t wire[] = {
+            0x08, 0x2a, /* f1 = 42 */
+            0x10, 0x63, /* f2 = 99 */
+        };
+        int32_t a = 0, b = 0;
+        ppb::reader<S> r(wire, sizeof(wire));
+        CHECK(r.parse(ppb::store<K::one>(&a), ppb::store<K::two>(&b)) == PPB_OK);
+        CHECK(a == 42);
+        CHECK(b == 99);
+    }
+}
+
 int
 main()
 {
+    test_handler_factories();
     test_reader_getters();
     test_reader_default_construct();
     test_reader_span_construct();
