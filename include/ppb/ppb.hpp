@@ -805,10 +805,37 @@ template <typename... Fs> struct reader<schema<Fs...>>
     // error, but every handler in the batch still runs.
     //
     // Call in a loop until `empty()` (or until `error()` is non-OK) to
-    // process a whole message.
+    // process a whole message.  Consider `lex_all()` for the common case
+    // of draining the input with repeated `lexn()` batches.
     //
     // *Consumes* from the input span!
-    template <typename... Hs> [[nodiscard]] ppb_error lexn(limit bounds = {}, Hs &&...handlers);
+    template <typename... Hs> [[nodiscard]] ppb_error lexn(limit bounds = {}, Hs &&...handlers)
+    {
+        std::tuple<std::decay_t<Hs>...> tup(std::forward<Hs>(handlers)...);
+        return lexn_tuple(bounds, tup);
+    }
+
+    template <typename... Hs> [[nodiscard]] ppb_error lexn_tuple(limit bounds, std::tuple<Hs...> &handlers);
+
+    // Repeatedly calls `lexn()` until the input is empty or an error is
+    // set.  `bounds` applies *per batch*, not cumulatively.
+    //
+    // Handler dispatch and the sticky-error contract are identical to
+    // `lexn()`.
+    template <typename... Hs> [[nodiscard]] ppb_error lex_all(Hs &&...handlers)
+    {
+        return lex_all(limit {}, std::forward<Hs>(handlers)...);
+    }
+
+    // Returns PPB_OK when bounds forbids any progress (byte or field limit of 0).
+    template <typename... Hs> [[nodiscard]] ppb_error lex_all(limit bounds, Hs &&...handlers)
+    {
+        std::tuple<std::decay_t<Hs>...> tup(std::forward<Hs>(handlers)...);
+        return lex_all_tuple(bounds, tup);
+    }
+
+    // Returns PPB_OK when bounds forbids any progress (byte or field limit of 0).
+    template <typename... Hs> [[nodiscard]] ppb_error lex_all_tuple(limit bounds, std::tuple<Hs...> &tup);
 
     // Re-dispatches handlers against the current per-field state without
     // touching the input span.  Useful for testing and for invoking
@@ -1055,12 +1082,10 @@ reader<schema<Fs...>>::meta() const noexcept
 template <typename... Fs>
 template <typename... Hs>
 [[nodiscard]] ppb_error
-reader<schema<Fs...>>::lexn(limit bounds, Hs &&...handlers)
+reader<schema<Fs...>>::lexn_tuple(limit bounds, std::tuple<Hs...> &tup)
 {
     if (m_error != PPB_OK) [[unlikely]]
         return m_error;
-
-    std::tuple<std::decay_t<Hs>...> tup(std::forward<Hs>(handlers)...);
 
     const auto base = reinterpret_cast<uintptr_t>(m_input.data());
 
@@ -1084,6 +1109,24 @@ reader<schema<Fs...>>::lexn(limit bounds, Hs &&...handlers)
     }
 
     run_handlers(tup, base, range_size - 1, ret.first_field, ret.first_field + ret.field_range);
+    return m_error;
+}
+
+template <typename... Fs>
+template <typename... Hs>
+[[nodiscard]] ppb_error
+reader<schema<Fs...>>::lex_all_tuple(limit bounds, std::tuple<Hs...> &tup)
+{
+    if (bounds.bytes() == 0 || bounds.fields() == 0) [[unlikely]]
+        return m_error;
+
+    while (!m_input.empty())
+    {
+        ppb_error ret = lexn_tuple(bounds, tup);
+        if (ret != PPB_OK)
+            return ret;
+    }
+
     return m_error;
 }
 
