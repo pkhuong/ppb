@@ -10,6 +10,12 @@
 namespace ppb
 {
 
+// Forward declarations for `submessage_handler::invoke` (defined out of
+// line below).  `limit` and `reader` are introduced after this header
+// is included; only their names are needed for declarations here.
+struct limit;
+template <typename Schema> struct reader;
+
 // Base for every field descriptor.  Most fields inherit via
 // `field_base<K, wire_type>` (typed scalars, the four raw wire-typed
 // primitives), which adds the `(K, wire_type)` static_asserts and
@@ -357,6 +363,19 @@ template <auto K, typename Element, field_semantics sem> struct bytes : public l
     }
 };
 
+// Sub-message field: a `bytes`-shaped field that additionally remembers
+// the schema describing its payload.  On the wire it is identical to a
+// plain `bytes` field; the only added information is the
+// `inner_schema` typedef, which `ppb::on_submessage<K, S>` checks
+// against its `S` argument at compile time.
+template <auto K, typename InnerSchema, field_semantics sem> struct message : public bytes<K, std::byte, sem>
+{
+    static_assert(sem != field_semantics::proto3_zero_default,
+        "submessages must not have proto3_zero_default semantics (last_write_wins matches both proto2 and 3)");
+
+    using inner_schema = InnerSchema;
+};
+
 template <typename T>
 [[gnu::always_inline]] inline T
 le_packed<T>::value() const
@@ -384,6 +403,10 @@ le_packed<T>::value() const
 
 namespace detail
 {
+
+// True when field type `F` is a `ppb::message<...>` (i.e. a sub-message
+// field that knows its inner schema).
+template <typename F> inline constexpr bool is_message_field_v = requires { typename F::inner_schema; };
 
 // Resolves the schema's `Key` type by walking the field pack and
 // returning the first field's `Key` typedef.  Catch-all entries
@@ -656,6 +679,7 @@ template <auto K, wire_type W, typename Fn> struct value_handler : handler_base
     static constexpr key_type key() { return K; }
     static constexpr wire_type wire() { return W; }
     static constexpr bool is_unknown_handler() { return false; }
+    static constexpr bool is_submessage_handler() { return false; }
 
     // Does this value handler match the key.
     static constexpr bool matches(key_type other_key, wire_type other_w)
@@ -684,6 +708,7 @@ template <wire_type W, typename Fn> struct unknown_handler : handler_base
 
     static constexpr wire_type wire() { return W; }
     static constexpr bool is_unknown_handler() { return true; }
+    static constexpr bool is_submessage_handler() { return false; }
 
     // Wire-only match for catch-all dispatch.  `wire_type::any` here
     // means "every catch-all wire", mirroring the value_handler
@@ -695,6 +720,50 @@ template <wire_type W, typename Fn> struct unknown_handler : handler_base
 
 // True when T (after decay) is a value_handler or unknown_handler.
 template <typename T> inline constexpr bool is_handler_v = std::is_base_of_v<handler_base, std::decay_t<T>>;
+
+// Synthetic `handler_type` for `submessage_handler`.  Only exists so
+// `find_value_handler`'s `is_invocable_v<handler_type, Arg>`
+// disambiguation never rejects a submessage handler regardless of what
+// `Arg` the matching schema field would normally produce: every LEN
+// extract_value (string_view from utf8string, span<std::byte> from
+// bytes/unpacked_bytes, const ppb_field & from len) satisfies this.
+//
+// Never actually invoked: dispatch routes submessage handlers through
+// `submessage_handler::invoke(...)` instead of `handler(arg)`.
+struct submessage_invoker
+{
+    template <typename T> ppb_error operator()(T &&) const noexcept { return PPB_OK; }
+};
+
+// Handler factory product for `ppb::on_submessage<K, InnerSchema>`.
+// Inherits from `value_handler<K, wire_type::len, submessage_invoker>`
+// so all of `find_value_handler`'s key/wire matching is reused; the
+// override of `is_submessage_handler()` flips dispatch to the
+// `invoke(payload, bounds, outer_end)` arm in `run_handler_for_idx`.
+//
+// `Init` is `std::nullopt_t` when no init was supplied; in that case
+// `inner.parse(std::nullopt, ...)` short-circuits the init call inside
+// the inner reader.
+template <auto K, typename InnerSchema, typename Init, typename... Hs>
+struct submessage_handler : public value_handler<K, wire_type::len, submessage_invoker>
+{
+    static constexpr bool is_submessage_handler() { return true; }
+    using inner_schema_type = InnerSchema;
+
+    Init init_cb;
+    std::tuple<Hs...> inner_handlers;
+
+    template <typename InitArg>
+    constexpr submessage_handler(InitArg &&i, std::tuple<Hs...> hs)
+        : value_handler<K, wire_type::len, submessage_invoker> { {}, submessage_invoker {} }
+        , init_cb(std::forward<InitArg>(i))
+        , inner_handlers(std::move(hs))
+    {
+    }
+
+    [[gnu::always_inline]] inline ppb_error invoke(std::span<const std::byte> payload,
+        const limit &active_bounds, const std::byte *outer_end);
+};
 
 // Selects the value_handler in `Hs...` that matches the (Key, W) pair
 // and is invocable with `Arg`.

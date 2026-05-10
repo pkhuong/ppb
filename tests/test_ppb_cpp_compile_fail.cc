@@ -346,3 +346,82 @@ trigger_parse_limit_as_init()
     r.parse(ppb::limit {});
 }
 #endif
+
+// on_submessage<K, S> against a schema field whose wire is not LEN.
+// Schema declares varint<1>; the LEN-wire submessage handler can't
+// match any field.
+
+/* expect-error: on<Key> or on_unknown<> handler does not match any schema field */
+#ifdef PPB_FAIL_ON_SUBMESSAGE_NON_LEN_FIELD
+using NonLenSchema = ppb::schema<ppb::varint<1>>;
+using DummyInner = ppb::schema<ppb::varint<1>>;
+static void
+trigger_on_submessage_non_len_field()
+{
+    ppb::reader<NonLenSchema>().parse(ppb::limit::max_depth(1),
+        ppb::on_submessage<1, DummyInner>(ppb::on<1>([](const ppb_field &) -> ppb_error { return PPB_OK; })));
+}
+#endif
+
+// ppb::message<K, S1> in the outer schema paired with
+// on_submessage<K, S2> for a different inner schema must be rejected at
+// compile time.
+
+/* expect-error: ppb::message<K, S> field paired with ppb::on_submessage<K, S2> requires S == S2 */
+#ifdef PPB_FAIL_ON_SUBMESSAGE_SCHEMA_MISMATCH
+using InnerA = ppb::schema<ppb::varint<1>>;
+using InnerB = ppb::schema<ppb::utf8string<2>>;
+using OuterMismatch = ppb::schema<ppb::message<1, InnerA>>;
+static const uint8_t mismatch_wire[] = { 0x0a, 0x00 };  // f1 = LEN(0)
+static void
+trigger_on_submessage_schema_mismatch()
+{
+    ppb::reader<OuterMismatch> r(mismatch_wire, sizeof(mismatch_wire));
+    (void)r.parse(ppb::limit::max_depth(1),
+        ppb::on_submessage<1, InnerB>(ppb::on<2>([](std::string_view) -> ppb_error { return PPB_OK; })));
+}
+#endif
+
+// on_submessage<K, NotASchema> rejected because reader<NotASchema>
+// has no matching specialization.
+
+/* expect-error: incomplete|undefined|specialization|no member|reader */
+#ifdef PPB_FAIL_ON_SUBMESSAGE_INNER_NOT_A_SCHEMA
+struct NotASchema
+{
+};
+using OuterRawForBadInner = ppb::schema<ppb::bytes<1>>;
+static const uint8_t bad_inner_wire[] = { 0x0a, 0x00 };
+static void
+trigger_on_submessage_inner_not_a_schema()
+{
+    ppb::reader<OuterRawForBadInner> r(bad_inner_wire, sizeof(bad_inner_wire));
+    (void)r.parse(ppb::limit::max_depth(1),
+        ppb::on_submessage<1, NotASchema>(ppb::on<1>([](const ppb_field &) -> ppb_error { return PPB_OK; })));
+}
+#endif
+
+// message<K, S, proto3_zero_default> is rejected: proto3 uses the same
+// last_write_wins semantics as proto2 for message fields, so there is no
+// proto3_message convenience alias and the field type itself forbids it.
+
+/* expect-error: submessages must not have proto3_zero_default semantics */
+#ifdef PPB_FAIL_MESSAGE_PROTO3
+using MsgInner = ppb::schema<ppb::varint<1>>;
+static_assert(sizeof(ppb::message<1, MsgInner, ppb::field_semantics::proto3_zero_default>) > 0);
+#endif
+
+// on_submessage handler paired with a proto3 field (even a non-message LEN
+// field like bytes<K, proto3>) is rejected at the run_handler_for_idx level.
+
+/* expect-error: submessages are incompatible with proto3_zero_default */
+#ifdef PPB_FAIL_ON_SUBMESSAGE_PROTO3_FIELD
+using SubInner = ppb::schema<ppb::varint<1>>;
+using SubOuter = ppb::schema<ppb::bytes<1, std::byte, ppb::field_semantics::proto3_zero_default>>;
+static void
+trigger_on_submessage_proto3_field()
+{
+    ppb::reader<SubOuter>().prescan({},
+        ppb::on_submessage<1, SubInner>(ppb::on<1>([](const ppb_field &) -> ppb_error { return PPB_OK; })));
+}
+#endif

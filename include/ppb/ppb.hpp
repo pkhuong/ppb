@@ -245,6 +245,20 @@ template <auto K, field_semantics sem = field_semantics::last_write_wins> struct
 template <auto K, typename Element = std::byte, field_semantics sem = field_semantics::last_write_wins>
 struct bytes;
 
+// Sub-message field: a LEN payload that the C++ wrapper knows is itself
+// a protobuf-encoded message described by `InnerSchema` (a
+// `ppb::schema<...>`).  Inherits from `bytes<K, std::byte, sem>`, so on
+// the wire and during prescan/lexn it behaves identically to a plain
+// `bytes` field; the additional `inner_schema` typedef lets
+// `ppb::on_submessage<K, S>` perform a compile-time cross-check that
+// the schema author and the handler agree on the inner type.
+//
+// Defaults to `last_write_wins` (not `singular`): repeat occurrences of
+// the same key are merged proto-style by overwrite, with no bit-identity
+// check on the encoded payload.
+template <auto K, typename InnerSchema, field_semantics sem = field_semantics::last_write_wins>
+struct message;
+
 // Convenience aliases that hardcode proto3_zero_default semantics.  Users musn't
 // rely on the behavior being any different than last_write_wins, but it can be a
 // little more efficient to unconditionally handle a zero-filled value.
@@ -270,6 +284,11 @@ template <auto K> using proto3_f64 = f64<K, field_semantics::proto3_zero_default
 template <auto K> using proto3_utf8string = utf8string<K, field_semantics::proto3_zero_default>;
 template <auto K, typename Element = std::byte>
 using proto3_bytes = bytes<K, Element, field_semantics::proto3_zero_default>;
+// No proto3_message alias: proto3 message fields behave identically
+// to proto2 message fields.  Optional fields have explicit presence,
+// like proto2 last_write_wins (in fact, early proto3 recommended
+// wrapping scalars in submessages specifically to detect presence)
+// Use plain message<K, InnerSchema> for both proto2 and proto3.
 
 // Wraps a fixed-width value stored as little-endian, unaligned bytes
 // (the protobuf wire format for fixed32/sfixed32/fixed64/sfixed64/
@@ -325,7 +344,10 @@ template <auto K> using unpacked_fixed64 = fixed64<K, field_semantics::repeated>
 template <auto K> using unpacked_sfixed64 = sfixed64<K, field_semantics::repeated>;
 template <auto K> using unpacked_f64 = f64<K, field_semantics::repeated>;
 template <auto K> using unpacked_utf8string = utf8string<K, field_semantics::repeated>;
-template <auto K, typename Element> using unpacked_bytes = bytes<K, Element, field_semantics::repeated>;
+template <auto K, typename Element = std::byte>
+using unpacked_bytes = bytes<K, Element, field_semantics::repeated>;
+template <auto K, typename InnerSchema>
+using unpacked_message = message<K, InnerSchema, field_semantics::repeated>;
 
 // Convenience tuple that registers the catch-all entry for every wire
 // type at once.  Use with `auto_schema` to opt into unknown-field
@@ -429,6 +451,12 @@ struct limit
 public:
     static constexpr limit max_fields(size_t max) noexcept { return limit().with_max_fields(max); }
 
+    // Maximum recursion depth for `on_submessage` auto-traversal.
+    // Default 0 means submessage traversal is rejected: callers must
+    // opt in by setting this to a positive value.  See
+    // `ppb::on_submessage` and `PPB_ERROR_DEPTH_EXCEEDED`.
+    static constexpr limit max_depth(uint32_t max) noexcept { return limit().with_max_depth(max); }
+
     static constexpr limit hard(size_t max_bytes,
         size_t max_fields = std::numeric_limits<size_t>::max()) noexcept
     {
@@ -454,6 +482,14 @@ public:
     {
         limit ret = *this;
         ret.m_max_fields = max;
+        return ret;
+    }
+
+    // Set the recursion-depth budget consumed by `on_submessage`.
+    constexpr limit with_max_depth(uint32_t max) const noexcept
+    {
+        limit ret = *this;
+        ret.m_max_depth = max;
         return ret;
     }
 
@@ -485,11 +521,15 @@ public:
     constexpr size_t fields() const noexcept { return m_max_fields; }
     constexpr size_t bytes() const noexcept { return m_max_bytes; }
     constexpr ppb_error error_on_bytes() const noexcept { return m_error_on_bytes; }
+    // Accessor (mirrors `fields()`/`bytes()` short-name convention; the
+    // static `limit::max_depth(N)` factory occupies the long name).
+    constexpr uint32_t depth() const noexcept { return m_max_depth; }
 
 private:
     size_t m_max_fields = std::numeric_limits<size_t>::max();
     size_t m_max_bytes = std::numeric_limits<size_t>::max();
     ppb_error m_error_on_bytes = PPB_OK;
+    uint32_t m_max_depth = 0;
 };
 
 // Wraps `handler` as a value handler bound to (Key, wire).
@@ -519,6 +559,52 @@ template <auto Key, wire_type wire = wire_type::any, typename Fn>
 on(Fn &&handler)
 {
     return detail::value_handler<Key, wire, std::decay_t<Fn>> { {}, std::forward<Fn>(handler) };
+}
+
+// Handler factory for a length-prefixed sub-message field at `Key`.
+// The wrapper auto-constructs a nested `reader<InnerSchema>` over the
+// payload, derives an inner `limit` (depth budget decremented from the
+// outer bounds, hard byte cap = payload size), and dispatches the
+// supplied inner handlers via the inner reader's `parse()`.
+//
+// Two overloads:
+//   on_submessage<K, S>(handlers...)         no init
+//   on_submessage<K, S>(init, handlers...)   `init` runs after the
+//                                            inner prescan with inner
+//                                            `meta<...>()` populated,
+//                                            so the user can size
+//                                            destination storage
+//                                            before handlers run.
+//
+// `K` must match a LEN-wire field in the outer schema (`bytes`,
+// `utf8string`, `len`, `unpacked_bytes`, or `message<K, S>`).  When the
+// schema field is `ppb::message<K, S2>`, a compile-time static_assert
+// in dispatch verifies `S == S2`; raw LEN field types skip the check.
+//
+// User-supplied `limit` is intentionally not accepted: the wrapper
+// owns inner bounds.  Outer `limit::max_depth` must be set to a
+// positive value (default 0 fails closed with
+// `PPB_ERROR_DEPTH_EXCEEDED`).
+template <auto Key, typename InnerSchema, typename... Hs>
+    requires(detail::is_handler_v<Hs> && ...)
+[[nodiscard]] constexpr auto
+on_submessage(Hs &&...inner_handlers)
+{
+    return detail::submessage_handler<Key, InnerSchema, std::nullopt_t, std::decay_t<Hs>...> {
+        std::nullopt,
+        std::tuple<std::decay_t<Hs>...>(std::forward<Hs>(inner_handlers)...),
+    };
+}
+
+template <auto Key, typename InnerSchema, typename Init, typename... Hs>
+    requires(!detail::is_handler_v<Init> && (detail::is_handler_v<Hs> && ...))
+[[nodiscard]] constexpr auto
+on_submessage(Init &&init, Hs &&...inner_handlers)
+{
+    return detail::submessage_handler<Key, InnerSchema, std::decay_t<Init>, std::decay_t<Hs>...> {
+        std::forward<Init>(init),
+        std::tuple<std::decay_t<Hs>...>(std::forward<Hs>(inner_handlers)...),
+    };
 }
 
 // Handler shortcuts for common destination patterns.
@@ -887,7 +973,8 @@ template <typename... Fs> struct reader<schema<Fs...>>
     template <typename... Hs> ppb_error dispatch(Hs &&...handlers);
 
     template <typename... Hs>
-    ppb_error dispatch_tuple(std::tuple<Hs...> &handlers, bool run_zero_defaults = false);
+    ppb_error dispatch_tuple(std::tuple<Hs...> &handlers, bool run_zero_defaults = false,
+        const limit &bounds = limit {});
 
 private:
     constexpr ppb_buf make_ppb_buf() const noexcept
@@ -899,12 +986,13 @@ private:
     }
 
     template <typename... Hs>
-    [[gnu::noinline]] void run_handlers(std::tuple<Hs...> &handlers, uintptr_t lower_bound,
-        uintptr_t range_size_inclusive, size_t begin = 0, size_t end = Schema::num_fields(),
-        bool run_zero_defaults = false);
+    [[gnu::noinline]] void run_handlers(std::tuple<Hs...> &handlers, const limit &active_bounds,
+        const std::byte *outer_end, uintptr_t lower_bound, uintptr_t range_size_inclusive, size_t begin = 0,
+        size_t end = Schema::num_fields(), bool run_zero_defaults = false);
 
     template <size_t idx, typename... Hs>
-    [[gnu::always_inline]] inline void run_handler_for_idx(std::tuple<Hs...> &handlers, uintptr_t lower_bound,
+    [[gnu::always_inline]] inline void run_handler_for_idx(std::tuple<Hs...> &handlers,
+        const limit &active_bounds, const std::byte *outer_end, uintptr_t lower_bound,
         uintptr_t range_size_inclusive, bool run_zero_defaults);
 
     // Walks the schema for catch-all entries (`ppb::unknown<wire>`) and
@@ -1032,10 +1120,12 @@ reader<schema<Fs...>>::parse_tuple(Init &&init, limit bounds, std::tuple<Hs...> 
     if (m_error != PPB_OK || num_bytes == 0) [[unlikely]]
         return m_error;
 
+    const std::byte *const outer_end = m_input.data() + m_input.size();
+
     if (!need_lexn) [[likely]]
     {
-        run_handlers(tup, reinterpret_cast<uintptr_t>(m_input.data()), size_t(num_bytes) - 1, 0,
-            Schema::num_fields(), /*run_zero_defaults=*/true);
+        run_handlers(tup, bounds, outer_end, reinterpret_cast<uintptr_t>(m_input.data()),
+            size_t(num_bytes) - 1, 0, Schema::num_fields(), /*run_zero_defaults=*/true);
         m_input = m_input.subspan(size_t(num_bytes));
         return m_error;
     }
@@ -1060,8 +1150,8 @@ reader<schema<Fs...>>::parse_tuple(Init &&init, limit bounds, std::tuple<Hs...> 
             break;
         }
 
-        run_handlers(tup, reinterpret_cast<uintptr_t>(base), range_size - 1, ret.first_field,
-            ret.first_field + ret.field_range);
+        run_handlers(tup, bounds, outer_end, reinterpret_cast<uintptr_t>(base), range_size - 1,
+            ret.first_field, ret.first_field + ret.field_range);
         if (m_error != PPB_OK) [[unlikely]]
             break;
     }
@@ -1093,7 +1183,7 @@ reader<schema<Fs...>>::prescan(limit bounds, Hs &&...handlers)
         return ret;
 
     std::tuple<std::decay_t<Hs>...> tup(std::forward<Hs>(handlers)...);
-    ppb_error err = dispatch_tuple(tup, /*run_zero_defaults=*/true);
+    ppb_error err = dispatch_tuple(tup, /*run_zero_defaults=*/true, bounds);
     return int(err) < 0 ? ptrdiff_t(err) : ret;
 }
 
@@ -1146,7 +1236,8 @@ reader<schema<Fs...>>::lexn_tuple(limit bounds, std::tuple<Hs...> &tup)
         return m_error;
     }
 
-    run_handlers(tup, base, range_size - 1, ret.first_field, ret.first_field + ret.field_range);
+    run_handlers(tup, bounds, m_input.data() + m_input.size(), base, range_size - 1, ret.first_field,
+        ret.first_field + ret.field_range);
     return m_error;
 }
 
@@ -1180,7 +1271,8 @@ reader<schema<Fs...>>::dispatch(Hs &&...handlers)
 template <typename... Fs>
 template <typename... Hs>
 ppb_error
-reader<schema<Fs...>>::dispatch_tuple(std::tuple<Hs...> &handlers, bool run_zero_defaults)
+reader<schema<Fs...>>::dispatch_tuple(std::tuple<Hs...> &handlers, bool run_zero_defaults,
+    const limit &bounds)
 {
     if constexpr (sizeof...(Hs) == 0)
         return m_error;
@@ -1188,7 +1280,7 @@ reader<schema<Fs...>>::dispatch_tuple(std::tuple<Hs...> &handlers, bool run_zero
     if (m_error != PPB_OK) [[unlikely]]
         return m_error;
 
-    run_handlers(handlers, /*lower_bound=*/1,
+    run_handlers(handlers, bounds, m_input.data() + m_input.size(), /*lower_bound=*/1,
         /*range_size_inclusive=*/std::numeric_limits<uintptr_t>::max() - 1,
         /*begin=*/0, /*end=*/Schema::num_fields(), run_zero_defaults);
     return m_error;
@@ -1197,8 +1289,9 @@ reader<schema<Fs...>>::dispatch_tuple(std::tuple<Hs...> &handlers, bool run_zero
 template <typename... Fs>
 template <typename... Hs>
 [[gnu::noinline]] void
-reader<schema<Fs...>>::run_handlers(std::tuple<Hs...> &handlers, uintptr_t lower_bound,
-    uintptr_t range_size_inclusive, size_t begin, size_t end, bool run_zero_defaults)
+reader<schema<Fs...>>::run_handlers(std::tuple<Hs...> &handlers, const limit &active_bounds,
+    const std::byte *outer_end, uintptr_t lower_bound, uintptr_t range_size_inclusive, size_t begin,
+    size_t end, bool run_zero_defaults)
 {
     static_assert((detail::handler_matches_some_field<Hs, Fs...>() && ...),
         "on<Key> or on_unknown<> handler does not match any schema field; the "
@@ -1208,7 +1301,8 @@ reader<schema<Fs...>>::run_handlers(std::tuple<Hs...> &handlers, uintptr_t lower
     detail::dispatch<Schema::num_fields()>(begin, end,
         [&]<size_t I>(std::integral_constant<size_t, I>)
         {
-            run_handler_for_idx<I>(handlers, lower_bound, range_size_inclusive, run_zero_defaults);
+            run_handler_for_idx<I>(handlers, active_bounds, outer_end, lower_bound, range_size_inclusive,
+                run_zero_defaults);
             return true;
         });
 }
@@ -1216,8 +1310,8 @@ reader<schema<Fs...>>::run_handlers(std::tuple<Hs...> &handlers, uintptr_t lower
 template <typename... Fs>
 template <size_t idx, typename... Hs>
 [[gnu::always_inline]] void
-reader<schema<Fs...>>::run_handler_for_idx(std::tuple<Hs...> &handlers, uintptr_t lower_bound,
-    uintptr_t range_size_inclusive, bool run_zero_defaults)
+reader<schema<Fs...>>::run_handler_for_idx(std::tuple<Hs...> &handlers, const limit &active_bounds,
+    const std::byte *outer_end, uintptr_t lower_bound, uintptr_t range_size_inclusive, bool run_zero_defaults)
 {
     const ppb_field &field = m_fields[idx];
 
@@ -1258,12 +1352,65 @@ reader<schema<Fs...>>::run_handler_for_idx(std::tuple<Hs...> &handlers, uintptr_
             if (reinterpret_cast<uintptr_t>(field.v.ptr) - lower_bound > range_size_inclusive) [[unlikely]]
                 return;
 
-            enum ppb_error result = std::get<handler_idx.value()>(handlers).handler(
-                Field::extract_value(field, &m_error));
+            using H = std::tuple_element_t<handler_idx.value(), std::tuple<Hs...>>;
+            enum ppb_error result;
+            if constexpr (H::is_submessage_handler())
+            {
+                // Proto3 for submessages isn't supported because:
+                //  1. proto3 doesn't even do that
+                //  2. it's probably not faster to parse a potentially empty message than to
+                //     conditionally branch over the whole thing
+                //  3. the way we extend the input span<> and truncate with a hard limit doesn't
+                //     work when the span's base pointer lies outside the input span.
+                static_assert(Field::semantics() != field_semantics::proto3_zero_default,
+                    "submessages are incompatible with proto3_zero_default (proto3 preserves proto2 last_write_wins for messages)");
+
+                if constexpr (detail::is_message_field_v<Field>)
+                {
+                    static_assert(std::is_same_v<typename Field::inner_schema, typename H::inner_schema_type>,
+                        "ppb::message<K, S> field paired with ppb::on_submessage<K, S2> requires S == S2");
+                }
+
+                std::span<const std::byte> payload(static_cast<const std::byte *>(field.v.payload.buf),
+                    field.v.payload.size);
+
+                result = std::get<handler_idx.value()>(handlers).invoke(payload, active_bounds, outer_end);
+            }
+            else
+            {
+                result = std::get<handler_idx.value()>(handlers).handler(
+                    Field::extract_value(field, &m_error));
+            }
+
             if (result != PPB_OK) [[unlikely]]
                 m_error = (m_error == PPB_OK) ? result : m_error;
         }
     }
+}
+
+// Out-of-line definition of `submessage_handler::invoke`: needs the
+// full definitions of `ppb::reader` and `ppb::limit`, which are
+// introduced after `ppb_detail.hpp` is included.
+template <auto K, typename InnerSchema, typename Init, typename... Hs>
+[[gnu::always_inline]] inline ppb_error
+detail::submessage_handler<K, InnerSchema, Init, Hs...>::invoke(std::span<const std::byte> payload,
+    const limit &active_bounds, const std::byte *outer_end)
+{
+    if (active_bounds.depth() == 0) [[unlikely]]
+        return PPB_ERROR_DEPTH_EXCEEDED;
+
+    const limit inner_bounds =
+        limit {}.with_max_depth(active_bounds.depth() - 1).with_hard_limit(payload.size());
+
+    // Suffix of the outer input span starting at the payload: extends
+    // through `outer_end` so the C lexer's unguarded multi-byte-ahead
+    // reads stay in-bounds; the hard byte limit caps logical work at
+    // `payload.size()`.
+    const std::byte *const suffix_data = payload.data();
+    const size_t suffix_size = static_cast<size_t>(outer_end - suffix_data);
+
+    reader<InnerSchema> inner(std::span<const std::byte>(suffix_data, suffix_size));
+    return inner.parse_tuple(init_cb, inner_bounds, inner_handlers);
 }
 
 }  // namespace ppb
