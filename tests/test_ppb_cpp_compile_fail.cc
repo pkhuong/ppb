@@ -10,6 +10,19 @@
 
 #include <ppb/ppb.hpp>
 
+enum class K : uint64_t
+{
+    f1 = 1,
+    f2 = 2,
+    f3 = 3,
+    f4 = 4
+};
+
+enum class K2 : uint64_t
+{
+    f1 = 1
+};
+
 // Out-of-range key tests
 
 /* expect-error: field tag key must be convertible to uint64_t */
@@ -78,36 +91,37 @@ static_assert(sizeof(ppb::schema<int>) > 0);
 
 /* expect-error: schema fields must all have the same Key type */
 #ifdef PPB_FAIL_SCHEMA_DIFFERENT_KEYS
-static_assert(sizeof(ppb::schema<ppb::varint<1>, ppb::varint<1L>>) > 0);
+static_assert(sizeof(ppb::schema<ppb::varint<K::f1>, ppb::varint<K2::f1>>) > 0);
 #endif
 
 /* expect-error: schema fields must be listed in strictly ascending order */
 #ifdef PPB_FAIL_SCHEMA_UNORDERED
-static_assert(sizeof(ppb::schema<ppb::varint<2>, ppb::i64<1>>) > 0);
+static_assert(sizeof(ppb::schema<ppb::varint<K::f2>, ppb::i64<K::f1>>) > 0);
 #endif
 
 /* expect-error: schema fields must be listed in strictly ascending order */
 #ifdef PPB_FAIL_SCHEMA_DUPLICATE_TAGS
-static_assert(sizeof(ppb::schema<ppb::varint<1>, ppb::varint<1>>) > 0);
+static_assert(sizeof(ppb::schema<ppb::varint<K::f1>, ppb::varint<K::f1>>) > 0);
 #endif
 
 /* expect-error: schema fields must be listed in strictly ascending order */
 #ifdef PPB_FAIL_SCHEMA_SAME_FIELD_WRONG_WIRE_ORDER
-static_assert(sizeof(ppb::schema<ppb::i32<1>, ppb::varint<1>>) > 0);
+static_assert(sizeof(ppb::schema<ppb::i32<K::f1>, ppb::varint<K::f1>>) > 0);
 #endif
 
 // meta() with a key absent from the schema
 
 /* expect-error: Key not found in schema */
 #ifdef PPB_FAIL_META_KEY_NOT_FOUND
-constexpr ppb_field_meta bad = ppb::reader<ppb::schema<ppb::varint<1>>> {}.meta<2>();
+constexpr ppb_field_meta bad = ppb::reader<ppb::schema<ppb::varint<K::f1>>> {}.meta<K::f2>();
 #endif
 
 // meta() with a key present in the schema, but a wire type not associated with it
 
 /* expect-error: Key not found in schema */
 #ifdef PPB_FAIL_META_WIRE_TYPE_NOT_FOUND
-constexpr ppb_field_meta bad = ppb::reader<ppb::schema<ppb::varint<1>>> {}.meta<1, ppb::wire_type::len>();
+constexpr ppb_field_meta bad =
+    ppb::reader<ppb::schema<ppb::varint<K::f1>>> {}.meta<K::f1, ppb::wire_type::len>();
 #endif
 
 // find_value_handler: multiple key+wire matches, none invocable with Arg
@@ -119,9 +133,9 @@ constexpr ppb_field_meta bad = ppb::reader<ppb::schema<ppb::varint<1>>> {}.meta<
 struct Foo
 {
 };
-constexpr auto bad = ppb::detail::find_value_handler<1, ppb::wire_type::varint, Foo>(
-    std::tuple { ppb::on<1, ppb::wire_type::varint>([](int) { }),
-        ppb::on<1, ppb::wire_type::varint>([](const char *) { }) });
+constexpr auto bad = ppb::detail::find_value_handler<K::f1, ppb::wire_type::varint, Foo>(
+    std::tuple { ppb::on<K::f1, ppb::wire_type::varint>([](int) { }),
+        ppb::on<K::f1, ppb::wire_type::varint>([](const char *) { }) });
 #endif
 
 // find_value_handler: multiple key+wire matches, multiple invocable with Arg
@@ -130,60 +144,61 @@ constexpr auto bad = ppb::detail::find_value_handler<1, ppb::wire_type::varint, 
 
 /* expect-error: multiple value_handlers match \(Key, wire\) and accept the argument type; ambiguous */
 #ifdef PPB_FAIL_FIND_VALUE_HANDLER_AMBIGUOUS
-constexpr auto bad = ppb::detail::find_value_handler<1, ppb::wire_type::varint, int>(std::tuple {
-    ppb::on<1, ppb::wire_type::varint>([](int) { }), ppb::on<1, ppb::wire_type::varint>([](int) { }) });
+constexpr auto bad = ppb::detail::find_value_handler<K::f1, ppb::wire_type::varint, int>(
+    std::tuple { ppb::on<K::f1, ppb::wire_type::varint>([](int) { }),
+        ppb::on<K::f1, ppb::wire_type::varint>([](int) { }) });
 #endif
 
 // find_value_handler: handler key type differs from the dispatch Key type
 //
-// Dispatch Key is the `int` literal `1`; the handler is built with the
-// `long` literal `1L`, so the all-same-key-type static_assert fires.
+// Dispatch Key is `K::f1`; the handler is built with `K2::f1`, so the
+// all-same-key-type static_assert fires.
 
 /* expect-error: every value_handler in the tuple must use the same key type as the dispatch Key */
 #ifdef PPB_FAIL_FIND_VALUE_HANDLER_KEY_TYPE_MISMATCH
-constexpr auto bad = ppb::detail::find_value_handler<1, ppb::wire_type::varint, int>(
-    std::tuple { ppb::on<1L, ppb::wire_type::varint>([](int) { }) });
+constexpr auto bad = ppb::detail::find_value_handler<K::f1, ppb::wire_type::varint, int>(
+    std::tuple { ppb::on<K2::f1, ppb::wire_type::varint>([](int) { }) });
 #endif
 
 // Same static_asserts exercised through the prescan() call path.
 
 static const uint8_t smoke_wire[] = { 0x08, 0x01 };  // field 1 varint 1
-using SmokeSchema = ppb::schema<ppb::varint<1>>;
+using SmokeSchema = ppb::schema<ppb::varint<K::f1>>;
 
 /* expect-error: multiple value_handlers match \(Key, wire\) and accept the argument type; ambiguous */
 #ifdef PPB_FAIL_PRESCAN_AMBIGUOUS_HANDLERS
 constexpr auto bad = ppb::reader<SmokeSchema>(smoke_wire, sizeof(smoke_wire))
-                         .prescan({}, ppb::on<1>([](const ppb_field &) -> ppb_error { return PPB_OK; }),
-                             ppb::on<1>([](const ppb_field &) -> ppb_error { return PPB_OK; }));
+                         .prescan({}, ppb::on<K::f1>([](const ppb_field &) -> ppb_error { return PPB_OK; }),
+                             ppb::on<K::f1>([](const ppb_field &) -> ppb_error { return PPB_OK; }));
 #endif
 
 /* expect-error: value_handlers match \(Key, wire\), but none is invocable with the argument type */
 #ifdef PPB_FAIL_PRESCAN_NONE_INVOCABLE
 constexpr auto bad = ppb::reader<SmokeSchema>(smoke_wire, sizeof(smoke_wire))
                          .prescan({},
-                             ppb::on<1, ppb::wire_type::varint>([](int) -> ppb_error { return PPB_OK; }),
-                             ppb::on<1, ppb::wire_type::varint>(
+                             ppb::on<K::f1, ppb::wire_type::varint>([](int) -> ppb_error { return PPB_OK; }),
+                             ppb::on<K::f1, ppb::wire_type::varint>(
                                  [](const char *) -> ppb_error { return PPB_OK; }));
 #endif
 
 /* expect-error: every value_handler in the tuple must use the same key type as the dispatch Key */
 #ifdef PPB_FAIL_PRESCAN_KEY_TYPE_MISMATCH
 constexpr auto bad = ppb::reader<SmokeSchema>(smoke_wire, sizeof(smoke_wire))
-                         .prescan({}, ppb::on<1L>([](const ppb_field &) -> ppb_error { return PPB_OK; }));
+                         .prescan({}, ppb::on<K2::f1>([](const ppb_field &) -> ppb_error { return PPB_OK; }));
 #endif
 
 // auto_schema: a non-field leaf (top-level) is rejected.
 
 /* expect-error: auto_schema arguments must be field_generic_base */
 #ifdef PPB_FAIL_AUTO_SCHEMA_NOT_A_FIELD
-static_assert(sizeof(ppb::auto_schema<ppb::varint<1>, int>) > 0);
+static_assert(sizeof(ppb::auto_schema<ppb::varint<K::f1>, int>) > 0);
 #endif
 
 // auto_schema: a non-field leaf nested inside a tuple is rejected.
 
 /* expect-error: auto_schema arguments must be field_generic_base */
 #ifdef PPB_FAIL_AUTO_SCHEMA_NESTED_NOT_A_FIELD
-static_assert(sizeof(ppb::auto_schema<std::tuple<ppb::varint<1>, int>>) > 0);
+static_assert(sizeof(ppb::auto_schema<std::tuple<ppb::varint<K::f1>, int>>) > 0);
 #endif
 
 // auto_schema: duplicate (key, wire) pair is caught by schema's
@@ -191,7 +206,7 @@ static_assert(sizeof(ppb::auto_schema<std::tuple<ppb::varint<1>, int>>) > 0);
 
 /* expect-error: schema fields must be listed in strictly ascending order */
 #ifdef PPB_FAIL_AUTO_SCHEMA_DUPLICATE
-static_assert(sizeof(ppb::auto_schema<ppb::varint<2>, ppb::varint<2>>) > 0);
+static_assert(sizeof(ppb::auto_schema<ppb::varint<K::f2>, ppb::varint<K::f2>>) > 0);
 #endif
 
 // auto_schema: empty input flattens to an empty schema, which is rejected.
@@ -210,7 +225,7 @@ static_assert(sizeof(ppb::auto_schema<std::tuple<>>) > 0);
 
 /* expect-error: schema fields must all have the same Key type */
 #ifdef PPB_FAIL_AUTO_SCHEMA_DIFFERENT_KEYS
-static_assert(sizeof(ppb::auto_schema<ppb::varint<1>, ppb::varint<1L>>) > 0);
+static_assert(sizeof(ppb::auto_schema<ppb::varint<K::f1>, ppb::varint<K2::f1>>) > 0);
 #endif
 
 // unknown<>: only the four real wire types are accepted.
@@ -231,7 +246,7 @@ static_assert(sizeof(ppb::unknown<static_cast<ppb::wire_type>(3)>) > 0);
 
 /* expect-error: schema fields must be listed in strictly ascending order */
 #ifdef PPB_FAIL_UNKNOWN_BEFORE_REAL_FIELD
-static_assert(sizeof(ppb::schema<ppb::unknown<ppb::wire_type::varint>, ppb::varint<1>>) > 0);
+static_assert(sizeof(ppb::schema<ppb::unknown<ppb::wire_type::varint>, ppb::varint<K::f1>>) > 0);
 #endif
 
 // Orphaned handler: on<Key> with a key absent from the schema.
@@ -265,7 +280,7 @@ static void
 trigger_run_handlers_wrong_wire()
 {
     ppb::reader<SmokeSchema>().prescan({},
-        ppb::on<1, ppb::wire_type::i64>([](const ppb_field &) -> ppb_error { return PPB_OK; }));
+        ppb::on<K::f1, ppb::wire_type::i64>([](const ppb_field &) -> ppb_error { return PPB_OK; }));
 }
 #endif
 
@@ -290,7 +305,7 @@ trigger_run_handlers_orphaned_unknown()
 
 /* expect-error: on<Key> or on_unknown<> handler does not match any schema field */
 #ifdef PPB_FAIL_RUN_HANDLERS_ON_UNKNOWN_WRONG_WIRE
-using WrongWireS = ppb::schema<ppb::varint<1>, ppb::unknown<ppb::wire_type::varint>>;
+using WrongWireS = ppb::schema<ppb::varint<K::f1>, ppb::unknown<ppb::wire_type::varint>>;
 static void
 trigger_run_handlers_unknown_wrong_wire()
 {
@@ -353,13 +368,14 @@ trigger_parse_limit_as_init()
 
 /* expect-error: on<Key> or on_unknown<> handler does not match any schema field */
 #ifdef PPB_FAIL_ON_SUBMESSAGE_NON_LEN_FIELD
-using NonLenSchema = ppb::schema<ppb::varint<1>>;
-using DummyInner = ppb::schema<ppb::varint<1>>;
+using NonLenSchema = ppb::schema<ppb::varint<K::f1>>;
+using DummyInner = ppb::schema<ppb::varint<K::f1>>;
 static void
 trigger_on_submessage_non_len_field()
 {
     ppb::reader<NonLenSchema>().parse(ppb::limit::max_depth(1),
-        ppb::on_submessage<1, DummyInner>(ppb::on<1>([](const ppb_field &) -> ppb_error { return PPB_OK; })));
+        ppb::on_submessage<K::f1, DummyInner>(
+            ppb::on<K::f1>([](const ppb_field &) -> ppb_error { return PPB_OK; })));
 }
 #endif
 
@@ -369,16 +385,17 @@ trigger_on_submessage_non_len_field()
 
 /* expect-error: ppb::message<K, S> field paired with ppb::on_submessage<K, S2> requires S == S2 */
 #ifdef PPB_FAIL_ON_SUBMESSAGE_SCHEMA_MISMATCH
-using InnerA = ppb::schema<ppb::varint<1>>;
-using InnerB = ppb::schema<ppb::utf8string<2>>;
-using OuterMismatch = ppb::schema<ppb::message<1, InnerA>>;
+using InnerA = ppb::schema<ppb::varint<K::f1>>;
+using InnerB = ppb::schema<ppb::utf8string<K::f2>>;
+using OuterMismatch = ppb::schema<ppb::message<K::f1, InnerA>>;
 static const uint8_t mismatch_wire[] = { 0x0a, 0x00 };  // f1 = LEN(0)
 static void
 trigger_on_submessage_schema_mismatch()
 {
     ppb::reader<OuterMismatch> r(mismatch_wire, sizeof(mismatch_wire));
     (void)r.parse(ppb::limit::max_depth(1),
-        ppb::on_submessage<1, InnerB>(ppb::on<2>([](std::string_view) -> ppb_error { return PPB_OK; })));
+        ppb::on_submessage<K::f1, InnerB>(
+            ppb::on<K::f2>([](std::string_view) -> ppb_error { return PPB_OK; })));
 }
 #endif
 
@@ -390,14 +407,15 @@ trigger_on_submessage_schema_mismatch()
 struct NotASchema
 {
 };
-using OuterRawForBadInner = ppb::schema<ppb::bytes<1>>;
+using OuterRawForBadInner = ppb::schema<ppb::bytes<K::f1>>;
 static const uint8_t bad_inner_wire[] = { 0x0a, 0x00 };
 static void
 trigger_on_submessage_inner_not_a_schema()
 {
     ppb::reader<OuterRawForBadInner> r(bad_inner_wire, sizeof(bad_inner_wire));
     (void)r.parse(ppb::limit::max_depth(1),
-        ppb::on_submessage<1, NotASchema>(ppb::on<1>([](const ppb_field &) -> ppb_error { return PPB_OK; })));
+        ppb::on_submessage<K::f1, NotASchema>(
+            ppb::on<K::f1>([](const ppb_field &) -> ppb_error { return PPB_OK; })));
 }
 #endif
 
@@ -407,8 +425,8 @@ trigger_on_submessage_inner_not_a_schema()
 
 /* expect-error: submessages must not have proto3_zero_default semantics */
 #ifdef PPB_FAIL_MESSAGE_PROTO3
-using MsgInner = ppb::schema<ppb::varint<1>>;
-static_assert(sizeof(ppb::message<1, MsgInner, ppb::field_semantics::proto3_zero_default>) > 0);
+using MsgInner = ppb::schema<ppb::varint<K::f1>>;
+static_assert(sizeof(ppb::message<K::f1, MsgInner, ppb::field_semantics::proto3_zero_default>) > 0);
 #endif
 
 // on_submessage handler paired with a proto3 field (even a non-message LEN
@@ -416,12 +434,13 @@ static_assert(sizeof(ppb::message<1, MsgInner, ppb::field_semantics::proto3_zero
 
 /* expect-error: submessages are incompatible with proto3_zero_default */
 #ifdef PPB_FAIL_ON_SUBMESSAGE_PROTO3_FIELD
-using SubInner = ppb::schema<ppb::varint<1>>;
-using SubOuter = ppb::schema<ppb::bytes<1, std::byte, ppb::field_semantics::proto3_zero_default>>;
+using SubInner = ppb::schema<ppb::varint<K::f1>>;
+using SubOuter = ppb::schema<ppb::bytes<K::f1, std::byte, ppb::field_semantics::proto3_zero_default>>;
 static void
 trigger_on_submessage_proto3_field()
 {
     ppb::reader<SubOuter>().prescan({},
-        ppb::on_submessage<1, SubInner>(ppb::on<1>([](const ppb_field &) -> ppb_error { return PPB_OK; })));
+        ppb::on_submessage<K::f1, SubInner>(
+            ppb::on<K::f1>([](const ppb_field &) -> ppb_error { return PPB_OK; })));
 }
 #endif
