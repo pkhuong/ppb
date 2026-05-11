@@ -383,22 +383,36 @@ le_packed<T>::value() const
 {
     if constexpr (std::endian::native == std::endian::little)
     {
-        return x;
+        T result;
+        std::memcpy(&result, &data, sizeof(T));
+        return result;
     }
-
-    if constexpr (sizeof(T) == 4)
+    else if constexpr (std::endian::native == std::endian::big)
     {
-        uint32_t raw;
-        std::memcpy(&raw, &x, sizeof(T));
-        raw = __builtin_bswap32(raw);
-        return std::bit_cast<T>(raw);
+        if constexpr (sizeof(T) == 4)
+        {
+            uint32_t raw;
+            std::memcpy(&raw, &data, sizeof(T));
+            raw = __builtin_bswap32(raw);
+            return std::bit_cast<T>(raw);
+        }
+        else if constexpr (sizeof(T) == 8)
+        {
+            uint64_t raw;
+            std::memcpy(&raw, &data, sizeof(T));
+            raw = __builtin_bswap64(raw);
+            return std::bit_cast<T>(raw);
+        }
+        else
+        {
+            static_assert(sizeof(T) == 4 || sizeof(T) == 8,
+                "le_packed only has byte-swapping logic for 4 and 8 bytes");
+        }
     }
     else
     {
-        uint64_t raw;
-        std::memcpy(&raw, &x, sizeof(T));
-        raw = __builtin_bswap64(raw);
-        return std::bit_cast<T>(raw);
+        static_assert(sizeof(T) != sizeof(T), "ppb only supports little- and big-endian platforms");
+        return T {};
     }
 }
 

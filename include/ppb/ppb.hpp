@@ -311,15 +311,10 @@ using proto3_bytes = bytes<K, Element, field_semantics::proto3_zero_default>;
 // wrapping scalars in submessages specifically to detect presence)
 // Use plain message<K, InnerSchema> for both proto2 and proto3.
 
-// Wraps a fixed-width value stored as little-endian, unaligned bytes
-// (the protobuf wire format for fixed32/sfixed32/fixed64/sfixed64/
-// float/double).  Conversion to `T` returns the host-order value,
-// byte-swapping if the host is big-endian.
-//
-// The type is `[[gnu::packed]]` so that `alignof(le_packed<T>) == 1`,
-// which lets `bytes<K, le_packed<T>>` reinterpret a LEN payload as a
-// span of `le_packed<T>` regardless of payload alignment.
-template <typename T> struct [[gnu::packed]] le_packed
+// Wraps a fixed-width value as little-endian, unaligned bytes (the
+// wire format for fixed32/sfixed32/fixed64/sfixed64/float/double).
+// Conversion to `T` returns the host-order value.
+template <typename T> struct le_packed
 {
     static_assert(std::is_trivially_copyable_v<T>,
         "ppb::le_packed requires a trivially copyable element type");
@@ -328,8 +323,7 @@ template <typename T> struct [[gnu::packed]] le_packed
     T value() const;
     [[gnu::always_inline]] operator T() const { return value(); }
 
-private:
-    T x;
+    std::byte data[sizeof(T)];
 };
 
 // Packed repeated field types
