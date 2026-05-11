@@ -444,3 +444,13 @@ trigger_on_submessage_proto3_field()
             ppb::on<K::f1>([](const ppb_field &) -> ppb_error { return PPB_OK; })));
 }
 #endif
+
+/* expect-error: enum.*evaluated to.*false */
+#ifdef PPB_FAIL_ENUMERATED_NOT_AN_ENUM
+static_assert(sizeof(ppb::enumerated<1, int>) > 0);
+#endif
+
+/* expect-error: enum.*evaluated to.*false */
+#ifdef PPB_FAIL_PACKED_ENUMERATED_NOT_AN_ENUM
+static_assert(sizeof(ppb::packed_enumerated<1, int>) > 0);
+#endif

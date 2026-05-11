@@ -274,6 +274,7 @@ template <auto K, field_semantics sem> struct boolean : public varint<K, sem>
 };
 
 template <auto K, typename Enum, field_semantics sem, typename UnderlyingType>
+    requires detail::enum_type<Enum>
 struct enumerated : public varint<K, sem>
 {
     static_assert(std::is_enum_v<Enum>, "enumerated field type requires an enum type parameter");
@@ -1208,8 +1209,11 @@ template <auto K> struct packed_boolean : public len<K, field_semantics::repeate
 };
 
 template <auto K, typename Enum, typename UnderlyingType>
+    requires detail::enum_type<Enum>
 struct packed_enumerated : public len<K, field_semantics::repeated>
 {
+    static_assert(std::is_enum_v<Enum>, "enumerated field type requires an enum type parameter");
+
     static constexpr auto extract_value(const ppb_field &f, ppb_error *error)
     {
         return detail::packed_varint_view<Enum, detail::enum_decode<UnderlyingType>>(

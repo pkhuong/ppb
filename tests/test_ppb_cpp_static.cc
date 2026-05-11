@@ -82,6 +82,12 @@ enum class test_enum : int
 static_assert(
     std::is_same_v<ppb::proto3_enumerated<8, test_enum>, ppb::enumerated<8, test_enum, proto3_zero_default>>);
 
+// counterpart to PPB_FAIL_ENUMERATED_NOT_AN_ENUM
+static_assert(sizeof(ppb::enumerated<9, test_enum>) > 0);
+
+// counterpart to PPB_FAIL_PACKED_ENUMERATED_NOT_AN_ENUM
+static_assert(sizeof(ppb::packed_enumerated<10, test_enum>) > 0);
+
 // I32-backed
 static_assert(std::is_same_v<ppb::proto3_fixed32<9>, ppb::fixed32<9, proto3_zero_default>>);
 static_assert(std::is_same_v<ppb::proto3_sfixed32<10>, ppb::sfixed32<10, proto3_zero_default>>);

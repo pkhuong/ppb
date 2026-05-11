@@ -218,6 +218,26 @@ template <auto K, field_semantics sem = field_semantics::last_write_wins> struct
 template <auto K, field_semantics sem = field_semantics::last_write_wins> struct uint64;
 template <auto K, field_semantics sem = field_semantics::last_write_wins> struct boolean;
 
+namespace detail
+{
+
+template <typename T>
+concept enum_type = std::is_enum_v<T>;
+
+template <typename T, bool = enum_type<T>> struct enum_underlying_type_impl
+{
+    using type = void;
+};
+
+template <typename T> struct enum_underlying_type_impl<T, true>
+{
+    using type = std::underlying_type_t<T>;
+};
+
+template <typename T> using enum_underlying_type = typename enum_underlying_type_impl<T>::type;
+
+}  // namespace detail
+
 // Varint-backed enum field.  `Enum` must have a fixed underlying type
 // (e.g. `enum class Color : uint32_t`).  Wire values are first
 // converted to `Enum`'s underlying type and then to `Enum`, which is
@@ -227,7 +247,8 @@ template <auto K, field_semantics sem = field_semantics::last_write_wins> struct
 //
 // proto2 last-write-wins semantics by default.
 template <auto K, typename Enum, field_semantics sem = field_semantics::last_write_wins,
-    typename UnderlyingType = std::underlying_type_t<Enum>>
+    typename UnderlyingType = detail::enum_underlying_type<Enum>>
+    requires detail::enum_type<Enum>
 struct enumerated;
 
 // I32-backed scalar field types. proto2 last-write-wins semantics by default
@@ -319,7 +340,8 @@ template <auto K> struct packed_sint64;
 template <auto K> struct packed_uint32;
 template <auto K> struct packed_uint64;
 template <auto K> struct packed_boolean;
-template <auto K, typename Enum, typename UnderlyingType = std::underlying_type_t<Enum>>
+template <auto K, typename Enum, typename UnderlyingType = detail::enum_underlying_type<Enum>>
+    requires detail::enum_type<Enum>
 struct packed_enumerated;
 template <auto K> struct packed_fixed32;
 template <auto K> struct packed_sfixed32;
