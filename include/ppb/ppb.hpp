@@ -365,15 +365,17 @@ using unpacked_bytes = bytes<K, Element, field_semantics::repeated>;
 template <auto K, typename InnerSchema>
 using unpacked_message = message<K, InnerSchema, field_semantics::repeated>;
 
-// Convenience tuple that registers the catch-all entry for every wire
-// type at once.  Use with `auto_schema` to opt into unknown-field
-// detection without listing the four unknown fields explicitly:
+// Tuple that registers the catch-all for every wire type at once;
+// drop into `auto_schema` to opt into unknown-field detection without
+// listing the four unknowns explicitly.  Accepts an optional
+// `field_semantics` (defaults to `repeated`) to control how unknown
+// fields are classified:
 //
-//   using S = ppb::auto_schema<MyFields..., ppb::detect_unknown_fields>;
-//
-// Detection happens in `reader::prescan` or `reader::parse`.
-using detect_unknown_fields = std::tuple<unknown<wire_type::varint>, unknown<wire_type::i64>,
-    unknown<wire_type::len>, unknown<wire_type::i32>>;
+//   using S = ppb::auto_schema<MyFields..., ppb::detect_unknown_fields<>>;
+//   using Strict = ppb::auto_schema<MyFields..., ppb::detect_unknown_fields<field_semantics::error>>;
+template <field_semantics sem = field_semantics::repeated>
+using detect_unknown_fields = std::tuple<unknown<wire_type::varint, sem>, unknown<wire_type::i64, sem>,
+    unknown<wire_type::len, sem>, unknown<wire_type::i32, sem>>;
 
 }  // namespace ppb
 

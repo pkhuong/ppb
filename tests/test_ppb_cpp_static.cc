@@ -410,7 +410,7 @@ static_assert(!ppb::field_generic_base::is_unknown());
 
 // `auto_schema` flatten + sort places `detect_unknown_fields` at the tail
 // of the schema in wire-type order.
-using auto_with_catchalls = ppb::auto_schema<ppb::varint<K::f1>, ppb::detect_unknown_fields>;
+using auto_with_catchalls = ppb::auto_schema<ppb::varint<K::f1>, ppb::detect_unknown_fields<>>;
 static_assert(auto_with_catchalls::num_fields() == 5);
 // Tail four entries should be the catch-alls in varint/i64/len/i32 order.
 static_assert(auto_with_catchalls::s_encoded_tags[1].bits == PPB_TAG_BITS(uint64_t(-1), 0));
@@ -431,7 +431,7 @@ enum class K : uint64_t
     one = 1,
     two = 2
 };
-using S = ppb::auto_schema<ppb::varint<K::one>, ppb::i64<K::two>, ppb::detect_unknown_fields>;
+using S = ppb::auto_schema<ppb::varint<K::one>, ppb::i64<K::two>, ppb::detect_unknown_fields<>>;
 static_assert(S::num_fields() == 6);
 static_assert(std::is_same_v<S::Key, K>);
 }  // namespace enum_key
@@ -439,11 +439,16 @@ static_assert(std::is_same_v<S::Key, K>);
 // `unknown<>` also accepts a non-default field_semantics.
 static_assert(sizeof(ppb::unknown<ppb::wire_type::varint, ppb::field_semantics::last_write_wins>) > 0);
 
+// `detect_unknown_fields` with non-default semantics.
+static_assert(sizeof(ppb::auto_schema<ppb::detect_unknown_fields<ppb::field_semantics::error>>) > 0);
+static_assert(
+    sizeof(ppb::auto_schema<ppb::detect_unknown_fields<ppb::field_semantics::last_write_wins>>) > 0);
+
 // Catch-all-only schemas compile: `key_of` skips fields without a
 // `Key` typedef, so the schema resolves to the empty-pack default
 // (`int`) and the same-Key-type check passes vacuously.
 static_assert(sizeof(ppb::schema<ppb::unknown<ppb::wire_type::varint>>) > 0);
-static_assert(sizeof(ppb::auto_schema<ppb::detect_unknown_fields>) > 0);
+static_assert(sizeof(ppb::auto_schema<ppb::detect_unknown_fields<>>) > 0);
 
 }  // namespace test_unknown_field
 

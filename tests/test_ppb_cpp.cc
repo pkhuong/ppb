@@ -2546,7 +2546,7 @@ test_dispatch_when_ok_and_when_error()
 static void
 test_reuse_reader_without_reset_fields()
 {
-    using S = ppb::auto_schema<ppb::varint<1>, ppb::detect_unknown_fields>;
+    using S = ppb::auto_schema<ppb::varint<1>, ppb::detect_unknown_fields<>>;
 
     // Two concatenated single-field messages: field 1 varint, then
     // field 7 varint (unknown — not in the schema).
@@ -2869,7 +2869,7 @@ static const uint8_t known_plus_unknown_wire[] = {
 };
 
 using KnownSchema = ppb::schema<ppb::varint<1>>;
-using KnownPlusUnknownSchema = ppb::auto_schema<ppb::varint<1>, ppb::detect_unknown_fields>;
+using KnownPlusUnknownSchema = ppb::auto_schema<ppb::varint<1>, ppb::detect_unknown_fields<>>;
 
 // Without catch-alls, unknown tags are silently skipped and
 // `unknown_field()` stays `nullopt`.
@@ -3036,7 +3036,7 @@ test_on_unknown_per_wire_dispatch()
         0x4d, 0x2a, 0x00, 0x00, 0x00, /* field 9 i32 42 (unknown) */
     };
 
-    using S = ppb::auto_schema<ppb::varint<1>, ppb::detect_unknown_fields>;
+    using S = ppb::auto_schema<ppb::varint<1>, ppb::detect_unknown_fields<>>;
     ppb::reader<S> r(mixed_wire, sizeof(mixed_wire));
 
     int varint_calls = 0;
