@@ -644,7 +644,16 @@ push_back(C *container)
     return on<Key, wire>(
         [container](auto v) -> ppb_error
         {
-            container->push_back(std::move(v));
+            if constexpr (detail::is_packed_range_v<std::decay_t<decltype(v)>>)
+            {
+                for (auto &&elem : v)
+                    container->push_back(elem);
+            }
+            else
+            {
+                container->push_back(std::move(v));
+            }
+
             return PPB_OK;
         });
 }
@@ -656,7 +665,16 @@ emplace_back(C *container)
     return on<Key, wire>(
         [container](auto v) -> ppb_error
         {
-            container->emplace_back(std::move(v));
+            if constexpr (detail::is_packed_range_v<std::decay_t<decltype(v)>>)
+            {
+                for (auto &&elem : v)
+                    container->emplace_back(elem);
+            }
+            else
+            {
+                container->emplace_back(std::move(v));
+            }
+
             return PPB_OK;
         });
 }

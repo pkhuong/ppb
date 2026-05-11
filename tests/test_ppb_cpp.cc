@@ -3188,6 +3188,68 @@ test_handler_factories()
         CHECK(v[1] == 2);
     }
 
+    // push_back: packed_fixed32 iterates element-by-element over span<const le_packed<uint32_t>>
+    {
+        using S = ppb::schema<ppb::packed_fixed32<K::one>>;
+        static const uint8_t wire[] = {
+            0x0a, 0x08, /* f1 bytes header (8 payload bytes) */
+            0xef, 0xbe, 0xad, 0xde, /* 0xDEADBEEF */
+            0xbe, 0xba, 0xfe, 0xca, /* 0xCAFEBABE */
+        };
+        std::vector<uint32_t> v;
+        ppb::reader<S> r(wire, sizeof(wire));
+        CHECK(r.parse(ppb::push_back<K::one>(&v)) == PPB_OK);
+        CHECK(v.size() == 2);
+        CHECK(v[0] == 0xDEADBEEFU);
+        CHECK(v[1] == 0xCAFEBABEU);
+    }
+
+    // push_back: packed_int32 iterates element-by-element over packed_varint_view
+    {
+        using S = ppb::schema<ppb::packed_int32<K::one>>;
+        static const uint8_t wire[] = {
+            0x0a, 0x04, 0x01, 0x02, 0xac, 0x02, /* f1 = [1, 2, 300] */
+        };
+        std::vector<int32_t> v;
+        ppb::reader<S> r(wire, sizeof(wire));
+        CHECK(r.parse(ppb::push_back<K::one>(&v)) == PPB_OK);
+        CHECK(v.size() == 3);
+        CHECK(v[0] == 1);
+        CHECK(v[1] == 2);
+        CHECK(v[2] == 300);
+    }
+
+    // emplace_back: packed_fixed64 iterates element-by-element over span<const le_packed<uint64_t>>
+    {
+        using S = ppb::schema<ppb::packed_fixed64<K::one>>;
+        static const uint8_t wire[] = {
+            0x0a, 0x10, /* f1 bytes header (16 bytes) */
+            0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, /* 1 */
+            0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, /* 2 */
+        };
+        std::vector<uint64_t> v;
+        ppb::reader<S> r(wire, sizeof(wire));
+        CHECK(r.parse(ppb::emplace_back<K::one>(&v)) == PPB_OK);
+        CHECK(v.size() == 2);
+        CHECK(v[0] == 1);
+        CHECK(v[1] == 2);
+    }
+
+    // emplace_back: packed_sint64 iterates element-by-element over packed_varint_view
+    {
+        using S = ppb::schema<ppb::packed_sint64<K::one>>;
+        static const uint8_t wire[] = {
+            0x0a, 0x03, 0x01, 0x03, 0x05, /* f1 = [-1, -2, -3] (zigzag: odds are negative) */
+        };
+        std::vector<int64_t> v;
+        ppb::reader<S> r(wire, sizeof(wire));
+        CHECK(r.parse(ppb::emplace_back<K::one>(&v)) == PPB_OK);
+        CHECK(v.size() == 3);
+        CHECK(v[0] == -1);
+        CHECK(v[1] == -2);
+        CHECK(v[2] == -3);
+    }
+
     // parse() with two handlers: overload resolution picks Handlers... directly.
     {
         using S = ppb::schema<ppb::int32<K::one>, ppb::int32<K::two>>;
