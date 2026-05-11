@@ -1121,6 +1121,16 @@ private:
     iterator m_begin;
 };
 
+// True for span<const le_packed<T>> and packed_varint_view<T, Policy>.
+// Used by ppb::push_back / ppb::emplace_back to iterate element-by-element
+// instead of pushing the view as a single value.
+template <typename T> inline constexpr bool is_packed_range_v = false;
+
+template <typename T> inline constexpr bool is_packed_range_v<std::span<const le_packed<T>>> = true;
+
+template <typename T, typename Policy>
+inline constexpr bool is_packed_range_v<packed_varint_view<T, Policy>> = true;
+
 }  // namespace detail
 
 // Packed repeated field types: some need the packed_varint_view above.
