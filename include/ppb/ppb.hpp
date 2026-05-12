@@ -269,7 +269,7 @@ template <typename... Fs> struct reader<schema<Fs...>>
         ptrdiff_t ret = ppb_prescan_impl(make_ppb_buf(), m_fields.size(), Schema::s_encoded_tags.data(),
             m_fields.data(), bounds.fields(), bounds.bytes(), bounds.error_on_bytes());
 
-        if (ret < 0) [[unlikely]]
+        if (ret <= 0) [[unlikely]]
         {
             m_error = ppb_error(ret);
             return m_error;
