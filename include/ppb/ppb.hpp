@@ -37,7 +37,7 @@
 //   - `ppb::detect_unknown_fields<sem>` -- catch-all tuple for all four wire
 //     types; drop into `auto_schema` to opt into unknown-field reporting.
 //     `sem` defaults to `field_semantics::repeated`; use `field_semantics::error`
-//     to automatically report unknown fields as errors.
+//     to automatically report unknown fields as errors (with `reader::parse` only).
 //   - `ppb::reader<Schema>` -- stateful driver over a byte span.
 //   - `reader::parse(...)` -- prescan, optional lexn pass, dispatch.
 //     Lower-level `prescan`, `lexn`, `lex_all`, `dispatch` are also
@@ -115,15 +115,15 @@ enum class wire_type : uint8_t
 //                   proto2 default field semantics for scalars.
 //
 //   proto3_zero_default Like `last_write_wins`, plus: absent fields
-//                   are dispatched with their zero value (0 / empty
+//                   *may be* dispatched with their zero value (0 / empty
 //                   span) when `parse()` takes the prescan fast path.
-//                   On the fast path, a present-but-zero field is
-//                   indistinguishable from an absent field.  See the
-//                   `ppb::proto3_<scalar>` aliases.
+//                   See the `ppb::proto3_<scalar>` aliases.
 //
 //   error           Any occurrence makes `parse()` return
 //                   PPB_ERROR_CORRUPT_TAG, set `reader::error_field()`,
-//                   and skip both `init` and handlers.
+//                   and skip both `init` and handlers.  Only `parse()`
+//                   honors this; direct `prescan`/`lexn`/`dispatch`
+//                   calls do not flag `error`-semantics fields.
 //
 // N.B., there is no guarantee for `proto3_zero_default` that the
 // handler will or won't be invoked with a zero value for an absent
@@ -136,7 +136,7 @@ enum class field_semantics : int8_t
     singular = 1,  // it's ok to do LWW if all the squashed values are equivalent
     last_write_wins = 2,  // we only want to see the last value (regular proto semantics)
     proto3_zero_default = 3,  // LWW but impl may optionally dispatch absent fields as zero/empty
-    error = 127,  // just report a PPB_ERROR_CORRUPT_TAG if we see this
+    error = 127,  // just report a PPB_ERROR_CORRUPT_TAG if we see this *in `reader::parse`*
 };
 
 // PPB field descriptors all inherit from `field_base<K, T>`, which is-a
@@ -226,6 +226,11 @@ struct bytes;
 // field; the extra type information lets `ppb::on_submessage<K, S>`
 // statically verify that the schema and the handler agree on the
 // inner type.  Last-write-wins by default.
+//
+// N.B., by default, the `limit::max_depth()` is set to 0, so
+// `on_submessage` always fails with `PPB_ERROR_DEPTH_EXCEEDED`; relax
+// that the recursion depth budget to a strictly positive value to
+// enable submessage parsing.
 template <auto K, typename InnerSchema, field_semantics sem = field_semantics::last_write_wins>
 struct message;
 
@@ -496,7 +501,13 @@ private:
 // field matches.  The handler's argument type must match the field's
 // decoded value (typed scalars yield typed arguments; raw
 // `varint`/`i64`/`len`/`i32` yield `const ppb_field &`; packed varint
-// fields yield a lazy view).
+// fields yield a lazy view that must not outlive the reader).
+//
+// When the argument is a `std::span<>` or `std::string_view`, the
+// value is borrowed from the input span, and must not outlive that
+// span.  When the argument is a `packed_varint_view`, the value
+// borrows from the input span *and holds a mutable pointer to the
+// `reader<>`*, so must not outlive the callback's invocation.
 //
 // `Key` must share the schema's `Key` C++ type; mixing integer
 // literals with an `enum class`-keyed schema is a compile error.
@@ -547,6 +558,9 @@ on(Fn &&handler)
 // the depth budget propagates to the inner reader (decremented by
 // one): `max_fields` and the outer byte cap are not inherited.  The
 // inner hard byte cap is the payload size.
+//
+// The `ppb_error`, if any, is propagated (modulo stickiness of the
+// first write), but `unknown_field()` and `error_field()` aren't.
 template <auto Key, typename InnerSchema, typename... Hs>
     requires(detail::is_handler_v<Hs> && ...)
 [[nodiscard]] constexpr auto

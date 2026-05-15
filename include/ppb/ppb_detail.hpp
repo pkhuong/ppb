@@ -1009,6 +1009,9 @@ template <typename UnderlyingType> struct enum_decode
 // the error into the reader (first-write-wins) and exhausts.  The
 // captured byte range lives in the input span; the error pointer
 // lives in the reader.
+//
+// Must not outlive the callback that received the parent
+// `packed_varint_view` from `reader::dispatch()`.
 template <typename T, typename Policy> class packed_varint_iter
 {
 public:
@@ -1085,6 +1088,13 @@ private:
     T m_current = T {};
 };
 
+// Lazily decoded view over a packed-varint LEN payload, handed to
+// handlers for `packed_int32`/`packed_uint64`/etc. The captured byte
+// range lives in the input span; the error pointer lives in the
+// reader.
+//
+// Must not outlive the callback that received the parent
+// `packed_varint_view` from `reader::dispatch()`.
 template <typename T, typename Policy> class packed_varint_view
 {
 public:
