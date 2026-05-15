@@ -478,8 +478,8 @@ ppb_prescan_impl(const struct ppb_buf buf, const size_t num_fields,
         size_t field_idx = find_tag(num_fields, tags, tag);
         /*@ for well_formed: assert error ≢ PPB_OK ==> tag ≡ 0; */
         /*
-         * All encoded_tags are > 7: fields[0].tag.bits > 7 and the
-         * array is strictly sorted, so each element > 7.
+         * All encoded_tags are > 7: fields[0].bits > 7 and the array
+         * is strictly sorted, so each element > 7.
          * find_tag postcondition: field_idx < num_fields ==> tags[field_idx].bits ≡ tag.
          * Together: field_idx < num_fields ==> tag > 7.
          */

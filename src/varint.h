@@ -137,7 +137,7 @@ peek_varint_slow(struct ppb_buf src, uint64_t *restrict OUT_varint, size_t limb_
  * Attempts to decode the next varint at the head of `src`.
  *
  * Populates `OUT_varint` with the result (or 0 on error), and returns
- * the strictiy positive number of bytes read on success, or a
+ * the strictly positive number of bytes read on success, or a
  * negative `enum ppb_error` value on failure.
  */
 /*@ requires buf_valid(src);
@@ -175,7 +175,7 @@ peek_varint(struct ppb_buf src, uint64_t *restrict OUT_varint)
 }
 
 /*
- * Attemps to decode and consume the next varint at the head of `src`;
+ * Attempts to decode and consume the next varint at the head of `src`;
  * the `error` must be zero on entry.
  *
  * Returns the decoded value on success, or 0 on error (but 0 is also
@@ -216,7 +216,7 @@ decode_varint(struct ppb_buf *restrict src, enum ppb_error *restrict error, uint
 /*
  * Attempts to decode the next tag at the head of `src`.
  *
- * Populates `OUT_varint` with the result (or 0 on error), and returns
+ * Populates `OUT_tag` with the result (or 0 on error), and returns
  * the strictiy positive number of bytes read on success, or a
  * negative `enum ppb_error` value on failure.
  *
@@ -224,8 +224,8 @@ decode_varint(struct ppb_buf *restrict src, enum ppb_error *restrict error, uint
  * continuation/stop bit at the top of every byte is left in place;
  * this is fine for tag purposes because we only care about the low 3
  * bits (same regardless of the top bits), ordering (unaffected by the
- * top bits), and identity (fine as long as we the top bits match on
- * both sides).  Leaving the top bits avoids a call to `squish_varint`,
+ * top bits), and identity (fine as long as the top bits match on both
+ * sides).  Leaving the top bits avoids a call to `squish_varint`,
  * which is currently non-trivial outside x86.
  *
  * It's also fine to keep these redundant bits in because a valid protobuf
@@ -276,7 +276,7 @@ peek_tag(struct ppb_buf src, uint64_t *restrict OUT_tag)
 }
 
 /*
- * Attemps to decode and consume the next tag at the head of `src`;
+ * Attempts to decode and consume the next tag at the head of `src`;
  * the `error` must be zero on entry.
  *
  * Returns the decoded value on success, or 0 on error (but 0 is also

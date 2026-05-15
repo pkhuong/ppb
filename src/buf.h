@@ -59,7 +59,7 @@ buf_check(struct ppb_buf src, uint64_t delta, enum ppb_error *restrict error)
 }
 
 /*
- * Consumes `delts` bytes from `src.
+ * Consumes `delta` bytes from `src.
  */
 /*@ requires \valid(src);
   @ requires buf_valid(*src);
