@@ -1061,7 +1061,9 @@ reader<schema<Fs...>>::parse_tuple(Init &&init, limit bounds, std::tuple<Hs...> 
         m_error = init(std::as_const(*this));
     }
 
-    if (m_error != PPB_OK || num_bytes == 0) [[unlikely]]
+    // we already bailed out if num_bytes <= 0 (not just on error),
+    // so we know we have *some* bytes to read here.
+    if (m_error != PPB_OK) [[unlikely]]
         return m_error;
 
     const std::byte *const outer_end = m_input.data() + m_input.size();
