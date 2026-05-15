@@ -33,8 +33,9 @@
  *
  * Decoding quirks:
  *   - Varints may span up to 10 bytes, and may contain redundant
- *     bytes; for the 10th byte, only the bottom bit contributes to
- *     the result, and bits [6:1] are silently discarded.
+ *     bytes; for the 10th byte (which must have its top bit unset),
+ *     only the bottom bit contributes to the result, and bits [6:1]
+ *     are silently discarded.
  *   - Wire types 3, 4 (legacy groups) and 6, 7 (reserved) are rejected
  *     with `PPB_ERROR_CORRUPT_TAG`.
  *   - Fields are matched on both field number and encoding type; an
@@ -96,7 +97,7 @@ enum ppb_error
     PPB_ERROR_CORRUPT_VARINT = -4,  /* invalid varint encoding (overlong) */
     PPB_ERROR_CORRUPT_TAG = -5,  /* invalid tag encoding (zero, overlong, or unsupported wire type) */
     PPB_ERROR_LIMIT_EXCEEDED = -6,  /* consumed bytes exceeded hard limit */
-    PPB_ERROR_DEPTH_EXCEEDED = -7,  /* recursion depth budget exhausted (reserved for client code) */
+    PPB_ERROR_DEPTH_EXCEEDED = -7,  /* recursion depth budget exhausted (for ppb.hpp and client code) */
 };
 
 /*
@@ -134,6 +135,9 @@ enum ppb_wire_type
 /*
  * Encodes a varint in little-endian byte order, in a uint64_t.
  * `VARINT` must not have side effects.
+ *
+ * This macro is only meant for tags, and truncates values >= 2**56
+ * (that don't fit in 64 bit once encoded as varint).
  */
 #define PPB_ENCODE_VARINT(VARINT)                                                                          \
     (PPB_VB_((uint64_t)(VARINT), 0) | PPB_VB_((uint64_t)(VARINT), 1) | PPB_VB_((uint64_t)(VARINT), 2) |    \
@@ -153,6 +157,9 @@ enum ppb_wire_type
  * Field number -1 (UINT64_MAX when unsigned) is reserved for
  * catch-all entries: a catch-all field matches any unknown tag
  * of the given wire type.
+ *
+ * N.B., only -1 is reserved for catch-all; other negative field
+ * numbers are silently encoded as huge unsigned values.
  */
 #define PPB_TAG_BITS(FIELD_NUMBER, WIRE_TYPE)             \
     ((uint64_t)(FIELD_NUMBER) == (uint64_t)-1 ?           \
@@ -204,6 +211,12 @@ struct ppb_field_meta
     size_t lost_distinct_u64 : 1;
     size_t num_occurrences : CHAR_BIT * sizeof(size_t) - 1;
     size_t total_bytes;
+
+    /*
+     * `min_nonzero_bytes == 0` means either the field never occurred
+     * or every occurrence was zero-length (same for `max_bytes`);
+     * check `num_occurrences` to disambiguate.
+     */
     size_t min_nonzero_bytes;
     size_t max_bytes;
 };
@@ -221,6 +234,8 @@ struct ppb_field_meta
  *     call; afterwards, the field was decoded in this call iff
  *         old_buf <= field.v.ptr < buf.buf
  *     (the call advances `buf.buf` past everything it consumed).
+ *
+ * **DO NOT USE `ptr != NULL` with `ppb_lexn`: the `ptr` is sticky!**
  */
 struct ppb_field_value
 {
@@ -421,7 +436,7 @@ struct ppb_lexn_ret
  *
  * This function may decode multiple fields at a time, but only in
  * strictly ascending order, and always stops before a non-monotonic
- * (repeated or decreasing) tag or after an unknown field.  This
+ * (repeated or decreasing) tag or after a catch-all field.  This
  * guarantees that we can always recover the order of the fields on
  * the wire, and that we always see every field value.  Call
  * `ppb_lexn*` in a loop to process all fields in a message, in
