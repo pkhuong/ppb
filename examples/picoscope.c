@@ -35,6 +35,14 @@ static const struct ppb_encoded_tag catchall_tags[NUM_FIELDS] = {
 
 static bool g_compat_mode = false;  /* -p: protoscope-compatible output */
 
+/*
+ * Maximum nesting depth for recursive submessage disassembly.  picoscope
+ * recurses through LEN payloads that look like submessages, so this
+ * bounds C stack usage on adversarial inputs.  Matches protoc's default.
+ */
+#define PICOSCOPE_MAX_DEPTH 100
+static size_t g_depth = 0;
+
 static void
 print_indent(size_t indent)
 {
@@ -59,6 +67,15 @@ submessage_field_count(const struct ppb_buf payload, const char *end_of_input,
     struct ppb_field fields[static NUM_FIELDS])
 {
     if (payload.size == 0)
+    {
+        return 0;
+    }
+
+    /*
+     * Refuse to recurse past the depth limit; the caller will fall back
+     * to string / packed-varint / hex rendering for this payload.
+     */
+    if (g_depth >= PICOSCOPE_MAX_DEPTH)
     {
         return 0;
     }
@@ -335,7 +352,10 @@ format_len_field(uint64_t field_num, const struct ppb_field_value *v, const char
         }
 
         printf("%" PRIu64 ": {\n", field_num);
-        if (disassemble(payload, end_of_input, indent + 2) != 0)
+        g_depth++;
+        int rc = disassemble(payload, end_of_input, indent + 2);
+        g_depth--;
+        if (rc != 0)
         {
             return 1;
         }
