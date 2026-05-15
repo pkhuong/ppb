@@ -378,7 +378,8 @@ advances past the consumed bytes on return.
   return `PPB_ERROR_CORRUPT_TAG`, sets `error_field()`, and skips
   `init` and the handlers.
 - Empty input (or prescan reporting zero bytes) returns `PPB_OK`
-  without invoking `init` or any handler.
+  without invoking `init` or any handler; even `proto3_zero_default`
+  fields don't fire their handlers.
 - Handler errors fold into the sticky error first-write-wins, but
   every handler in the current batch still runs: side effects from
   other handlers in the batch are not rolled back.
@@ -523,9 +524,9 @@ first, then `lex_all()`).
 
 Also, unlike `parse()`, `limit` applies to each individual `lexn`
 call.  A `limit` that forbids progress (byte or field limit of zero)
-returns `PPB_OK` immediately.  Otherwise, the loop runs the input is
-exhausted or an error is generated (by `ppb_lexn` or one of the
-handlers).
+returns immediately with the current sticky error (or `PPB_OK` if
+none).  Otherwise, the loop runs until the input is exhausted or an
+error is generated (by `ppb_lexn` or one of the handlers).
 
 ```cpp
 using OuterSchema = ppb::schema<
@@ -581,10 +582,7 @@ If you need outer metadata *and* per-occurrence dispatch, call
   per-field state without touching the input span.  Mostly for
   tests.  Unlike `parse()`'s fast path and `prescan(handlers...)`,
   `dispatch()` does **not** synthesize absent `proto3_zero_default`
-  fields: only fields whose `field.v.ptr` is non-null fire.  If you
-  want a second pass that *does* include zero defaults, call
-  `prescan(handlers...)` instead -- it's idempotent on a buffer that
-  has already been prescanned.
+  fields: only fields whose `field.v.ptr` is non-null fire.
 
 ### `meta<Key, wire>()`
 
@@ -705,7 +703,7 @@ ppb::limit::soft(bytes, fields)  // soft byte cap plus field cap
 ```
 
 `with_max_fields`, `with_max_depth`, `with_hard_limit`,
-`with_soft_limit` are chainable builders; `with_max_byte` is also
+`with_soft_limit` are chainable builders; `with_max_bytes` is also
 chainable, and changes only the byte limit without affecting the
 hard/soft nature of the limit.
 
