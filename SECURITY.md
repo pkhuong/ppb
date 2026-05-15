@@ -96,11 +96,11 @@ buffer, so PPB never produces a payload that points outside the input.
 The following stronger placement properties are checked dynamically by
 the libFuzzer harness (`fuzz/fuzz_ppb.c`) and `picoscope`:
 
-- `field.v.ptr` lies within the bytes consumed by the call:
-  `[data, data + bytes_consumed)` for `ppb_prescan`,
-  `[old_buf, new_buf)` for `ppb_lexn`.
+- newly-written `field.v.ptr` lies within the bytes consumed by the
+  call: `[data, data + bytes_consumed)` for `ppb_prescan`, `[old_buf,
+  new_buf)` for `ppb_lexn`.
 - For LEN fields, `payload.buf` and `payload.buf + payload.size`
-  fall within that same csonumed range.
+  fall within that same consumed range.
 - `payload.buf > field.v.ptr`: the payload starts strictly after
   the tag byte (the tag plus length-varint occupy at least 2 bytes).
 
@@ -132,6 +132,10 @@ When parsing untrusted input, callers also have to wield PPB safely.
    that would be weird).
 6. **Zero-initialize `fields[]`** before the first call on a given
    message.
+
+The C++ wrapper forbids submessage nesting by default (covering item
+1); opt *into* recursive parsing by setting a non-zero `max_depth` on
+the `ppb::limit` struct.
 
 ## Out of scope
 
