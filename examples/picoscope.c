@@ -320,7 +320,7 @@ format_len_field(uint64_t field_num, const struct ppb_field_value *v, const char
          * protoscope (e.g., "2: {1: 7}").  We use the prescanned
          * value directly because there's no ambiguity.
          */
-        if (g_compat_mode && nfields == 1)
+        if (g_compat_mode && nfields == 1 && g_depth < PICOSCOPE_MAX_DEPTH)
         {
             for (size_t i = 0; i < NUM_FIELDS; i++)
             {
@@ -341,7 +341,11 @@ format_len_field(uint64_t field_num, const struct ppb_field_value *v, const char
                 }
 
                 printf("%" PRIu64 ": {", field_num);
-                if (format_field(i, inner_num, iv, end_of_input, 0, /*newline=*/false) != 0)
+                g_depth++;
+                int rc = format_field(i, inner_num, iv, end_of_input, 0, /*newline=*/false) != 0;
+                g_depth--;
+
+                if (rc)
                 {
                     return 1;
                 }
