@@ -478,6 +478,45 @@ test_reader_meta_merged_one_sided()
     }
 }
 
+// Test field() accessor: const, mutable, and cross-check with meta().
+static void
+test_reader_field_accessor()
+{
+    static const uint8_t wire[] = { 0x08, 0x96, 0x01 };  // field 1 varint 150
+    ppb::reader<VarintSchema> r(wire, sizeof(wire));
+
+    int handler_calls = 0;
+    CHECK(r.parse(ppb::on<VarintKey::my_varint>(
+              [&handler_calls](const ppb_field &f_h) -> ppb_error
+              {
+                  handler_calls++;
+                  CHECK(f_h.v.u64 == 150);
+                  return PPB_OK;
+              })) == PPB_OK);
+    CHECK(handler_calls == 1);
+
+    // Const accessor: metadata and wire value populated by parse.
+    const ppb::reader<VarintSchema> &cr = r;
+    const ppb_field &f = cr.field<VarintKey::my_varint>();
+    CHECK(f.m.num_occurrences == 1);
+    CHECK(f.m.total_bytes == 2);
+    CHECK(f.m.min_nonzero_bytes == 2);
+    CHECK(f.m.max_bytes == 2);
+    CHECK(f.m.lost_distinct_u64 == 0);
+    CHECK(f.v.u64 == 150);
+    CHECK(f.v.ptr != nullptr);
+    CHECK(f.v.ptr == &wire[0]);  // tag byte
+
+    // Cross-check: field().m equals meta() for single-wire case.
+    ppb_field_meta fm = cr.meta<VarintKey::my_varint>();
+    CHECK(memcmp(&f.m, &fm, sizeof(fm)) == 0);
+
+    // Mutable accessor: zero out the slot and verify.
+    ppb_field &mf = r.field<VarintKey::my_varint>();
+    mf = ppb_field {};
+    CHECK(r.meta<VarintKey::my_varint>().num_occurrences == 0);
+}
+
 // Prescan handler dispatch tests
 
 enum class HandlerKey : int
@@ -3534,6 +3573,8 @@ main()
     test_reader_meta_merged();
     test_reader_meta_no_merge();
     test_reader_meta_merged_one_sided();
+
+    test_reader_field_accessor();
 
     test_reader_prescan_with_handlers();
     test_reader_prescan_handler_error();

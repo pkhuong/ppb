@@ -124,6 +124,29 @@ constexpr ppb_field_meta bad =
     ppb::reader<ppb::schema<ppb::varint<K::f1>>> {}.meta<K::f1, ppb::wire_type::len>();
 #endif
 
+// field() with a key absent from the schema
+
+/* expect-error: Key/wire combination not found in schema */
+#ifdef PPB_FAIL_FIELD_KEY_NOT_FOUND
+constexpr const ppb_field &bad = ppb::reader<ppb::schema<ppb::varint<K::f1>>> {}.field<K::f2>();
+#endif
+
+// field() with a key present, but wrong wire type
+
+/* expect-error: Key/wire combination not found in schema */
+#ifdef PPB_FAIL_FIELD_WIRE_TYPE_NOT_FOUND
+constexpr const ppb_field &bad =
+    ppb::reader<ppb::schema<ppb::varint<K::f1>>> {}.field<K::f1, ppb::wire_type::len>();
+#endif
+
+// field() with a key that matches multiple wire types, no wire specified
+
+/* expect-error: Key matches multiple wire types in the schema */
+#ifdef PPB_FAIL_FIELD_AMBIGUOUS
+constexpr const ppb_field &bad =
+    ppb::reader<ppb::schema<ppb::varint<K::f1>, ppb::len<K::f1>>> {}.field<K::f1>();
+#endif
+
 // find_value_handler: multiple key+wire matches, none invocable with Arg
 //
 // Both handlers match key=1, varint, but neither accepts `long`.

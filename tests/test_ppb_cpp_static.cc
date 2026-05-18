@@ -157,6 +157,29 @@ constexpr ppb_field_meta m = ppb::reader<ppb::schema<ppb::varint<K::f1>>> {}.met
 static_assert(m.num_occurrences == 0);
 }  // namespace test_meta_key_found
 
+// field() with a key present (single wire, default any) — counterpart to PPB_FAIL_FIELD_KEY_NOT_FOUND
+namespace test_field_key_found
+{
+constexpr ppb::reader<ppb::schema<ppb::varint<K::f1>>> r;
+static_assert(r.field<K::f1>().m.num_occurrences == 0);
+}  // namespace test_field_key_found
+
+// field() with explicit wire selection — counterpart to PPB_FAIL_FIELD_WIRE_TYPE_NOT_FOUND
+namespace test_field_wire_found
+{
+constexpr ppb::reader<ppb::schema<ppb::varint<K::f1>>> r;
+static_assert(r.field<K::f1, ppb::wire_type::varint>().m.num_occurrences == 0);
+}  // namespace test_field_wire_found
+
+// field() with wire that disambiguates a multi-wire key — counterpart to PPB_FAIL_FIELD_AMBIGUOUS
+namespace test_field_wire_disambiguates
+{
+using Merged = ppb::schema<ppb::varint<K::f1>, ppb::len<K::f1>>;
+constexpr ppb::reader<Merged> r;
+static_assert(r.field<K::f1, ppb::wire_type::varint>().m.num_occurrences == 0);
+static_assert(r.field<K::f1, ppb::wire_type::len>().m.num_occurrences == 0);
+}  // namespace test_field_wire_disambiguates
+
 // dispatch(): compile-time dispatch to handlers from begin up to end (or limit).
 namespace test_dispatch
 {

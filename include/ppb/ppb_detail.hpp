@@ -571,6 +571,24 @@ merge_meta(ppb_field_meta &acc, ppb_field_meta upd) noexcept
     acc.max_bytes = (acc.max_bytes < upd.max_bytes) ? upd.max_bytes : acc.max_bytes;
 }
 
+// Resolves (key, wire) to a single schema slot index, or fails to
+// compile.  `wire == any` is only acceptable when exactly one schema
+// entry has that key; otherwise the caller must disambiguate.
+template <typename Schema, typename Schema::Key key, wire_type wire>
+consteval size_t
+find_single_field_index()
+{
+    constexpr typename Schema::field_range range = Schema::find_field_range(key, wire);
+
+    static_assert(range.count > 0, "Key/wire combination not found in schema");
+    static_assert(range.count == 1,
+        "Key matches multiple wire types in the schema; "
+        "specify a wire type explicitly (e.g. field<K, ppb::wire_type::varint>())");
+    static_assert(range.begin < Schema::num_fields(), "internal: index out of bounds");
+
+    return range.begin;
+}
+
 // Compile-time-bounded dispatch over [begin, end) in [0, limit).
 //
 // The body is split into 16-wide blocks; within each block a switch

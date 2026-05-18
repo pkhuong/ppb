@@ -878,6 +878,24 @@ template <typename... Fs> struct reader<schema<Fs...>>
     template <typename Schema::Key key, wire_type wire = wire_type::any>
     constexpr ppb_field_meta meta() const noexcept;
 
+    // Returns the underlying ppb_field slot for `key` (and, if
+    // needed, `wire`).  Unknown key/wire or passing `wire_type::any`
+    // against a key with multiple wire types are both compile error
+    // (use an explicit wire to disambiguate).
+    //
+    // Only meaningful after zero-initialization or `reset_fields`
+    // followed by `prescan()` or `parse()`.
+    template <typename Schema::Key key, wire_type wire = wire_type::any>
+    constexpr const ppb_field &field() const noexcept
+    {
+        return m_fields[detail::find_single_field_index<Schema, key, wire>()];
+    }
+
+    template <typename Schema::Key key, wire_type wire = wire_type::any> constexpr ppb_field &field() noexcept
+    {
+        return m_fields[detail::find_single_field_index<Schema, key, wire>()];
+    }
+
     // Runs `ppb_lexn` once: decodes one batch of strictly
     // monotonically-increasing fields and dispatches matching
     // handlers.  Advances the input span past the consumed bytes
