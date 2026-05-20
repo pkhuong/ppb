@@ -20,7 +20,7 @@ SHARED_OBJS := $(SHARED_C_OBJS)
 
 PROTOSCOPE ?= protoscope
 
-.PHONY: all clean format unit unit_cpp test regen_test fuzz fuzz-corpus compile_fail FORCE
+.PHONY: all clean format unit unit_cpp test regen_test fuzz fuzz-corpus compile_fail analyze-clang analyze-gcc FORCE
 
 all: build/libppb.a build/libppb.so build/picoscope build/ubench
 
@@ -110,6 +110,12 @@ fuzz-corpus: fuzz/gen_corpus.py
 
 fuzz: build/fuzz_ppb fuzz-corpus
 	build/fuzz_ppb -max_total_time=$(FUZZ_TIME) -max_len=$(FUZZ_MAX_LEN) $(FUZZ_FLAGS) fuzz/corpus
+
+analyze-clang: clean
+	scan-build --status-bugs $(MAKE) CC=clang CXX=clang++ build/libppb.a build/test_ppb_cpp build/test_ppb_cpp_static
+
+analyze-gcc: clean
+	$(MAKE) CC=gcc CXX=g++ EXTRA_FLAGS="-fanalyzer" build/libppb.a build/test_ppb_cpp build/test_ppb_cpp_static
 
 FORCE:
 .SECONDARY:  # don't rm "temporary" (like our .o) output files at the end
