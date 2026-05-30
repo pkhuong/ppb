@@ -2375,6 +2375,120 @@ test_prescan_deterministic(void)
         CHECK(memcmp(&fields1[i].m, &fields2[i].m, sizeof(fields1[i].m)) == 0);
 }
 
+/*
+ * Verify that the typed union members .u32, .i32, .f, and .d alias
+ * v.u64 correctly regardless of host endianness.  On big-endian the
+ * overlay struct places 32-bit members at offset 4 so they always
+ * alias the low half of u64.
+ */
+static void
+test_field_value_union_overlay(void)
+{
+    printf("test_field_value_union_overlay\n");
+
+    struct ppb_encoded_tag tags[2] = {
+        PPB_TAG(1, PPB_WIRE_I32),
+        PPB_TAG(2, PPB_WIRE_I64),
+    };
+    CHECK(ppb_validate_tags(2, tags) == PPB_OK);
+
+    struct ppb_field fields[2];
+    struct ppb_lexn_ret ret;
+
+    /*
+     * Non-trivial values: 0xDEADBEEF exercises all 4 bytes of the
+     * low-32-bit half, catching offset-zero vs offset-4 placement.
+     * max_lexed_fields=1 peels off one field per call.
+     */
+    {
+        static const uint8_t wire[] = {
+            0x0d, 0xef, 0xbe, 0xad, 0xde,                               /* f1: 0xDEADBEEF */
+            0x11, 0xef, 0xbe, 0xad, 0xde, 0xbe, 0xba, 0xfe, 0xca,       /* f2: 0xCAFEBABEDEADBEEF */
+        };
+        struct ppb_buf buf = make_buf(wire, sizeof(wire));
+
+        zero_fields(2, fields);
+
+        ret = ppb_lexn(&buf, 2, tags, fields, /*max_lexed_fields=*/1);
+        CHECK(ret.status == PPB_OK);
+        CHECK(ret.first_field == 0);
+        CHECK(ret.field_range == 1);
+        CHECK(fields[0].v.u64 == 0xDEADBEEFULL);
+        CHECK(fields[0].v.u32 == 0xDEADBEEFUL);
+        CHECK(fields[0].v.i32 == (int32_t)0xDEADBEEFUL);
+
+        ret = ppb_lexn(&buf, 2, tags, fields, /*max_lexed_fields=*/1);
+        CHECK(ret.status == PPB_OK);
+        CHECK(ret.first_field == 1);
+        CHECK(ret.field_range == 1);
+        CHECK(fields[1].v.u64 == 0xCAFEBABEDEADBEEFULL);
+        CHECK(fields[1].v.i64 == (int64_t)0xCAFEBABEDEADBEEFULL);
+    }
+
+    /*
+     * float: 1.0f = IEEE 754 0x3F800000, stored LE on wire.
+     * Verifies .f correctly aliases the low 32 bits on both LE and BE.
+     */
+    {
+        static const uint8_t wire[] = {
+            0x0d, 0x00, 0x00, 0x80, 0x3f, /* f1: 1.0f */
+        };
+        struct ppb_buf buf = make_buf(wire, sizeof(wire));
+
+        zero_fields(2, fields);
+
+        ret = ppb_lexn(&buf, 2, tags, fields, 4);
+        CHECK(ret.status == PPB_OK);
+        CHECK(ret.first_field == 0);
+        CHECK(ret.field_range == 1);
+        CHECK(fields[0].v.f == 1.0f);
+    }
+
+    /*
+     * float: -0.0f = IEEE 754 0x80000000.
+     * The sign bit exercises the top bit of the low 32-bit half.
+     */
+    {
+        static const uint8_t wire[] = {
+            0x0d, 0x00, 0x00, 0x00, 0x80, /* f1: -0.0f */
+        };
+        struct ppb_buf buf = make_buf(wire, sizeof(wire));
+
+        zero_fields(2, fields);
+
+        ret = ppb_lexn(&buf, 2, tags, fields, 4);
+        CHECK(ret.status == PPB_OK);
+        CHECK(ret.first_field == 0);
+        CHECK(ret.field_range == 1);
+        CHECK(fields[0].v.u32 == 0x80000000UL);
+        CHECK(fields[0].v.i32 == (int32_t)0x80000000UL);
+        CHECK(fields[0].v.f == -0.0f);
+        /* -0.0f compares equal to 0.0f; also check bit pattern via u32. */
+        CHECK(fields[0].v.u32 == 0x80000000UL);
+    }
+
+    /*
+     * double: IEEE 754 bits, stored LE on wire.
+     * 1.0 = 0x3FF0000000000000.
+     * Verifies .d aliases v.u64 correctly (always at offset 0).
+     */
+    {
+        static const uint8_t wire[] = {
+            0x11, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xf0, 0x3f, /* f2: 1.0 */
+        };
+        struct ppb_buf buf = make_buf(wire, sizeof(wire));
+
+        zero_fields(2, fields);
+
+        ret = ppb_lexn(&buf, 2, tags, fields, 4);
+        CHECK(ret.status == PPB_OK);
+        CHECK(ret.first_field == 1);
+        CHECK(ret.field_range == 1);
+        CHECK(fields[1].v.d == 1.0);
+        CHECK(fields[1].v.i64 == (int64_t)0x3FF0000000000000ULL);
+    }
+}
+
 int
 main(void)
 {
@@ -2443,6 +2557,8 @@ main(void)
 
     test_cross_check_meta();
     test_prescan_deterministic();
+
+    test_field_value_union_overlay();
 
     printf("\n%d checks, %d failures\n", g_check_count, g_fail_count);
     return g_fail_count > 0 ? 1 : 0;
