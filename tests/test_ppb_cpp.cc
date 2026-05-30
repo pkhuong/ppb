@@ -2079,6 +2079,77 @@ test_typed_packed_fixed_fields()
 }
 
 static void
+test_typed_packed_sfixed32()
+{
+    /*
+     * le_packed<int32_t> exercises the 4-byte bswap path in
+     * le_packed<T>::value() when run on big-endian platforms.
+     */
+    using S = ppb::schema<ppb::packed_sfixed32<1>>;
+
+    static const uint8_t wire[] = {
+        0x0a, 0x0c, /* f1 bytes header (12 bytes) */
+        0xff, 0xff, 0xff, 0xff, /* -1 */
+        0xfe, 0xff, 0xff, 0xff, /* -2 */
+        0x2a, 0x00, 0x00, 0x00, /* 42 */
+    };
+
+    std::vector<int32_t> got;
+    ppb::reader<S> r(wire, sizeof(wire));
+
+    CHECK(r.parse([](const ppb::reader<S> &) -> ppb_error { return PPB_OK; }, {},
+              ppb::on<1>(
+                  [&](std::span<const ppb::le_packed<int32_t>> s) -> ppb_error
+                  {
+                      for (const auto &e : s)
+                      {
+                          got.push_back(static_cast<int32_t>(e));
+                      }
+
+                      return PPB_OK;
+                  })) == PPB_OK);
+    CHECK(got.size() == 3);
+    CHECK(got[0] == -1);
+    CHECK(got[1] == -2);
+    CHECK(got[2] == 42);
+}
+
+static void
+test_typed_packed_f64()
+{
+    /*
+     * le_packed<double> exercises the 8-byte bswap path in
+     * le_packed<T>::value() when run on big-endian platforms.
+     */
+    using S = ppb::schema<ppb::packed_f64<1>>;
+
+    /* IEEE 754 LE on wire: 1.0 = 0x3FF0000000000000, -1.0 = 0xBFF0000000000000. */
+    static const uint8_t wire[] = {
+        0x0a, 0x10, /* f1 bytes header (16 bytes) */
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xf0, 0x3f, /* 1.0 */
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xf0, 0xbf, /* -1.0 */
+    };
+
+    std::vector<double> got;
+    ppb::reader<S> r(wire, sizeof(wire));
+
+    CHECK(r.parse([](const ppb::reader<S> &) -> ppb_error { return PPB_OK; }, {},
+              ppb::on<1>(
+                  [&](std::span<const ppb::le_packed<double>> s) -> ppb_error
+                  {
+                      for (const auto &e : s)
+                      {
+                          got.push_back(static_cast<double>(e));
+                      }
+
+                      return PPB_OK;
+                  })) == PPB_OK);
+    CHECK(got.size() == 2);
+    CHECK(got[0] == 1.0);
+    CHECK(got[1] == -1.0);
+}
+
+static void
 test_typed_packed_varint_fields()
 {
     using S = ppb::schema<ppb::packed_int32<1>, ppb::packed_sint32<2>, ppb::packed_boolean<3>,
@@ -3632,6 +3703,8 @@ main()
     test_typed_bytes_misaligned_size_sets_error();
     test_packed_fixed32_misaligned_error_semantics_sticky();
     test_typed_packed_fixed_fields();
+    test_typed_packed_sfixed32();
+    test_typed_packed_f64();
     test_typed_packed_varint_fields();
     // Empty packed payloads.
     check_empty_payload<ppb::packed_int32<1>>();
