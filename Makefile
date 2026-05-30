@@ -20,7 +20,7 @@ SHARED_OBJS := $(SHARED_C_OBJS)
 
 PROTOSCOPE ?= protoscope
 
-.PHONY: all clean format unit unit_cpp test regen_test fuzz fuzz-corpus compile_fail analyze-clang analyze-gcc FORCE
+.PHONY: all clean format unit unit_cpp test regen_test fuzz fuzz-corpus compile_fail analyze-clang analyze-gcc tysan FORCE
 
 all: build/libppb.a build/libppb.so build/picoscope build/ubench
 
@@ -116,6 +116,37 @@ analyze-clang: clean
 
 analyze-gcc: clean
 	$(MAKE) CC=gcc CXX=g++ EXTRA_FLAGS="-fanalyzer" build/libppb.a build/test_ppb_cpp build/test_ppb_cpp_static
+
+# Clang TypeSanitizer (TBAA / strict-aliasing) build for the C++ wrapper.
+# Looks for type issues in the C++ type safety fanciness.
+#
+# We instrument the C++ TUs *only* and link them against the normal,
+# uninstrumented libppb.a.  Instrumenting the C core as well only
+# surfaces a ton of cross-language false positives.
+TYSAN_CXX ?= clang++
+TYSAN_CXXFLAGS := $(CXXFLAGS) -O1 -fsanitize=type
+
+build/tysan/test_ppb_cpp: tests/test_ppb_cpp.cc $(CPP_HEADERS) build/libppb.a FORCE
+	@mkdir -p $(dir $@)
+	$(TYSAN_CXX) $(TYSAN_CXXFLAGS) -I. -o $@ tests/test_ppb_cpp.cc build/libppb.a
+
+build/tysan/test_ppb_cpp_static: tests/test_ppb_cpp_static.cc $(CPP_HEADERS) build/libppb.a FORCE
+	@mkdir -p $(dir $@)
+	$(TYSAN_CXX) $(TYSAN_CXXFLAGS) -I. -o $@ tests/test_ppb_cpp_static.cc build/libppb.a
+
+# TySan reports each violation and continues; have to look for reports
+# and exit non-zero here.
+tysan: build/tysan/test_ppb_cpp build/tysan/test_ppb_cpp_static
+	@status=0; \
+	for t in $^; do \
+	    echo "TYSAN $$t"; \
+	    out=$$("$$t" 2>&1); rc=$$?; \
+	    printf '%s\n' "$$out"; \
+	    if [ $$rc -ne 0 ] || printf '%s' "$$out" | grep -q 'type-aliasing-violation'; then \
+	        echo "FAIL: TySan violation or non-zero exit in $$t"; status=1; \
+	    fi; \
+	done; \
+	exit $$status
 
 FORCE:
 .SECONDARY:  # don't rm "temporary" (like our .o) output files at the end
