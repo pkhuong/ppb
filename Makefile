@@ -20,7 +20,7 @@ SHARED_OBJS := $(SHARED_C_OBJS)
 
 PROTOSCOPE ?= protoscope
 
-.PHONY: all clean format unit unit_cpp test regen_test fuzz fuzz-corpus compile_fail analyze-clang analyze-gcc tysan FORCE
+.PHONY: all clean format unit unit_cpp test regen_test fuzz fuzz-corpus compile_fail analyze-clang analyze-gcc tysan fuzz_cpp fuzz_cpp_msan fuzz_cpp_tysan FORCE
 
 all: build/libppb.a build/libppb.so build/picoscope build/ubench
 
@@ -30,7 +30,7 @@ clean:
 	rm -rf build/ wp.csv eva.csv
 
 format:
-	clang-format-20 -i include/ppb/ppb.h include/ppb/*.hpp src/*.[ch] examples/*.c tests/*.c tests/*.cc fuzz/*.c
+	clang-format-20 -i include/ppb/ppb.h include/ppb/*.hpp src/*.[ch] examples/*.c tests/*.c tests/*.cc fuzz/*.c fuzz/*.cc
 
 unit: build/test_ppb
 	build/test_ppb
@@ -101,7 +101,7 @@ FUZZ_TIME ?= 60
 FUZZ_MAX_LEN ?= 1024
 FUZZ_FLAGS ?=
 
-build/fuzz_ppb: fuzz/fuzz_ppb.c src/ppb.c
+build/fuzz_ppb: fuzz/fuzz_ppb.c src/ppb.c FORCE
 	@mkdir -p $(dir $@)
 	$(FUZZ_CC) $(FUZZ_CFLAGS) -o $@ fuzz/fuzz_ppb.c src/ppb.c
 
@@ -110,6 +110,60 @@ fuzz-corpus: fuzz/gen_corpus.py
 
 fuzz: build/fuzz_ppb fuzz-corpus
 	build/fuzz_ppb -max_total_time=$(FUZZ_TIME) -max_len=$(FUZZ_MAX_LEN) $(FUZZ_FLAGS) fuzz/corpus
+
+FUZZ_CXX ?= clang++
+FUZZ_CXXFLAGS := $(CXXFLAGS) -g -fsanitize=fuzzer,address,undefined
+
+# Flags for compiling the C core as an instrumented object linked into
+# the C++ fuzzers binary (i.e., without libFuzzer main)
+FUZZ_C_ASAN_FLAGS := $(CFLAGS) -g -fsanitize=fuzzer-no-link,address,undefined
+
+build/fuzz/ppb_asan.o: src/ppb.c FORCE
+	@mkdir -p $(dir $@)
+	$(FUZZ_CC) $(FUZZ_C_ASAN_FLAGS) -c -o $@ $<
+
+build/fuzz_ppb_cpp: fuzz/fuzz_ppb_cpp.cc build/fuzz/ppb_asan.o $(CPP_HEADERS)
+	@mkdir -p $(dir $@)
+	$(FUZZ_CXX) $(FUZZ_CXXFLAGS) -o $@ fuzz/fuzz_ppb_cpp.cc build/fuzz/ppb_asan.o
+
+fuzz_cpp: build/fuzz_ppb_cpp fuzz-corpus
+	build/fuzz_ppb_cpp -max_total_time=$(FUZZ_TIME) -max_len=$(FUZZ_MAX_LEN) $(FUZZ_FLAGS) fuzz/corpus
+
+# MemorySanitizer fuzzing build.  MSan needs the C core instrumented,
+# like ASan.
+FUZZ_MSAN_CXXFLAGS := $(CXXFLAGS) -g -fsanitize=fuzzer,memory -fsanitize-memory-track-origins
+FUZZ_C_MSAN_FLAGS := $(CFLAGS) -g -fsanitize=fuzzer-no-link,memory -fsanitize-memory-track-origins
+
+build/fuzz/ppb_msan.o: src/ppb.c FORCE
+	@mkdir -p $(dir $@)
+	$(FUZZ_CC) $(FUZZ_C_MSAN_FLAGS) -c -o $@ $<
+
+build/fuzz_ppb_cpp_msan: fuzz/fuzz_ppb_cpp.cc build/fuzz/ppb_msan.o $(CPP_HEADERS)
+	@mkdir -p $(dir $@)
+	$(FUZZ_CXX) $(FUZZ_MSAN_CXXFLAGS) -o $@ fuzz/fuzz_ppb_cpp.cc build/fuzz/ppb_msan.o
+
+fuzz_cpp_msan: build/fuzz_ppb_cpp_msan fuzz-corpus
+	build/fuzz_ppb_cpp_msan -max_total_time=$(FUZZ_TIME) -max_len=$(FUZZ_MAX_LEN) $(FUZZ_FLAGS) fuzz/corpus
+
+# TypeSanitizer fuzzing build: instrument the C++ TU only and link the
+# uninstrumented libppb.a (instrumenting the C core introduces a bunch
+# of cross-language false positives).  The primary intended target is
+# the type punning around fixed-width packed types.
+FUZZ_TYSAN_CXXFLAGS := $(CXXFLAGS) -O1 -g -fsanitize=fuzzer,type
+
+build/fuzz_ppb_cpp_tysan: fuzz/fuzz_ppb_cpp.cc $(CPP_HEADERS) build/libppb.a
+	@mkdir -p $(dir $@)
+	$(FUZZ_CXX) $(FUZZ_TYSAN_CXXFLAGS) -o $@ fuzz/fuzz_ppb_cpp.cc build/libppb.a
+
+# TySan reports and continues; treat any type-aliasing-violation (or a
+# non-zero exit) as failure.  Hardcoded -runs because there isn't much
+# to explore.
+fuzz_cpp_tysan: build/fuzz_ppb_cpp_tysan fuzz-corpus
+	@out=$$(build/fuzz_ppb_cpp_tysan -runs=1000000 -max_len=$(FUZZ_MAX_LEN) $(FUZZ_FLAGS) fuzz/corpus 2>&1); rc=$$?; \
+	printf '%s\n' "$$out"; \
+	if [ $$rc -ne 0 ] || printf '%s' "$$out" | grep -q 'type-aliasing-violation'; then \
+	    echo "FAIL: TySan violation or non-zero exit"; exit 1; \
+	fi
 
 analyze-clang: clean
 	scan-build --status-bugs $(MAKE) CC=clang CXX=clang++ build/libppb.a build/test_ppb_cpp build/test_ppb_cpp_static

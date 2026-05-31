@@ -57,8 +57,8 @@ performs the same validation `ppb_validate_tags` does at runtime, so
 the C check is not needed.
 
 The C library is formally verified and fuzzed; the C++ wrapper has
-only unit tests.  The wrapper's dispatching logic sits above the
-verified C boundary, so any bug there is outside the proofs.
+unit tests and a fuzz target.  The wrapper's dispatching logic sits
+above the verified C boundary, so any bug there is outside the proofs.
 
 The C lexer runs in Θ(n log m) for n toplevel fields against an
 m-field schema.  Handler dispatch is a linear walk over the schema,

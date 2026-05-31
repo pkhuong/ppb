@@ -30,6 +30,7 @@
 
 !/fuzz/
 !/fuzz/*.c
+!/fuzz/*.cc
 !/fuzz/*.py
 
 !/tests/

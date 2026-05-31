@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Seed corpus generator for fuzz/fuzz_ppb.
+Seed corpus generator for fuzz/fuzz_ppb and fuzz/fuzz_ppb_cpp.
 
 Writes binary corpus files to the output directory:
   1. All testdata/*.hex and testdata/invalid/*.hex decoded to binary.
@@ -346,6 +346,36 @@ def synthetic_entries():
         (10, 2**60),  # tag varint = 2**63
     ]:
         yield f"syn_tag_{nbytes}byte", encode_tag(fn, WIRE_VARINT) + encode_varint(0)
+
+    # More seeds for fuzz_ppb_cpp
+    #
+    # Still valid protobuf bytes, but these are specifically targeted
+    # at two configs in the C++ fuzz target:
+    #
+    #   Config B: field 1 packed varint, field 2 packed fixed32,
+    #             field 4 repeated bytes.
+    #   Config C: field 1 = val (varint), field 2 = sub (LEN message).
+
+    # Packed int32 payload (Config B field 1): varints 1, 2, 300.
+    yield "syn_cpp_packed_varint", field_len(
+        1, encode_varint(1) + encode_varint(2) + encode_varint(300)
+    )
+
+    # Packed fixed32 payload (Config B field 2): two LE uint32 elements.
+    _cpp_packed_fixed = struct.pack("<II", 1, 0xDEADBEEF)
+    yield "syn_cpp_packed_fixed32", field_len(2, _cpp_packed_fixed)
+
+    # Packed fixed32 with a length NOT a multiple of 4 (exercises the
+    # size % sizeof(element) guard in the wrapper's le_packed span).
+    yield "syn_cpp_packed_fixed32_misaligned", field_len(2, _cpp_packed_fixed + b"\x01")
+
+    # Repeated bytes (Config B field 4), including an empty occurrence.
+    yield "syn_cpp_bytes_field", field_len(4, b"hello") + field_len(4, b"")
+
+    # Two-deep nested submessage (Config C: SchemaTop -> Mid -> Leaf).
+    _cpp_leaf = field_varint(1, 42)
+    _cpp_mid = field_varint(1, 7) + field_len(2, _cpp_leaf)
+    yield "syn_cpp_nested_submessage", field_varint(1, 1) + field_len(2, _cpp_mid)
 
     # Unsupported wire types (3=SGROUP, 4=EGROUP, 6/7=reserved)
     for wt in [3, 4, 6, 7]:
