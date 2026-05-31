@@ -1962,6 +1962,92 @@ test_lexn_soft_limit(void)
     CHECK(buf.size == 12); /* consumed through end of field 2 */
 }
 
+/*
+ * Test edge cases around num_occurrences and LEN fields that are
+ * practically only a concern on 32-bit platforms.
+ */
+static void
+test_32b_size_edge_cases()
+{
+    printf("test_32b_size_edge_cases\n");
+
+    /*
+     * We must have enough room for num_occurrences, and each
+     * occurrence needs at least 2 bytes (one for the tag, another for
+     * the value).
+     */
+    {
+        struct ppb_field_meta m = { 0 };
+        size_t max_occurrences = (size_t)PTRDIFF_MAX / 2;
+
+        /*
+         * GCC warns about the very issue we're trying to confirm
+         * is provably not a concern for us.
+         */
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wconversion"
+        m.num_occurrences = max_occurrences;
+#pragma GCC diagnostic pop
+
+        m.lost_distinct_u64 = 1;
+
+        CHECK(m.num_occurrences == max_occurrences);
+        CHECK(m.lost_distinct_u64 == 1);
+    }
+
+    /*
+     * On 32-bit platforms, size_t is narrower than uint64_t, and we
+     * must make sure to bound check against the uint64_t LENgth field
+     * before truncating to size_t.
+     *
+     * Test that with a couple different ways to stick a LEN field in
+     * front of an 8-byte payload.
+     */
+    {
+        static const struct
+        {
+            uint8_t varint[10];
+            size_t varint_len;
+            size_t trailing;
+            bool accept;
+        } cases[] = {
+            { { 0x08 }, 1, 8, true },                           /* len 8: exact fit */
+            { { 0x80, 0x80, 0x80, 0x80, 0x10 }, 5, 8, false },  /* 2^32: low 32 bits == 0 */
+            { { 0x88, 0x80, 0x80, 0x80, 0x10 }, 5, 8, false },  /* 2^32 + 8: low 32 bits == 8 */
+            { { 0xff, 0xff, 0xff, 0xff, 0xff,                   /* UINT64_MAX */
+                  0xff, 0xff, 0xff, 0xff, 0x01 },
+                10, 0, false },
+        };
+
+        const struct ppb_encoded_tag tags[1] = { PPB_TAG(1, PPB_WIRE_LEN) };
+
+        for (size_t c = 0; c < sizeof(cases) / sizeof(cases[0]); c++)
+        {
+            /* first byte is the tag, remainder is the length, then the payload. */
+            uint8_t wire[1 + 10 + 8] = { 0x0a };
+            size_t wire_size = 1 + cases[c].varint_len + cases[c].trailing;
+            memcpy(wire + 1, cases[c].varint, cases[c].varint_len);
+
+            struct ppb_field fields[1] = { 0 };
+
+            struct ppb_buf buf = make_buf(wire, wire_size);
+            ptrdiff_t ret = ppb_prescan(buf, 1, tags, fields, SIZE_MAX);
+
+            if (cases[c].accept)
+            {
+                CHECK(ret == (ptrdiff_t)wire_size);
+                CHECK(fields[0].m.num_occurrences == 1);
+                CHECK(fields[0].v.payload.size == cases[c].trailing);
+                CHECK(fields[0].v.payload.buf == wire + 1 + cases[c].varint_len);
+            }
+            else
+            {
+                CHECK(ret == PPB_ERROR_TRUNCATED_DATA);
+            }
+        }
+    }
+}
+
 static void
 test_tag_macros(void)
 {
@@ -2545,6 +2631,8 @@ main(void)
     test_prescan_soft_limit();
     test_lexn_hard_limit();
     test_lexn_soft_limit();
+
+    test_32b_size_edge_cases();
 
     test_tag_macros();
     test_tag_varint_roundtrip();
