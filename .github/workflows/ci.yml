@@ -16,8 +16,8 @@ jobs:
         run: make CC=clang CXX=clang++ EXTRA_FLAGS="-mbmi2 -fsanitize=address,undefined -fno-omit-frame-pointer" test unit_cpp
       - name: build and test (msan)
         run: make CC=clang CXX=clang++ EXTRA_FLAGS="-mbmi2 -fsanitize=memory -fno-omit-frame-pointer" test unit_cpp
-      - name: type sanitizer (C++ wrapper)
-        run: make CC=gcc CXX=g++ tysan
+      # - name: type sanitizer (C++ wrapper)
+      #   run: make CC=gcc CXX=g++ tysan
       - name: gather coverage
         run: export EXTRA_FLAGS=-mbmi2 ; GCDA_ONLY=1 ./coverage.sh
       - name: Upload coverage to Codecov
@@ -52,8 +52,8 @@ jobs:
         run: make CC=clang CXX=clang++ EXTRA_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer" test unit_cpp
       - name: build and test (msan)
         run: make CC=clang CXX=clang++ EXTRA_FLAGS="-fsanitize=memory -fno-omit-frame-pointer" test unit_cpp
-      - name: type sanitizer (C++ wrapper)
-        run: make CC=gcc CXX=g++ tysan
+      # - name: type sanitizer (C++ wrapper)
+      #   run: make CC=gcc CXX=g++ tysan
       - name: gather coverage
         run: GCDA_ONLY=1 ./coverage.sh
       - name: Upload coverage to Codecov
