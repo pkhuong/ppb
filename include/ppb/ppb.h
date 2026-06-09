@@ -31,7 +31,7 @@
  *     field of that wire type not listed individually.
  *   - Helpers: `ppb_zag` (zigzag), `ppb_decode_varint`.
  *
- * Decoding quirks:
+ * Decoding quirks (more in README.md, under "Gotchas, decoding quirks, and footguns"):
  *   - Varints may span up to 10 bytes, and may contain redundant
  *     bytes; for the 10th byte (which must have its top bit unset),
  *     only the bottom bit contributes to the result, and bits [6:1]
@@ -41,6 +41,8 @@
  *   - Fields are matched on both field number and encoding type; an
  *     encoded field that matches only on the field number is treated
  *     like an unknown field (skipped or passed to catch-all).
+ *   - Encoded fields are matched exclusively in their canonical
+ *     (minimal) varint encoding.
  *
  * An initial `ppb_prescan` validates the input message and gathers
  * statistics about all the toplevel fields in the message.  With the

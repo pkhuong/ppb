@@ -171,6 +171,69 @@ fields had distinct `v.u64` bits -- e.g., one VARINT at field 12 and
 one VARINT at field 99 with different values will set it even though
 neither field number repeats.  The flag is useless for catch-alls.
 
+Gotchas, decoding quirks, and footguns
+--------------------------------------
+
+As a lexer, PPB exposes users to the subtle diversity in protobuf wire
+encoding; that's added flexibility when you want to do something specific,
+but can lead to surprise.  Here are a few things to keep in mind.
+
+1. Tags are only matched when encoded canonically (minimally) on the
+   wire.  It's unknown if any protobuf encoder violates that
+   assumption, but the assumption is deep in PPB's design.  This is
+   only an issue for tags; some encoders like to use overlong
+   encodings for field lengths, and that's supported.
+
+2. Remember to use `ppb_zag32` when zigzag-decoding sint32 values: it's
+   important to truncate the encoded integer to 32 bits before decoding.
+   This only matters for non-canonical inputs and matches what Google's
+   C++ parser does on such inputs.
+
+3. There's no explicit support for oneof, but you can make it happen
+   by populating fields in wire order, and clearing the other types in
+   a oneof when you populate a new one.  That only works if you always
+   use `ppb_lexn` (`ppb::field_semantics::always_lexn` semantics in
+   C++) whenever you notice more than one member in a oneof is
+   present: the prescan metadata may suffice to tell you what value
+   each member took, but you can't recover the order.
+
+4. "Last write wins" for submessages actually recurses in the
+   submessage's constituent fields.  That is, in order to match the
+   way Google protobuf handles repeated values for a non-repeated
+   submessage field, we have to keep parsing into (i.e., like
+   `MergeFrom`) the submessage and mutate that submessage (and its
+   submessages) in place when we encounter a new value for that
+   message.  This means proto3 semantics only work for the fields in a
+   message at the toplevel.  In the C++ wrapper, we want to apply
+   `ppb::field_semantics::singular` for non-repeated submessages, and
+   regular non-proto3 last-write-wins semantics for these submessages'
+   own fields (and repeated submessages count as toplevel).
+
+5. Packed and unpacked repeated fields have separate tags.  It's a
+   different wire type, so different entry.  In practice, you may
+   prefer to only support packed encoding when it's available, or
+   at least support only the encoding you expect to see.  If you
+   want to support both, you'll have to force a lexn pass even when
+   prescan has all the metadata, because, again, prescan doesn't
+   tell you the order (well, it does, since you could look at the
+   tag pointer, but that's complicated).  In the C++ wrapper, that
+   probably means setting `ppb::field_semantics::always_lexn` on
+   the encoding you *don't* expect to see.
+
+6. Unexpected encodings are treated like unknown tags (same issue as
+   packed / unpacked repeated, except generalised to, e.g., receiving
+   a LEN value instead of a varint).
+
+7. Handling unknown tags is opt-in, with catch-all entries for each
+   wire type... and decoding the actual tag for a catch-all entry is
+   tricky.  In order to decode the tag, you must take the tag `ptr`
+   from the `ppb_field_value` struct, and construct a `ppb_buf` from
+   that ptr to the end of the varint... but you can't know the
+   varint's length without decoding the varint.  Instead pad to the
+   end of the original input buffer (we know the varint is valid and
+   in bounds, otherwise prescan/lexn would have rejected it).
+   And at last, you may pass that `ppb_buf` to `ppb_decode_varint`.
+
 API (include/ppb/ppb.h)
 -----------------------
 

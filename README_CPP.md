@@ -54,7 +54,8 @@ pre-`reserve()` every container, prefer `std::string_view` over
 Read the C API docs first (in `ppb.h` and the toplevel `README.md`)
 for the prescan-then-lex model, limits, and error codes.  The wrapper
 performs the same validation `ppb_validate_tags` does at runtime, so
-the C check is not needed.
+the C check is not needed.  Pay attention to the "Gotchas, decoding
+quirks, and footguns" section.
 
 The C library is formally verified and fuzzed; the C++ wrapper has
 unit tests and a fuzz target.  The wrapper's dispatching logic sits
