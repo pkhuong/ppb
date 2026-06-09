@@ -318,12 +318,26 @@ extern "C"
 /*
  * Decodes zigzag-encoded sint32 and sint64 values.
  *
- * A 32-bit unsigned int value will decode to an `int32_t`.
+ * A 32-bit unsigned int value will decode to an `int32_t`,
+ * but you want to use `ppb_zag32` for sint32.
  */
 static inline int64_t
 ppb_zag(uint64_t x)
 {
     return (int64_t)((x >> 1) ^ -(x & 1));
+}
+
+/*
+ * Decodes zigzag-encoded sint32 values.
+ *
+ * This is the same thing as `ppb_zag`, except the encoded value is
+ * truncated to 32 bits before decoding, in order to match google's
+ * C++ implementation (only relevant with non-canonical encoding).
+ */
+static inline int32_t
+ppb_zag32(uint32_t x)
+{
+    return (int32_t)ppb_zag(x);
 }
 
 /*

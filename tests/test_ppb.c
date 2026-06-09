@@ -93,6 +93,35 @@ test_zag(void)
 }
 
 static void
+test_zag32(void)
+{
+    printf("test_zag32\n");
+
+    /* Canonical sint32 encodings decode exactly like ppb_zag. */
+    CHECK(ppb_zag32(0) == 0);
+    CHECK(ppb_zag32(1) == -1);
+    CHECK(ppb_zag32(2) == 1);
+    CHECK(ppb_zag32(3) == -2);
+    CHECK(ppb_zag32(4) == 2);
+    CHECK(ppb_zag32(UINT32_MAX - 1) == INT32_MAX);
+    CHECK(ppb_zag32(UINT32_MAX) == INT32_MIN);
+
+    /*
+     * Non-canonical sint32: a value with bits set above bit 32 (e.g. a
+     * 10-byte varint on the wire).  ppb_zag decodes the full 64-bit
+     * value, while ppb_zag32 truncates to 32 bits first to match
+     * google's C++ parser, so the two disagree.
+     */
+    {
+        uint64_t noncanonical = ((uint64_t)1 << 32) | 1;
+
+        CHECK(ppb_zag32((uint32_t)noncanonical) == -1);
+        CHECK(ppb_zag(noncanonical) == -2147483649LL);
+        CHECK((int64_t)ppb_zag32((uint32_t)noncanonical) != ppb_zag(noncanonical));
+    }
+}
+
+static void
 test_saturating_subzu(void)
 {
     printf("test_saturating_subzu\n");
@@ -2579,6 +2608,7 @@ int
 main(void)
 {
     test_zag();
+    test_zag32();
     test_saturating_subzu();
     test_saturating_range_u32();
     test_peekn();

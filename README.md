@@ -295,12 +295,26 @@ ppb_lexn_with_soft_limit(struct ppb_buf *__restrict buf, size_t limit, size_t nu
 /*
  * Decodes zigzag-encoded sint32 and sint64 values.
  *
- * A 32-bit unsigned int value will decode to an `int32_t`.
+ * A 32-bit unsigned int value will decode to an `int32_t`,
+ * but you want to use `ppb_zag32` for sint32.
  */
 static inline int64_t
 ppb_zag(uint64_t x)
 {
     return (int64_t)((x >> 1) ^ -(x & 1));
+}
+
+/*
+ * Decodes zigzag-encoded sint32 values.
+ *
+ * This is the same thing as `ppb_zag`, except the encoded value is
+ * truncated to 32 bits before decoding, in order to match google's
+ * C++ implementation (only relevant with non-canonical encoding).
+ */
+static inline int32_t
+ppb_zag32(uint32_t x)
+{
+    return (int32_t)ppb_zag(x);
 }
 
 /*
@@ -578,7 +592,8 @@ wire types and giving up forward compatibility is acceptable.
 The union works on either endian: on big-endian hosts the 32-bit
 views are laid out so they alias the low half of `u64`.
 
-**Zigzag**: call `ppb_zag(field.v.u64)` to decode `sint32` / `sint64` values.
+**Zigzag**: call `ppb_zag(field.v.u64)` to decode `sint64` values, and
+`ppb_zag32(field.v.u32)` to decode `sint32` values.
 
 **Byte length limiting**: use `ppb_prescan_with_hard_limit` /
 `ppb_lexn_with_hard_limit` when the message length is known to be

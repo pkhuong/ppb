@@ -231,12 +231,14 @@ fuzz_zag(const uint8_t *data, size_t size)
     for (size_t rep = 0; rep < 2; rep++)
     {
         int64_t r = ppb_zag(x);
+        int32_t r32 = ppb_zag32((uint32_t)x);
 
         /* Admitted postcondition: sint32 behavior of ppb_zag. */
         if (x < (1UL << 32))
         {
             POSTCOND(r >= (int64_t)INT32_MIN);
             POSTCOND(r <= (int64_t)INT32_MAX);
+            POSTCOND(r == r32);
         }
 
         x &= UINT32_MAX;
