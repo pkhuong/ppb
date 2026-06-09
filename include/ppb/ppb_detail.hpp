@@ -256,7 +256,7 @@ template <auto K, field_semantics sem> struct sint32 : public varint<K, sem>
 {
     static constexpr int32_t extract_value(const ppb_field &f, ppb_error *)
     {
-        return static_cast<int32_t>(ppb_zag(f.v.u64));
+        return ppb_zag32(static_cast<uint32_t>(f.v.u64));
     }
 };
 
@@ -1009,7 +1009,16 @@ struct identity_decode
 
 struct zigzag_decode
 {
-    template <typename T> static constexpr T apply(uint64_t v) noexcept { return static_cast<T>(ppb_zag(v)); }
+    template <typename T> static constexpr T apply(uint64_t v) noexcept
+    {
+        /*
+         * Truncate the zigzag-encoded value to unsigned T before
+         * decoding: this is needed for sint32 (to handle non-canonical
+         * encodings the same way as google's C++ parser), and a no-op
+         * for sint64.
+         */
+        return static_cast<T>(ppb_zag(static_cast<std::make_unsigned_t<T>>(v)));
+    }
 };
 
 template <typename UnderlyingType> struct enum_decode

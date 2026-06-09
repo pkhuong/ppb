@@ -1795,6 +1795,29 @@ test_typed_scalar_varint_fields()
     CHECK(v_bool == true);
 }
 
+/*
+ * For a non-canonical sint32 with set bits above bit 32 on the wire
+ * (here the varint 0x1_0000_0001), the wrapper must truncate to 32
+ * bits before zigzag-decoding (matching google's C++ parser): the low
+ * 32 bits encode -1.
+ */
+static void
+test_typed_sint32_noncanonical_truncates_to_32_bits()
+{
+    using S = ppb::schema<ppb::sint32<3>>;
+
+    static const uint8_t wire[] = {
+        0x18, 0x81, 0x80, 0x80, 0x80, 0x10, /* f3 sint32 = (1<<32)|1 */
+    };
+
+    int32_t v_sint32 = 0;
+
+    ppb::reader<S> r(wire, sizeof(wire));
+
+    CHECK(r.parse(ppb::store<3>(&v_sint32)) == PPB_OK);
+    CHECK(v_sint32 == -1);
+}
+
 static void
 test_typed_int32_negative_decodes_as_10_byte_varint()
 {
@@ -2209,6 +2232,30 @@ test_typed_packed_f64()
     CHECK(got.size() == 2);
     CHECK(got[0] == 1.0);
     CHECK(got[1] == -1.0);
+}
+
+/*
+ * Packed sint32 must apply the same 32-bit truncation as scalar
+ * sint32: a non-canonical element (the varint 0x1_0000_0001) decodes
+ * to -1 from its low 32 bits, not the INT32_MAX a full 64-bit zigzag
+ * decode would yield.
+ */
+static void
+test_typed_packed_sint32_noncanonical_truncates_to_32_bits()
+{
+    using S = ppb::schema<ppb::packed_sint32<1>>;
+
+    static const uint8_t wire[] = {
+        0x0a, 0x05, 0x81, 0x80, 0x80, 0x80, 0x10, /* f1 = [(1<<32)|1] */
+    };
+
+    std::vector<int32_t> s32s;
+
+    ppb::reader<S> r(wire, sizeof(wire));
+
+    CHECK(r.parse(ppb::push_back<1>(&s32s)) == PPB_OK);
+    CHECK(s32s.size() == 1);
+    CHECK(s32s[0] == -1);
 }
 
 static void
@@ -3757,6 +3804,7 @@ main()
     test_reader_parse_semantics_always_lexn_wire_order();
 
     test_typed_scalar_varint_fields();
+    test_typed_sint32_noncanonical_truncates_to_32_bits();
     test_typed_int32_negative_decodes_as_10_byte_varint();
     test_typed_enumerated_field();
     test_typed_scalar_i32_fields();
@@ -3770,6 +3818,7 @@ main()
     test_typed_packed_sfixed32();
     test_typed_packed_f64();
     test_typed_packed_varint_fields();
+    test_typed_packed_sint32_noncanonical_truncates_to_32_bits();
     // Empty packed payloads.
     check_empty_payload<ppb::packed_int32<1>>();
     check_empty_payload<ppb::packed_sint32<1>>();

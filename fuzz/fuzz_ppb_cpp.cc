@@ -287,6 +287,71 @@ exercise_config_d(std::span<const std::byte> input)
     POSTCOND(r.error() == err_before_reset);
 }
 
+/*
+ * Config E: the scalar `sint32` and packed `sint32` paths must decode
+ * any payload to the same value, and that value must match `ppb_zag32`.
+ *
+ * Feed potentially non-canonical varints to both code paths and compare.
+ */
+using SchemaScalarSint32 = ppb::schema<ppb::sint32<1>>;
+using SchemaPackedSint32 = ppb::schema<ppb::packed_sint32<1>>;
+
+void
+exercise_config_e(std::span<const std::byte> input)
+{
+    /* Interpret the input prefix as one zigzag-encoded varint. */
+    ppb_error err = PPB_OK;
+    ppb_buf buf = {
+        .buf = input.data(),
+        .size = input.size(),
+    };
+    uint64_t enc = ppb_decode_varint(&buf, &err);
+    if (err != PPB_OK)
+        return;
+
+    size_t varint_len = input.size() - buf.size;
+
+    /*
+     * Frame that varint as a scalar sint32 field and as a single-element
+     * packed sint32 field.  A varint is at most 10 bytes, so the packed
+     * length always fits in one byte.
+     */
+    std::vector<std::byte> scalar_msg;
+    scalar_msg.reserve(1 + varint_len);
+    scalar_msg.push_back(std::byte { 0x08 }); /* field 1, wire varint */
+    scalar_msg.insert(scalar_msg.end(), input.begin(), input.begin() + varint_len);
+
+    std::vector<std::byte> packed_msg;
+    packed_msg.reserve(2 + varint_len);
+    packed_msg.push_back(std::byte { 0x0a }); /* field 1, wire len */
+    packed_msg.push_back(static_cast<std::byte>(varint_len));
+    packed_msg.insert(packed_msg.end(), input.begin(), input.begin() + varint_len);
+
+    int32_t v_scalar = 0;
+    size_t scalar_calls = 0;
+
+    ppb::reader<SchemaScalarSint32> rs { std::span<const std::byte>(scalar_msg) };
+    if (rs.parse(ppb::on<1>(
+            [&](int32_t v) -> ppb_error
+            {
+                v_scalar = v;
+                scalar_calls++;
+                return PPB_OK;
+            })) != PPB_OK)
+        return;
+
+    std::vector<int32_t> v_packed;
+
+    ppb::reader<SchemaPackedSint32> rp { std::span<const std::byte>(packed_msg) };
+    if (rp.parse(ppb::push_back<1>(&v_packed)) != PPB_OK)
+        return;
+
+    POSTCOND(scalar_calls == 1);
+    POSTCOND(v_packed.size() == 1);
+    POSTCOND(v_scalar == v_packed[0]);
+    POSTCOND(v_scalar == ppb_zag32(static_cast<uint32_t>(enc)));
+}
+
 }  // namespace
 
 extern "C" int
@@ -298,6 +363,7 @@ LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
     exercise_config_b(input);
     exercise_config_c(input);
     exercise_config_d(input);
+    exercise_config_e(input);
 
     return 0;
 }
