@@ -543,6 +543,10 @@ on(Fn &&handler)
 //     [&](const reader<S> &) { cur = &vec.emplace_back(); return PPB_OK; },
 //     on<F::x>([&](auto v) { cur->x = v; return PPB_OK; }))
 //
+// It's safe to allocate in the init callback because the callback is
+// always called when the message can be prescanned, even if it's
+// empty.
+//
 // `K` must match a LEN-wire field in the outer schema (`bytes`,
 // `utf8string`, `len`, `unpacked_bytes`, `message<K, S2>`, or
 // `unpacked_message<K, S2>`).  Only for `message<K, S2>` /
@@ -784,10 +788,11 @@ template <typename... Fs> struct reader<schema<Fs...>>
     //
     // After prescan, `init(std::as_const(*this))` runs with prescan
     // metadata available via `meta<Key>()` and returns a `enum
-    // ppb_error`.  When `init` returns `PPB_OK` (`parse` immediately
-    // returns with the error otherwise), handlers are dispatched
-    // either once (prescan fast path) or per batch via `ppb_lexn`,
-    // depending on the schema's `field_semantics`.
+    // ppb_error`.  This call is unconditional when `init` is provided
+    // and prescan succeeds.  When `init` returns `PPB_OK` (`parse`
+    // immediately returns with the error otherwise), handlers are
+    // dispatched either once (prescan fast path) or per batch via
+    // `ppb_lexn`, depending on the schema's `field_semantics`.
     //
     // `handlers...` may be empty when `init` is supplied:
     // `parse(init)` runs prescan + `init` (with `meta<>()` populated)
@@ -1030,62 +1035,72 @@ reader<schema<Fs...>>::parse_tuple(Init &&init, limit bounds, std::tuple<Hs...> 
     ptrdiff_t num_bytes = ppb_prescan_impl(buf, m_fields.size(), Schema::s_encoded_tags.data(),
         m_fields.data(), bounds.fields(), bounds.bytes(), bounds.error_on_bytes());
 
+    // If there's a message, we'll determine whether any field forces
+    // a lexn pass.
+    bool need_lexn = false;
     if (num_bytes <= 0) [[unlikely]]
     {
-        m_error = ppb_error(num_bytes);
-        return m_error;
+        if (num_bytes < 0) [[unlikely]]
+        {
+            m_error = ppb_error(num_bytes);
+            return m_error;
+        }
+
+        // num_bytes == 0 -> fall through to init call.
     }
-
-    detect_unknown_field();
-
-    // Check field semantics: error fields that appeared on the wire
-    // are an immediate failure.  Also determine whether any field
-    // forces a lexn pass.
-    bool has_error = false;
-    bool need_lexn = false;
-    [&]<size_t... Is>(std::index_sequence<Is...>)
+    else
     {
-        // Compile-time check: does the handler pack carry a handler
-        // for this schema field?  We use this to skip the lexn-pass
-        // forcing logic for fields that wouldn't dispatch anyway --
-        // forcing lexn only to silently drop every occurrence is pure
-        // waste.  Always-on `field_semantics::error` checking is
-        // independent and stays unconditional.
-        constexpr auto has_handler_for = []<typename Field>() consteval
-        {
-            if constexpr (Field::is_unknown())
-            {
-                return detail::find_unknown_handler<Field::wire(), const ppb_field &, std::decay_t<Hs>...>()
-                    .has_value();
-            }
-            else
-            {
-                using V = decltype(Field::extract_value(std::declval<const ppb_field &>(),
-                    std::declval<ppb_error *>()));
-                return detail::find_value_handler<Field::tag(), Field::wire(), V, std::decay_t<Hs>...>()
-                    .has_value();
-            }
-        };
+        detect_unknown_field();
 
-        auto scan = [&]<size_t I>(std::integral_constant<size_t, I>)
+        // Check field semantics: error fields that appeared on the wire
+        // are an immediate failure.  Also determine whether any field
+        // forces a lexn pass.
+        bool has_error = false;
+        [&]<size_t... Is>(std::index_sequence<Is...>)
         {
-            using Field = decltype(Schema::template field<I>());
-            constexpr bool has_handler = has_handler_for.template operator()<Field>();
-            std::optional<uint32_t> err =
-                Field::template classify_field_before_lexn<has_handler>(m_fields[I].m, &need_lexn);
-            if (err.has_value()) [[unlikely]]
+            // Compile-time check: does the handler pack carry a handler
+            // for this schema field?  We use this to skip the lexn-pass
+            // forcing logic for fields that wouldn't dispatch anyway --
+            // forcing lexn only to silently drop every occurrence is pure
+            // waste.  Always-on `field_semantics::error` checking is
+            // independent and stays unconditional.
+            constexpr auto has_handler_for = []<typename Field>() consteval
             {
-                has_error = true;
-                m_error_field = *err;
-            }
-        };
-        (scan(std::integral_constant<size_t, Is> {}), ...);
-    }(std::make_index_sequence<Schema::num_fields()> {});
+                if constexpr (Field::is_unknown())
+                {
+                    return detail::find_unknown_handler<Field::wire(), const ppb_field &,
+                        std::decay_t<Hs>...>()
+                        .has_value();
+                }
+                else
+                {
+                    using V = decltype(Field::extract_value(std::declval<const ppb_field &>(),
+                        std::declval<ppb_error *>()));
+                    return detail::find_value_handler<Field::tag(), Field::wire(), V, std::decay_t<Hs>...>()
+                        .has_value();
+                }
+            };
 
-    if (has_error) [[unlikely]]
-    {
-        m_error = PPB_ERROR_CORRUPT_TAG;
-        return m_error;
+            auto scan = [&]<size_t I>(std::integral_constant<size_t, I>)
+            {
+                using Field = decltype(Schema::template field<I>());
+                constexpr bool has_handler = has_handler_for.template operator()<Field>();
+                std::optional<uint32_t> err =
+                    Field::template classify_field_before_lexn<has_handler>(m_fields[I].m, &need_lexn);
+                if (err.has_value()) [[unlikely]]
+                {
+                    has_error = true;
+                    m_error_field = *err;
+                }
+            };
+            (scan(std::integral_constant<size_t, Is> {}), ...);
+        }(std::make_index_sequence<Schema::num_fields()> {});
+
+        if (has_error) [[unlikely]]
+        {
+            m_error = PPB_ERROR_CORRUPT_TAG;
+            return m_error;
+        }
     }
 
     if constexpr (!std::is_same_v<std::decay_t<Init>, std::nullopt_t>)
@@ -1093,9 +1108,10 @@ reader<schema<Fs...>>::parse_tuple(Init &&init, limit bounds, std::tuple<Hs...> 
         m_error = init(std::as_const(*this));
     }
 
-    // we already bailed out if num_bytes <= 0 (not just on error),
-    // so we know we have *some* bytes to read here.
-    if (m_error != PPB_OK) [[unlikely]]
+    // We can get here for num_bytes == 0 (we want to run the init
+    // callback on empty messages), so must handle that case before
+    // assuming num_bytes > 0 in the sequel.
+    if (num_bytes == 0 || m_error != PPB_OK) [[unlikely]]
         return m_error;
 
     const std::byte *const outer_end = m_input.data() + m_input.size();

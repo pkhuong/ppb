@@ -1118,6 +1118,68 @@ test_parse_limit_init_and_handlers()
     CHECK(r.empty());
 }
 
+// An empty message prescans to zero bytes.  The init callback must still
+// run unconditionally (so allocating in init is safe even for empty
+// submessages), while no field handler fires.
+static void
+test_reader_parse_empty_message_runs_init()
+{
+    int init_calls = 0;
+    int handler_calls = 0;
+
+    ppb::reader<LexnSchema> r(nullptr, 0);
+
+    CHECK(r.parse(
+              [&](const ppb::reader<LexnSchema> &snapshot) -> ppb_error
+              {
+                  init_calls++;
+                  CHECK(snapshot.meta<1>().num_occurrences == 0);
+                  CHECK(snapshot.meta<2>().num_occurrences == 0);
+                  return PPB_OK;
+              },
+              {},
+              ppb::on<1>(
+                  [&](const ppb_field &) -> ppb_error
+                  {
+                      handler_calls++;
+                      return PPB_OK;
+                  })) == PPB_OK);
+
+    CHECK(init_calls == 1);
+    CHECK(handler_calls == 0);
+    CHECK(r.error() == PPB_OK);
+    CHECK(r.empty());
+}
+
+// On an empty message, an error returned by init still propagates out of
+// parse(): init runs, then parse returns its error without dispatching.
+static void
+test_reader_parse_empty_message_init_error_propagates()
+{
+    int init_calls = 0;
+    int handler_calls = 0;
+
+    ppb::reader<LexnSchema> r(nullptr, 0);
+
+    CHECK(r.parse(
+              [&](const ppb::reader<LexnSchema> &) -> ppb_error
+              {
+                  init_calls++;
+                  return PPB_ERROR_TRUNCATED_DATA;
+              },
+              {},
+              ppb::on<1>(
+                  [&](const ppb_field &) -> ppb_error
+                  {
+                      handler_calls++;
+                      return PPB_OK;
+                  })) == PPB_ERROR_TRUNCATED_DATA);
+
+    CHECK(init_calls == 1);
+    CHECK(handler_calls == 0);
+    CHECK(r.error() == PPB_ERROR_TRUNCATED_DATA);
+}
+
 // Schema with fields A=varint<1> and B=varint<2>.  The wire has field A
 // repeated 4x, then field B once, then field A again.  Since A, B, A is
 // non-monotonic (A < B), lexn splits this into two batches:
@@ -3670,6 +3732,8 @@ main()
     test_parse_limit_and_handlers();
     test_parse_init_and_handlers();
     test_parse_limit_init_and_handlers();
+    test_reader_parse_empty_message_runs_init();
+    test_reader_parse_empty_message_init_error_propagates();
     test_reader_parse_per_batch_dispatch();
 
     test_reader_parse_semantics_error_field_present();
