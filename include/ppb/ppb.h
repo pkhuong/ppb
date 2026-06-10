@@ -43,6 +43,9 @@
  *     like an unknown field (skipped or passed to catch-all).
  *   - Encoded fields are matched exclusively in their canonical
  *     (minimal) varint encoding.
+ *   - There is no check that string values are utf-8 encoded: on the
+ *     wire, string, bytes, submessages and packed repeated fields are
+ *     all the same.
  *
  * An initial `ppb_prescan` validates the input message and gathers
  * statistics about all the toplevel fields in the message.  With the

@@ -189,7 +189,14 @@ but can lead to surprise.  Here are a few things to keep in mind.
    This only matters for non-canonical inputs and matches what Google's
    C++ parser does on such inputs.
 
-3. There's no explicit support for oneof, but you can make it happen
+3. The library does not validate that strings are encoded as utf-8.
+   In fact, there's no difference between a bytes and a string field
+   (or submessage or packed repeated) at the wire encoding level.
+   If you care about that, consider a library like [simdutf](https://github.com/simdutf/simdutf),
+   but you might also want to pay attention to unicode normalization.
+   Either way, that's out of scope for PPB.
+
+4. There's no explicit support for oneof, but you can make it happen
    by populating fields in wire order, and clearing the other types in
    a oneof when you populate a new one.  That only works if you always
    use `ppb_lexn` (`ppb::field_semantics::always_lexn` semantics in
@@ -197,7 +204,7 @@ but can lead to surprise.  Here are a few things to keep in mind.
    present: the prescan metadata may suffice to tell you what value
    each member took, but you can't recover the order.
 
-4. "Last write wins" for submessages actually recurses in the
+5. "Last write wins" for submessages actually recurses in the
    submessage's constituent fields.  That is, in order to match the
    way Google protobuf handles repeated values for a non-repeated
    submessage field, we have to keep parsing into (i.e., like
@@ -209,7 +216,7 @@ but can lead to surprise.  Here are a few things to keep in mind.
    regular non-proto3 last-write-wins semantics for these submessages'
    own fields (and repeated submessages count as toplevel).
 
-5. Packed and unpacked repeated fields have separate tags.  It's a
+6. Packed and unpacked repeated fields have separate tags.  It's a
    different wire type, so different entry.  In practice, you may
    prefer to only support packed encoding when it's available, or
    at least support only the encoding you expect to see.  If you
@@ -220,11 +227,11 @@ but can lead to surprise.  Here are a few things to keep in mind.
    probably means setting `ppb::field_semantics::always_lexn` on
    the encoding you *don't* expect to see.
 
-6. Unexpected encodings are treated like unknown tags (same issue as
+7. Unexpected encodings are treated like unknown tags (same issue as
    packed / unpacked repeated, except generalised to, e.g., receiving
    a LEN value instead of a varint).
 
-7. Handling unknown tags is opt-in, with catch-all entries for each
+8. Handling unknown tags is opt-in, with catch-all entries for each
    wire type... and decoding the actual tag for a catch-all entry is
    tricky.  In order to decode the tag, you must take the tag `ptr`
    from the `ppb_field_value` struct, and construct a `ppb_buf` from
