@@ -2788,12 +2788,48 @@ test_reuse_reader_without_reset_fields()
     CHECK(r.unknown_field().has_value());
 }
 
-// parse() with empty input: prescan reads 0 bytes, takes the num_bytes <= 0 path.
+// parse() on empty input (prescan reads 0 bytes): a valid empty message
+// still runs `init`, but no field handlers fire.
 static void
 test_parse_empty_prescan()
 {
+    int init_calls = 0;
+
     ppb::reader<TestSchema> r(std::span<const std::byte> {});
-    CHECK(r.parse([](const ppb::reader<TestSchema> &) -> ppb_error { return PPB_OK; }) == PPB_OK);
+    CHECK(r.parse(
+              [&](const ppb::reader<TestSchema> &) -> ppb_error
+              {
+                  init_calls++;
+                  return PPB_OK;
+              }) == PPB_OK);
+    CHECK(init_calls == 1);
+    CHECK(r.empty());
+}
+
+// Empty input where `init` reports an error: it becomes the sticky error.
+static void
+test_parse_empty_init_error()
+{
+    ppb::reader<TestSchema> r(std::span<const std::byte> {});
+    CHECK(r.parse([](const ppb::reader<TestSchema> &) -> ppb_error { return PPB_ERROR_CORRUPT_TAG; }) ==
+        PPB_ERROR_CORRUPT_TAG);
+    CHECK(r.error() == PPB_ERROR_CORRUPT_TAG);
+}
+
+// Empty input with bare handlers (no `init`): nothing fires, call succeeds.
+static void
+test_parse_empty_no_init()
+{
+    int handler_calls = 0;
+
+    ppb::reader<TestSchema> r(std::span<const std::byte> {});
+    CHECK(r.parse(ppb::on<1>(
+              [&](const ppb_field &) -> ppb_error
+              {
+                  handler_calls++;
+                  return PPB_OK;
+              })) == PPB_OK);
+    CHECK(handler_calls == 0);
     CHECK(r.empty());
 }
 
@@ -3720,6 +3756,40 @@ test_on_submessage_typed_message_field()
     CHECK(inner_v == 42);
 }
 
+// A present-but-empty submessage (LEN, length 0) must still fire `init`
+// so the child message is materialised despite carrying no fields.
+static const uint8_t outer_empty_submsg_wire[] = { 0x0a, 0x00 };
+
+static void
+test_on_submessage_zero_length_runs_init()
+{
+    ppb::reader<OuterRaw> r(outer_empty_submsg_wire, sizeof(outer_empty_submsg_wire));
+
+    bool init_fired = false;
+    size_t inner_field1_count = 99;
+    int inner_handler_calls = 0;
+
+    ppb_error err = r.parse(ppb::limit::max_depth(2),
+        ppb::on_submessage<1, Inner>(
+            [&](const ppb::reader<Inner> &ir) -> ppb_error
+            {
+                init_fired = true;
+                inner_field1_count = ir.template meta<1>().num_occurrences;
+                return PPB_OK;
+            },
+            ppb::on<1>(
+                [&](const ppb_field &) -> ppb_error
+                {
+                    inner_handler_calls++;
+                    return PPB_OK;
+                })));
+
+    CHECK(err == PPB_OK);
+    CHECK(init_fired);
+    CHECK(inner_field1_count == 0);
+    CHECK(inner_handler_calls == 0);
+}
+
 }  // namespace submsg_tests
 
 int
@@ -3843,6 +3913,8 @@ main()
     test_dispatch_when_ok_and_when_error();
     test_reuse_reader_without_reset_fields();
     test_parse_empty_prescan();
+    test_parse_empty_init_error();
+    test_parse_empty_no_init();
 
     test_dispatch_limit_multiple_of_16();
     test_dispatch_limit_non_multiple_of_16();
@@ -3876,6 +3948,7 @@ main()
     submsg_tests::test_on_submessage_repeated();
     submsg_tests::test_on_submessage_with_init();
     submsg_tests::test_on_submessage_typed_message_field();
+    submsg_tests::test_on_submessage_zero_length_runs_init();
 
     std::printf("\n%d checks, %d failures\n", g_check_count, g_fail_count);
     return g_fail_count > 0 ? 1 : 0;

@@ -808,9 +808,10 @@ template <typename... Fs> struct reader<schema<Fs...>>
     //     `error_field()`, and skips both `init` and handlers.
     //   - Non-OK `init` return is recorded as the sticky error; the
     //     input span is *not* advanced.
-    //   - Empty input (or prescan reporting zero bytes) returns
-    //     `PPB_OK` without invoking `init` or any handler.  Absent
-    //     `proto3_zero_default` fields do not fire in that case.
+    //   - Empty input (prescan reporting zero bytes) is a valid empty
+    //     message: `init` still runs (so a present-but-empty submessage
+    //     is materialised), but no field handlers fire and absent
+    //     `proto3_zero_default` fields do not dispatch.
     //
     // *Consumes* from the input span!
     template <typename Init, typename... Hs>
