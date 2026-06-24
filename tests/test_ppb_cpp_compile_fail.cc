@@ -486,3 +486,20 @@ static_assert(sizeof(ppb::enumerated<1, int>) > 0);
 #ifdef PPB_FAIL_PACKED_ENUMERATED_NOT_AN_ENUM
 static_assert(sizeof(ppb::packed_enumerated<1, int>) > 0);
 #endif
+
+// A plain unscoped enum has no fixed underlying type, so casting an
+// out-of-range wire value to it is UB; `enumerated` rejects it.
+enum PlainEnum
+{
+    pe_a = 1
+};
+
+/* expect-error: fixed underlying type */
+#ifdef PPB_FAIL_ENUMERATED_NO_FIXED_UNDERLYING
+static_assert(sizeof(ppb::enumerated<1, PlainEnum>) > 0);
+#endif
+
+/* expect-error: fixed underlying type */
+#ifdef PPB_FAIL_PACKED_ENUMERATED_NO_FIXED_UNDERLYING
+static_assert(sizeof(ppb::packed_enumerated<1, PlainEnum>) > 0);
+#endif

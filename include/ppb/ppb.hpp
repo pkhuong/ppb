@@ -199,8 +199,10 @@ template <typename T> using enum_underlying_type = typename enum_underlying_type
 
 // Varint-backed enum field.  No range checking: wire values that
 // don't name an enumerator reach the handler as the corresponding bit
-// pattern.  Prefer a scoped enum or one with an explicit underlying
-// type so the cast is well-defined for any wire value.
+// pattern.  `Enum` must have a fixed underlying type (a scoped enum,
+// or `enum E : T`) so that the cast is always well-defined; that's
+// enforced at compile-time with the `ppb::detail::fixed_underlying_enum`
+// concept.
 //
 // proto2 last-write-wins semantics by default.
 template <auto K, typename Enum, field_semantics sem = field_semantics::last_write_wins,

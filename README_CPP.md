@@ -172,11 +172,12 @@ These wrap a wire-typed primitive and decode into a native C++ type:
 | `message<K, InnerSchema>`     | (submessage, see below)    | len       |
 
 `enumerated<K, Enum>` does **not** range-check: out-of-range wire
-values reach the handler as the corresponding bit pattern.  Prefer a
-scoped enum or one with an explicit underlying type (e.g.
-`enum class Color : uint32_t { ... }`); casting an out-of-range
-integer to an enum *without* a fixed underlying type is unspecified in
-C++.
+values reach the handler as the corresponding bit pattern.  `Enum`
+must therefore have a fixed underlying type (a scoped enum or an
+explicit underlying type) because otherwise casting an out-of-range
+integer to the enum could be undefined behavior in C++.  The wrapper
+enforces this at compile time; plain unscoped enums are rejected with
+a `static_assert` on the `ppb::detail::fixed_underlying_enum` concept.
 
 `utf8string<K>` passes the handler a `std::string_view` over the
 payload bytes.  Protobuf requires UTF-8, but the wrapper does **not**

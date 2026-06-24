@@ -1,3 +1,4 @@
+#include <bit>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -2258,6 +2259,90 @@ test_typed_packed_sint32_noncanonical_truncates_to_32_bits()
     CHECK(s32s[0] == -1);
 }
 
+/*
+ * Drive every scalar `extract_value` over adversarial 64-bit payloads
+ * (all-ones, the sign bit alone, and float/double NaN/inf bit
+ * patterns) and assert (in ubsan builds) that each extract is just
+ * bitcast/truncation without UB due to type-punning or
+ * invalid-representation issues:
+ *
+ *   - integer extracts are the plain (re)interpretation of the bits;
+ *   - `bool` is `bits != 0`, never a punned non-0/1 object (UBSan
+ *     `bool` in CI rejects an out-of-range representation);
+ *   - `float`/`double` are materialised only via `bit_cast` and
+ *     round-trip their exact source bits, compared bit-for-bit so a
+ *     NaN payload is never lost to an arithmetic comparison;
+ *   - a fixed-underlying `enum class` is total for every input: the
+ *     `fixed_underlying_enum` check guarantees it, and UBSan confirms
+ *     dynamically.
+ */
+enum class A5Key : int
+{
+    a = 1
+};
+
+enum class A5Color : int
+{
+    red = 0,
+    green = 1,
+    blue = 2
+};
+
+static void
+test_scalar_value_punning_sweep()
+{
+    static const uint64_t patterns[] = {
+        0,
+        1,
+        2,
+        0xFF,
+        0x100,
+        0x7FFFFFFF,
+        0x80000000,
+        0xFFFFFFFF,
+        0x7FFFFFFFFFFFFFFFull,
+        0x8000000000000000ull,
+        0xFFFFFFFFFFFFFFFFull,
+        0x7F800001ull /* f32 sNaN */,
+        0x7FC00000ull /* f32 qNaN */,
+        0xFF800000ull /* f32 -inf */,
+        0x7FF0000000000001ull /* f64 sNaN */,
+        0x7FF8000000000000ull /* f64 qNaN */,
+        0xFFF0000000000000ull /* f64 -inf */,
+    };
+
+    for (uint64_t bits : patterns)
+    {
+        ppb_field f {};
+        f.v.u64 = bits;
+        ppb_error err = PPB_OK;
+
+        CHECK(ppb::int32<A5Key::a>::extract_value(f, &err) ==
+            static_cast<int32_t>(static_cast<uint32_t>(bits)));
+        CHECK(ppb::uint32<A5Key::a>::extract_value(f, &err) == static_cast<uint32_t>(bits));
+        CHECK(ppb::int64<A5Key::a>::extract_value(f, &err) == static_cast<int64_t>(bits));
+        CHECK(ppb::uint64<A5Key::a>::extract_value(f, &err) == bits);
+        CHECK(ppb::fixed32<A5Key::a>::extract_value(f, &err) == static_cast<uint32_t>(bits));
+        CHECK(ppb::fixed64<A5Key::a>::extract_value(f, &err) == bits);
+        CHECK(ppb::sfixed32<A5Key::a>::extract_value(f, &err) ==
+            std::bit_cast<int32_t>(static_cast<uint32_t>(bits)));
+        CHECK(ppb::sfixed64<A5Key::a>::extract_value(f, &err) == std::bit_cast<int64_t>(bits));
+
+        CHECK(ppb::boolean<A5Key::a>::extract_value(f, &err) == (bits != 0));
+
+        const float fl = ppb::f32<A5Key::a>::extract_value(f, &err);
+        CHECK(std::bit_cast<uint32_t>(fl) == static_cast<uint32_t>(bits));
+
+        const double db = ppb::f64<A5Key::a>::extract_value(f, &err);
+        CHECK(std::bit_cast<uint64_t>(db) == bits);
+
+        const A5Color c = ppb::enumerated<A5Key::a, A5Color>::extract_value(f, &err);
+        CHECK(static_cast<int>(c) == static_cast<int>(bits));
+
+        CHECK(err == PPB_OK);
+    }
+}
+
 static void
 test_typed_packed_varint_fields()
 {
@@ -3940,6 +4025,7 @@ main()
     test_typed_packed_fixed_fields();
     test_typed_packed_sfixed32();
     test_typed_packed_f64();
+    test_scalar_value_punning_sweep();
     test_typed_packed_varint_fields();
     test_typed_packed_sint32_noncanonical_truncates_to_32_bits();
     // Empty packed payloads.

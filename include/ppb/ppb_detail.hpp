@@ -283,15 +283,34 @@ template <auto K, field_semantics sem> struct boolean : public varint<K, sem>
     static constexpr bool extract_value(const ppb_field &f, ppb_error *) { return f.v.u64 != 0; }
 };
 
+namespace detail
+{
+
+// True for an enum with a *fixed* underlying type (a scoped enum, or
+// `enum E : T`).  Such enums can cast from any underlying-type value
+// without UB, unlike plain unscoped enums. Required so that unchecked
+// wire values are always safe to cast.
+//
+// `T{u}` list-init is well-formed iff the type is fixed (P0138R2); the
+// `underlying_type_t<T>` probe never narrows, so it cannot spuriously
+// reject a fixed enum.
+template <typename T>
+concept fixed_underlying_enum = enum_type<T> && requires(std::underlying_type_t<T> u) { T { u }; };
+
+}  // namespace detail
+
 template <auto K, typename Enum, field_semantics sem, typename UnderlyingType>
     requires detail::enum_type<Enum>
 struct enumerated : public varint<K, sem>
 {
     static_assert(std::is_enum_v<Enum>, "enumerated field type requires an enum type parameter");
+    static_assert(detail::fixed_underlying_enum<Enum>,
+        "enumerated field requires an enum with a fixed underlying type (a scoped enum, or "
+        "`enum E : T`): casting an out-of-range wire value would otherwise be undefined behavior");
 
-    // Cast through `UnderlyingType` first so the final cast to `Enum`
-    // is well-defined for any 64-bit input.  Out-of-range values
-    // reach the handler as the corresponding bit pattern.
+    // Narrow to `UnderlyingType`, then to `Enum`: well-defined for any
+    // 64-bit input because `fixed_underlying_enum<Enum>` is enforced
+    // above.  Out-of-range values reach the handler as that bit pattern.
     static constexpr Enum extract_value(const ppb_field &f, ppb_error *)
     {
         return static_cast<Enum>(static_cast<UnderlyingType>(f.v.u64));
@@ -1256,6 +1275,9 @@ template <auto K, typename Enum, field_semantics sem, typename UnderlyingType>
 struct packed_enumerated : public len<K, sem>
 {
     static_assert(std::is_enum_v<Enum>, "enumerated field type requires an enum type parameter");
+    static_assert(detail::fixed_underlying_enum<Enum>,
+        "enumerated field requires an enum with a fixed underlying type (a scoped enum, or "
+        "`enum E : T`): casting an out-of-range wire value would otherwise be undefined behavior");
 
     static constexpr auto extract_value(const ppb_field &f, ppb_error *error)
     {

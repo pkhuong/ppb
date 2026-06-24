@@ -88,6 +88,26 @@ static_assert(sizeof(ppb::enumerated<9, test_enum>) > 0);
 // counterpart to PPB_FAIL_PACKED_ENUMERATED_NOT_AN_ENUM
 static_assert(sizeof(ppb::packed_enumerated<10, test_enum>) > 0);
 
+// counterpart to PPB_FAIL_{,PACKED_}ENUMERATED_NO_FIXED_UNDERLYING: a
+// fixed underlying type is accepted in all three of its forms.  The
+// scoped-with-explicit-underlying form is already exercised above by
+// `test_enum`; cover the two remaining forms, a scoped enum with a
+// default underlying type, and an unscoped enum with an explicit one.
+enum class scoped_default_enum
+{
+    sde_a = 1
+};
+enum unscoped_fixed_enum : int
+{
+    ufe_a = 1
+};
+static_assert(ppb::detail::fixed_underlying_enum<test_enum>);
+static_assert(ppb::detail::fixed_underlying_enum<scoped_default_enum>);
+static_assert(ppb::detail::fixed_underlying_enum<unscoped_fixed_enum>);
+static_assert(sizeof(ppb::enumerated<17, scoped_default_enum>) > 0);
+static_assert(sizeof(ppb::enumerated<18, unscoped_fixed_enum>) > 0);
+static_assert(sizeof(ppb::packed_enumerated<19, unscoped_fixed_enum>) > 0);
+
 // packed_* types accept an explicit field_semantics parameter; cover
 // two important override use cases (always_lexn and error).
 static_assert(sizeof(ppb::packed_int32<11, always_lexn>) > 0);
