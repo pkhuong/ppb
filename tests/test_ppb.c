@@ -14,6 +14,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 static int g_fail_count = 0;
@@ -567,6 +568,133 @@ test_peek_tag_range(void)
         rc = peek_varint_slow(make_buf(data, 8), &val, /*limb_width=*/8, PPB_ERROR_CORRUPT_TAG);
         CHECK(rc == PPB_ERROR_CORRUPT_TAG);
         CHECK(val == 0);
+    }
+}
+
+/*
+ * Over-read at the varint fast<->slow boundary and at per-wire-type EOF.
+ * Every buffer is heap-allocated at exactly its length, so a read at offset
+ * `size` (one past the end) trips an ASan red-zone; the peek tests above use
+ * oversized stack arrays where the same over-read would land inside the array
+ * and escape the sanitizer.
+ */
+
+/* Prescan every truncation of `msg` against an exact-sized heap copy. */
+static void
+overread_truncation_sweep(const uint8_t *msg, size_t len, size_t num_fields,
+    const struct ppb_encoded_tag *tags)
+{
+    CHECK(ppb_validate_tags(num_fields, tags) == PPB_OK);
+
+    for (size_t cut = 0; cut <= len; cut++)
+    {
+        uint8_t *p = malloc(cut == 0 ? 1 : cut);
+        memcpy(p, msg, cut);
+
+        struct ppb_field fields[2];
+        zero_fields(num_fields, fields);
+
+        ptrdiff_t rc = ppb_prescan(make_buf(p, cut), num_fields, tags, fields, SIZE_MAX);
+        CHECK(rc < 0 || (size_t)rc <= cut); /* never consumes past the buffer */
+
+        free(p);
+    }
+}
+
+static void
+test_overread_boundary_exact(void)
+{
+    printf("test_overread_boundary_exact\n");
+
+    /*
+     * Direct peek sweep across the fast/slow cutoff (size 7/8/9) on
+     * exact-sized buffers.  All-0xFF forces the fast path to find no stop bit
+     * and fall into the byte-by-byte slow path; clearing the high bit of the
+     * last byte makes a valid varint that ends exactly at EOF.
+     */
+    for (size_t cut = 0; cut <= 12; cut++)
+    {
+        uint8_t *p = malloc(cut == 0 ? 1 : cut);
+
+        memset(p, 0xFF, cut); /* all continuation bytes */
+
+        uint64_t v = 0xDEAD;
+        int rc = peek_varint(make_buf(p, cut), &v);
+        CHECK(rc < 0 || (size_t)rc <= cut);
+
+        uint64_t t = 0xBEEF;
+        int rt = peek_tag(make_buf(p, cut), &t);
+        CHECK(rt < 0 || (size_t)rt <= cut);
+
+        struct ppb_buf b = make_buf(p, cut);
+        enum ppb_error e = PPB_OK;
+        (void)decode_varint(&b, &e, 0); /* advances within bounds or errors */
+
+        if (cut >= 1 && cut <= 10) /* valid varint ending exactly at EOF */
+        {
+            memset(p, 0xFF, cut);
+            p[cut - 1] = 0x7F; /* clear the high bit: stop at the last byte */
+
+            uint64_t exact = 0;
+            int re = peek_varint(make_buf(p, cut), &exact);
+            CHECK(re == (int)cut); /* reads exactly `cut` bytes, no over-read */
+        }
+
+        free(p);
+    }
+
+    {
+        /* field 1 VARINT, 10-byte value: crosses the 8-byte fast/slow seam. */
+        const uint8_t varint10[] = { 0x08, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x01 };
+        const struct ppb_encoded_tag tags[] = { PPB_TAG(1, PPB_WIRE_VARINT) };
+
+        overread_truncation_sweep(varint10, sizeof(varint10), 1, tags);
+    }
+
+    {
+        /* field 1 I64: buf_peek64 gated by buf_check(8). */
+        const uint8_t i64[] = { 0x09, 1, 2, 3, 4, 5, 6, 7, 8 };
+        const struct ppb_encoded_tag tags[] = { PPB_TAG(1, PPB_WIRE_I64) };
+
+        overread_truncation_sweep(i64, sizeof(i64), 1, tags);
+    }
+
+    {
+        /* field 1 I32: buf_peek32 gated by buf_check(4). */
+        const uint8_t i32[] = { 0x0D, 0xAA, 0xBB, 0xCC, 0xDD };
+        const struct ppb_encoded_tag tags[] = { PPB_TAG(1, PPB_WIRE_I32) };
+
+        overread_truncation_sweep(i32, sizeof(i32), 1, tags);
+    }
+
+    {
+        /* field 1 LEN, 2-byte length varint (len=128): length-then-payload buf_check. */
+        uint8_t len128[3 + 128];
+
+        len128[0] = 0x0A;
+        len128[1] = 0x80;
+        len128[2] = 0x01;
+        memset(len128 + 3, 0x5A, 128);
+
+        const struct ppb_encoded_tag tags[] = { PPB_TAG(1, PPB_WIRE_LEN) };
+
+        overread_truncation_sweep(len128, sizeof(len128), 1, tags);
+    }
+
+    {
+        /* field 16 I64: 2-byte tag, then buf_peek64. */
+        const uint8_t tag16[] = { 0x81, 0x01, 1, 2, 3, 4, 5, 6, 7, 8 };
+        const struct ppb_encoded_tag tags[] = { PPB_TAG(16, PPB_WIRE_I64) };
+
+        overread_truncation_sweep(tag16, sizeof(tag16), 1, tags);
+    }
+
+    {
+        /* 8-byte all-continuation tag: peek_tag fast path reads exactly 8, rejects. */
+        const uint8_t overlong[] = { 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x00 };
+        const struct ppb_encoded_tag tags[] = { PPB_TAG(1, PPB_WIRE_VARINT) };
+
+        overread_truncation_sweep(overlong, sizeof(overlong), 1, tags);
     }
 }
 
@@ -2649,6 +2777,7 @@ main(void)
     test_peek_varint_error();
     test_peek_tag_error();
     test_peek_tag_range();
+    test_overread_boundary_exact();
 
     test_prescan_known_fields();
     test_prescan_repeated_fields();
