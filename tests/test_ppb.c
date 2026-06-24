@@ -2567,6 +2567,24 @@ test_squish_varint_equivalence(void)
 
     for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++)
         CHECK(squish_varint(cases[i]) == squish_varint_portable(cases[i]));
+
+    /*
+     * Both squish_varint paths are GF(2)-linear in x: the BMI2 _pext_u64 is a
+     * bit-gather, and the portable parallel-merge uses only (x & const), |, and
+     * (x >> const) where every | combines bit-disjoint operands, so it acts as
+     * XOR.  A GF(2)-linear map on a uint64_t is fully determined by its action
+     * on the 64 basis vectors 1<<i, so agreement on those proves agreement on
+     * all 2^64 inputs.  WP can only model the portable path and each binary
+     * compiles just one of the two, so this is the sole check that the BMI2 hot
+     * path matches the proven one; it bites only on an x86-64 -mbmi2 build (and
+     * under qemu-x86_64), reducing to a tautology elsewhere.
+     */
+    for (int bit = 0; bit < 64; bit++)
+    {
+        uint64_t x = (uint64_t)1 << bit;
+
+        CHECK(squish_varint(x) == squish_varint_portable(x));
+    }
 }
 
 /*
