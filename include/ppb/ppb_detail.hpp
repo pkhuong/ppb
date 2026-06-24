@@ -1155,33 +1155,33 @@ inline constexpr bool is_packed_range_v<packed_varint_view<T, Policy>> = true;
 // span of `le_packed<T>`; varint variants below use the lazy
 // `packed_varint_view`.
 
-template <auto K> struct packed_fixed32 : public bytes<K, le_packed<uint32_t>, field_semantics::repeated>
+template <auto K, field_semantics sem> struct packed_fixed32 : public bytes<K, le_packed<uint32_t>, sem>
 {
 };
 
-template <auto K> struct packed_sfixed32 : public bytes<K, le_packed<int32_t>, field_semantics::repeated>
+template <auto K, field_semantics sem> struct packed_sfixed32 : public bytes<K, le_packed<int32_t>, sem>
 {
 };
 
-template <auto K> struct packed_f32 : public bytes<K, le_packed<float>, field_semantics::repeated>
+template <auto K, field_semantics sem> struct packed_f32 : public bytes<K, le_packed<float>, sem>
 {
 };
 
-template <auto K> struct packed_fixed64 : public bytes<K, le_packed<uint64_t>, field_semantics::repeated>
+template <auto K, field_semantics sem> struct packed_fixed64 : public bytes<K, le_packed<uint64_t>, sem>
 {
 };
 
-template <auto K> struct packed_sfixed64 : public bytes<K, le_packed<int64_t>, field_semantics::repeated>
+template <auto K, field_semantics sem> struct packed_sfixed64 : public bytes<K, le_packed<int64_t>, sem>
 {
 };
 
-template <auto K> struct packed_f64 : public bytes<K, le_packed<double>, field_semantics::repeated>
+template <auto K, field_semantics sem> struct packed_f64 : public bytes<K, le_packed<double>, sem>
 {
 };
 
 // Packed varint fields return a lazy-decoding view.
 
-template <auto K> struct packed_int32 : public len<K, field_semantics::repeated>
+template <auto K, field_semantics sem> struct packed_int32 : public len<K, sem>
 {
     static constexpr auto extract_value(const ppb_field &f, ppb_error *error)
     {
@@ -1191,7 +1191,7 @@ template <auto K> struct packed_int32 : public len<K, field_semantics::repeated>
     }
 };
 
-template <auto K> struct packed_int64 : public len<K, field_semantics::repeated>
+template <auto K, field_semantics sem> struct packed_int64 : public len<K, sem>
 {
     static constexpr auto extract_value(const ppb_field &f, ppb_error *error)
     {
@@ -1201,7 +1201,7 @@ template <auto K> struct packed_int64 : public len<K, field_semantics::repeated>
     }
 };
 
-template <auto K> struct packed_sint32 : public len<K, field_semantics::repeated>
+template <auto K, field_semantics sem> struct packed_sint32 : public len<K, sem>
 {
     static constexpr auto extract_value(const ppb_field &f, ppb_error *error)
     {
@@ -1211,7 +1211,7 @@ template <auto K> struct packed_sint32 : public len<K, field_semantics::repeated
     }
 };
 
-template <auto K> struct packed_sint64 : public len<K, field_semantics::repeated>
+template <auto K, field_semantics sem> struct packed_sint64 : public len<K, sem>
 {
     static constexpr auto extract_value(const ppb_field &f, ppb_error *error)
     {
@@ -1221,7 +1221,7 @@ template <auto K> struct packed_sint64 : public len<K, field_semantics::repeated
     }
 };
 
-template <auto K> struct packed_uint32 : public len<K, field_semantics::repeated>
+template <auto K, field_semantics sem> struct packed_uint32 : public len<K, sem>
 {
     static constexpr auto extract_value(const ppb_field &f, ppb_error *error)
     {
@@ -1231,7 +1231,7 @@ template <auto K> struct packed_uint32 : public len<K, field_semantics::repeated
     }
 };
 
-template <auto K> struct packed_uint64 : public len<K, field_semantics::repeated>
+template <auto K, field_semantics sem> struct packed_uint64 : public len<K, sem>
 {
     static constexpr auto extract_value(const ppb_field &f, ppb_error *error)
     {
@@ -1241,7 +1241,7 @@ template <auto K> struct packed_uint64 : public len<K, field_semantics::repeated
     }
 };
 
-template <auto K> struct packed_boolean : public len<K, field_semantics::repeated>
+template <auto K, field_semantics sem> struct packed_boolean : public len<K, sem>
 {
     static constexpr auto extract_value(const ppb_field &f, ppb_error *error)
     {
@@ -1251,9 +1251,9 @@ template <auto K> struct packed_boolean : public len<K, field_semantics::repeate
     }
 };
 
-template <auto K, typename Enum, typename UnderlyingType>
+template <auto K, typename Enum, field_semantics sem, typename UnderlyingType>
     requires detail::enum_type<Enum>
-struct packed_enumerated : public len<K, field_semantics::repeated>
+struct packed_enumerated : public len<K, sem>
 {
     static_assert(std::is_enum_v<Enum>, "enumerated field type requires an enum type parameter");
 

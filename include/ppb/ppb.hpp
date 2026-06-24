@@ -287,22 +287,23 @@ template <typename T> struct le_packed
 };
 
 // Packed repeated field types
-template <auto K> struct packed_int32;
-template <auto K> struct packed_int64;
-template <auto K> struct packed_sint32;
-template <auto K> struct packed_sint64;
-template <auto K> struct packed_uint32;
-template <auto K> struct packed_uint64;
-template <auto K> struct packed_boolean;
-template <auto K, typename Enum, typename UnderlyingType = detail::enum_underlying_type<Enum>>
+template <auto K, field_semantics sem = field_semantics::repeated> struct packed_int32;
+template <auto K, field_semantics sem = field_semantics::repeated> struct packed_int64;
+template <auto K, field_semantics sem = field_semantics::repeated> struct packed_sint32;
+template <auto K, field_semantics sem = field_semantics::repeated> struct packed_sint64;
+template <auto K, field_semantics sem = field_semantics::repeated> struct packed_uint32;
+template <auto K, field_semantics sem = field_semantics::repeated> struct packed_uint64;
+template <auto K, field_semantics sem = field_semantics::repeated> struct packed_boolean;
+template <auto K, typename Enum, field_semantics sem = field_semantics::repeated,
+    typename UnderlyingType = detail::enum_underlying_type<Enum>>
     requires detail::enum_type<Enum>
 struct packed_enumerated;
-template <auto K> struct packed_fixed32;
-template <auto K> struct packed_sfixed32;
-template <auto K> struct packed_f32;
-template <auto K> struct packed_fixed64;
-template <auto K> struct packed_sfixed64;
-template <auto K> struct packed_f64;
+template <auto K, field_semantics sem = field_semantics::repeated> struct packed_fixed32;
+template <auto K, field_semantics sem = field_semantics::repeated> struct packed_sfixed32;
+template <auto K, field_semantics sem = field_semantics::repeated> struct packed_f32;
+template <auto K, field_semantics sem = field_semantics::repeated> struct packed_fixed64;
+template <auto K, field_semantics sem = field_semantics::repeated> struct packed_sfixed64;
+template <auto K, field_semantics sem = field_semantics::repeated> struct packed_f64;
 
 // Unpacked repeated field types
 template <auto K> using unpacked_int32 = int32<K, field_semantics::repeated>;

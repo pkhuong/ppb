@@ -88,6 +88,15 @@ static_assert(sizeof(ppb::enumerated<9, test_enum>) > 0);
 // counterpart to PPB_FAIL_PACKED_ENUMERATED_NOT_AN_ENUM
 static_assert(sizeof(ppb::packed_enumerated<10, test_enum>) > 0);
 
+// packed_* types accept an explicit field_semantics parameter; cover
+// two important override use cases (always_lexn and error).
+static_assert(sizeof(ppb::packed_int32<11, always_lexn>) > 0);
+static_assert(sizeof(ppb::packed_int32<12, error>) > 0);
+static_assert(sizeof(ppb::packed_fixed32<13, always_lexn>) > 0);
+static_assert(sizeof(ppb::packed_fixed32<14, error>) > 0);
+static_assert(sizeof(ppb::packed_enumerated<15, test_enum, always_lexn>) > 0);
+static_assert(sizeof(ppb::packed_enumerated<16, test_enum, error>) > 0);
+
 // I32-backed
 static_assert(std::is_same_v<ppb::proto3_fixed32<9>, ppb::fixed32<9, proto3_zero_default>>);
 static_assert(std::is_same_v<ppb::proto3_sfixed32<10>, ppb::sfixed32<10, proto3_zero_default>>);
