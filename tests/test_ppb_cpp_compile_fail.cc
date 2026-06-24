@@ -232,6 +232,15 @@ static_assert(sizeof(ppb::auto_schema<std::tuple<ppb::varint<K::f1>, int>>) > 0)
 static_assert(sizeof(ppb::auto_schema<ppb::varint<K::f2>, ppb::varint<K::f2>>) > 0);
 #endif
 
+// auto_schema: splicing two detect_unknown_fields<> schemas yields
+// duplicate catch-all tags, caught by the strict-ascending check.
+
+/* expect-error: schema fields must be listed in strictly ascending order */
+#ifdef PPB_FAIL_SCHEMA_FLATTEN_DOUBLE_UNKNOWN
+using base = ppb::auto_schema<ppb::varint<1>, ppb::detect_unknown_fields<>>;
+static_assert(sizeof(ppb::auto_schema<base, ppb::detect_unknown_fields<>>) > 0);
+#endif
+
 // auto_schema: empty input flattens to an empty schema, which is rejected.
 
 /* expect-error: schema must include at least one field */

@@ -408,6 +408,23 @@ static_assert(std::is_same_v<ppb::auto_schema<ppb::int32<K::f2>, ppb::utf8string
 
 }  // namespace test_auto_schema
 
+// auto_schema splices a complete schema and re-sorts its fields with
+// the rest, rather than treating it as an opaque leaf.
+namespace test_auto_schema_flatten
+{
+using inner = ppb::schema<ppb::varint<K::f1>, ppb::i32<K::f3>>;
+static_assert(std::is_same_v<ppb::auto_schema<ppb::varint<K::f2>, inner>,
+    ppb::schema<ppb::varint<K::f1>, ppb::varint<K::f2>, ppb::i32<K::f3>>>);
+}  // namespace test_auto_schema_flatten
+
+// An unknown-only catch-all is a schema in its own right: usable as a
+// reader schema without wrapping in auto_schema.
+namespace test_detect_unknown_is_schema
+{
+using S = ppb::detect_unknown_fields<>;
+static_assert(sizeof(ppb::reader<S>) > 0, "reader over a bare detect_unknown_fields");
+}  // namespace test_detect_unknown_is_schema
+
 // Catch-all / unknown<> field type. Negative counterpart in
 // PPB_FAIL_UNKNOWN_*.
 namespace test_unknown_field

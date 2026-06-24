@@ -34,7 +34,7 @@
 //   - `ppb::schema<Fs...>` -- compile-time-validated field type list.
 //   - `ppb::auto_schema<Ts...>` -- flatten and sort fields from tuples
 //     into a `schema<...>`.
-//   - `ppb::detect_unknown_fields<sem>` -- catch-all tuple for all four wire
+//   - `ppb::detect_unknown_fields<sem>` -- catch-all schema for all four wire
 //     types; drop into `auto_schema` to opt into unknown-field reporting.
 //     `sem` defaults to `field_semantics::repeated`; use `field_semantics::error`
 //     to automatically report unknown fields as errors (with `reader::parse` only).
@@ -76,6 +76,11 @@
 
 namespace ppb
 {
+
+// Defined fully below, after ppb_detail.hpp.  Forward-declared here so the
+// detect_unknown_fields alias and detail::flatten_one's schema<>
+// specialization can name it before the definition.
+template <typename... Fs> struct schema;
 
 // Protobuf wire types, matching `enum ppb_wire_type`.
 //
@@ -320,9 +325,10 @@ using unpacked_bytes = bytes<K, Element, field_semantics::repeated>;
 template <auto K, typename InnerSchema>
 using unpacked_message = message<K, InnerSchema, field_semantics::repeated>;
 
-// Tuple that registers the catch-all for every wire type at once;
-// drop into `auto_schema` to opt into unknown-field detection without
-// listing the four unknowns explicitly.  Accepts an optional
+// Schema that registers the catch-all for every wire type at once.  As
+// a schema it is usable directly (`ppb::reader<ppb::detect_unknown_fields<>>`),
+// or spliced into `auto_schema` to opt into unknown-field detection
+// without listing the four unknowns explicitly.  Accepts an optional
 // `field_semantics` (defaults to `repeated`) to control how unknown
 // fields are classified:
 //
@@ -332,7 +338,7 @@ using unpacked_message = message<K, InnerSchema, field_semantics::repeated>;
 // For `field_semantics::error`, the error field tag is reported as
 // 2**29 - 1.
 template <field_semantics sem = field_semantics::repeated>
-using detect_unknown_fields = std::tuple<unknown<wire_type::varint, sem>, unknown<wire_type::i64, sem>,
+using detect_unknown_fields = schema<unknown<wire_type::varint, sem>, unknown<wire_type::i64, sem>,
     unknown<wire_type::len, sem>, unknown<wire_type::i32, sem>>;
 
 }  // namespace ppb
@@ -390,8 +396,8 @@ public:
     using typename impl::field_range;
 };
 
-// Accepts field descriptors and/or (possibly nested)
-// `std::tuple<...>`s of descriptors, flattens, sorts ascending by
+// Accepts field descriptors, `std::tuple`s of fields, or existing
+// `ppb::schema<>`s (possibly nested), flattens, sorts ascending by
 // `(field_number, wire_type)`, and yields the corresponding
 // `ppb::schema<...>`.  Useful when assembling a schema from reusable
 // sub-tuples without worrying about tag order:
@@ -399,6 +405,11 @@ public:
 //   using shared = std::tuple<ppb::varint<3>, ppb::len<7>>;
 //   using my_schema = ppb::auto_schema<ppb::varint<1>, shared, ppb::i32<2>>;
 //   // == ppb::schema<ppb::varint<1>, ppb::i32<2>, ppb::varint<3>, ppb::len<7>>
+//
+// A spliced schema is re-sorted with the rest, so a generated schema
+// can be extended at the use site:
+//
+//   using extended = ppb::auto_schema<Foo::schema, ppb::detect_unknown_fields<>>;
 //
 // Duplicates are still rejected by `schema<>`'s ascending check.
 template <typename... Ts> using auto_schema = typename detail::sorted_fields<Ts...>::template to<schema>;

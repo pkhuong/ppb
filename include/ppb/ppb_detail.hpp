@@ -1281,6 +1281,14 @@ template <typename... Ts> struct flatten_one<std::tuple<Ts...>>
     using type = decltype(std::tuple_cat(typename flatten_one<Ts>::type {}...));
 };
 
+// A complete schema flattens to its field pack, so auto_schema can
+// splice and re-sort it (e.g. extending a generated WKT schema with
+// detect_unknown_fields<> at the use site).
+template <typename... Fs> struct flatten_one<schema<Fs...>>
+{
+    using type = std::tuple<Fs...>;
+};
+
 template <typename... Ts> using flatten_t = decltype(std::tuple_cat(typename flatten_one<Ts>::type {}...));
 
 template <typename Tuple> struct sort_fields;
