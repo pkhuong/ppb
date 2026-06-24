@@ -3875,11 +3875,13 @@ test_on_submessage_zero_length_runs_init()
     CHECK(inner_handler_calls == 0);
 }
 
-// A singular (`ppb::message<K, S>`) field that appears more than once
-// must be descended into on EVERY occurrence, the way libprotobuf
-// parses (and merges) each one.  The divergence shows up as
-// undetected malformed messages, and incompletely parsed submessages
-// when a later entry overrides only a subset of fields.
+/*
+ * A singular (`ppb::message<K, S>`) field that appears more than once
+ * must be descended into on EVERY occurrence, the way libprotobuf
+ * parses (and merges) each one.  The divergence shows up as
+ * undetected malformed messages, and incompletely parsed submessages
+ * when a later entry overrides only a subset of fields.
+ */
 using SingInner = ppb::schema<ppb::varint<1>>;
 using SingOuter = ppb::schema<ppb::message<1, SingInner>>;
 
@@ -3929,6 +3931,426 @@ test_on_submessage_validates_every_occurrence()
 }
 
 }  // namespace submsg_tests
+
+namespace repeated_tests
+{
+
+/*
+ * Parse `wire` as `Schema` and collect field `Key` element-by-element via
+ * on_each into a vector of T.
+ */
+template <typename Schema, auto Key, typename T>
+static std::vector<T>
+collect_on_each(std::initializer_list<uint8_t> wire)
+{
+    std::vector<std::byte> buf;
+
+    for (uint8_t b : wire)
+    {
+        buf.push_back(std::byte { b });
+    }
+
+    std::vector<T> out;
+    ppb::reader<Schema> r(std::span<const std::byte>(buf.data(), buf.size()));
+
+    (void)r.parse(ppb::on_each<Key>([&](T v) { out.push_back(v); }));
+    return out;
+}
+
+/* packed and unpacked decode identically. */
+static void
+test_int32_packed_equals_unpacked()
+{
+    enum class K : int
+    {
+        v = 1
+    };
+    using S = ppb::auto_schema<ppb::packed_int32<K::v>, ppb::int32<K::v, ppb::field_semantics::always_lexn>>;
+
+    auto from_packed = collect_on_each<S, K::v, int32_t>({ 0x0a, 0x03, 1, 2, 3 });
+    auto from_unpacked = collect_on_each<S, K::v, int32_t>({ 0x08, 1, 0x08, 2, 0x08, 3 });
+    const std::vector<int32_t> expected = { 1, 2, 3 };
+    CHECK(from_packed == expected);
+    CHECK(from_unpacked == expected);
+}
+
+static void
+test_sfixed32_packed_equals_unpacked()
+{
+    enum class K : int
+    {
+        v = 1
+    };
+    using S =
+        ppb::auto_schema<ppb::packed_sfixed32<K::v>, ppb::sfixed32<K::v, ppb::field_semantics::always_lexn>>;
+
+    /* little-endian: 1, 2, -1. */
+    auto from_packed = collect_on_each<S, K::v, int32_t>(
+        { 0x0a, 0x0c, 1, 0, 0, 0, 2, 0, 0, 0, 0xff, 0xff, 0xff, 0xff });
+    auto from_unpacked = collect_on_each<S, K::v, int32_t>(
+        { 0x0d, 1, 0, 0, 0, 0x0d, 2, 0, 0, 0, 0x0d, 0xff, 0xff, 0xff, 0xff });
+    const std::vector<int32_t> expected = { 1, 2, -1 };
+    CHECK(from_packed == expected);
+    CHECK(from_unpacked == expected);
+}
+
+static void
+test_double_packed_equals_unpacked()
+{
+    enum class K : int
+    {
+        v = 1
+    };
+    using S = ppb::auto_schema<ppb::packed_f64<K::v>, ppb::f64<K::v, ppb::field_semantics::always_lexn>>;
+
+    /* IEEE 754 LE: 1.0=3FF0.., 2.0=4000.., 3.0=4008.. */
+    auto from_packed = collect_on_each<S, K::v, double>({ 0x0a, 0x18, 0, 0, 0, 0, 0, 0, 0xf0, 0x3f, 0, 0, 0,
+        0, 0, 0, 0x00, 0x40, 0, 0, 0, 0, 0, 0, 0x08, 0x40 });
+    auto from_unpacked = collect_on_each<S, K::v, double>({ 0x09, 0, 0, 0, 0, 0, 0, 0xf0, 0x3f, 0x09, 0, 0, 0,
+        0, 0, 0, 0x00, 0x40, 0x09, 0, 0, 0, 0, 0, 0, 0x08, 0x40 });
+    const std::vector<double> expected = { 1.0, 2.0, 3.0 };
+    CHECK(from_packed == expected);
+    CHECK(from_unpacked == expected);
+}
+
+static void
+test_enum_packed_equals_unpacked()
+{
+    enum class K : int
+    {
+        v = 1
+    };
+    enum class Color : int
+    {
+        red = 1,
+        green = 2,
+        blue = 3
+    };
+    using S = ppb::auto_schema<ppb::packed_enumerated<K::v, Color>,
+        ppb::enumerated<K::v, Color, ppb::field_semantics::always_lexn>>;
+
+    auto from_packed = collect_on_each<S, K::v, Color>({ 0x0a, 0x03, 1, 2, 3 });
+    auto from_unpacked = collect_on_each<S, K::v, Color>({ 0x08, 1, 0x08, 2, 0x08, 3 });
+    const std::vector<Color> expected = { Color::red, Color::green, Color::blue };
+    CHECK(from_packed == expected);
+    CHECK(from_unpacked == expected);
+}
+
+/*
+ * a stateful handler observes every element of the field across both
+ * wire forms of one message (packed [10,20] + unpacked 30 -> 3 calls,
+ * sum 60).
+ */
+static void
+test_stateful_handler_across_both_forms()
+{
+    enum class K : int
+    {
+        v = 1
+    };
+    using S = ppb::auto_schema<ppb::packed_int32<K::v>, ppb::int32<K::v, ppb::field_semantics::always_lexn>>;
+
+    /* packed [10,20] then unpacked 30 in one message. */
+    const uint8_t wire[] = { 0x0a, 0x02, 10, 20, 0x08, 30 };
+
+    int call_count = 0;
+    int64_t sum = 0;
+    ppb::reader<S> r(std::as_bytes(std::span(wire)));
+    (void)r.parse(ppb::on_each<K::v>(
+        [&](int32_t x)
+        {
+            call_count++;
+            sum += x;
+        }));
+    CHECK(call_count == 3);
+    CHECK(sum == 60);
+}
+
+static void
+test_stateful_handler_by_value()
+{
+    enum class K : int
+    {
+        v = 1
+    };
+    using S = ppb::auto_schema<ppb::packed_int32<K::v>, ppb::int32<K::v, ppb::field_semantics::always_lexn>>;
+
+    const uint8_t wire[] = { 0x0a, 0x02, 10, 20, 0x08, 30 };
+
+    /*
+     * on_each keeps a single copy of the handler, so a by-value counter tallies
+     * all three elements across both wire forms.  max_count_seen (by reference)
+     * observes that single copy; the outer `count` stays 0.
+     */
+    int count = 0;
+    int max_count_seen = -1;
+    ppb::reader<S> r(std::as_bytes(std::span(wire)));
+    (void)r.parse(ppb::on_each<K::v>(
+        [count, &max_count_seen](int32_t) mutable
+        {
+            count++;
+            if (count > max_count_seen)
+            {
+                max_count_seen = count;
+            }
+        }));
+
+    CHECK(max_count_seen == 3);
+    CHECK(count == 0);
+}
+
+/* error folding / short-circuit / stickiness. */
+static void
+test_error_short_circuits_packed_loop()
+{
+    enum class K : int
+    {
+        v = 1
+    };
+    using S = ppb::auto_schema<ppb::packed_int32<K::v>, ppb::int32<K::v, ppb::field_semantics::always_lexn>>;
+    const uint8_t wire[] = { 0x0a, 0x03, 1, 2, 3 };
+
+    std::vector<int32_t> seen;
+    ppb::reader<S> r(std::as_bytes(std::span(wire)));
+    ppb_error rc = r.parse(ppb::on_each<K::v>(
+        [&](int32_t x) -> ppb_error
+        {
+            seen.push_back(x);
+            return x == 2 ? PPB_ERROR_TRUNCATED_DATA : PPB_OK;
+        }));
+    CHECK(rc == PPB_ERROR_TRUNCATED_DATA);
+    CHECK(r.error() == PPB_ERROR_TRUNCATED_DATA);
+    CHECK(seen.size() == 2); /* 3 was never delivered */
+    CHECK(seen[0] == 1 && seen[1] == 2);
+}
+
+static void
+test_error_short_circuits_unpacked()
+{
+    enum class K : int
+    {
+        v = 1
+    };
+    using S = ppb::auto_schema<ppb::packed_int32<K::v>, ppb::int32<K::v, ppb::field_semantics::always_lexn>>;
+    const uint8_t wire[] = { 0x08, 1, 0x08, 2, 0x08, 3 };
+
+    std::vector<int32_t> seen;
+    ppb::reader<S> r(std::as_bytes(std::span(wire)));
+    ppb_error rc = r.parse(ppb::on_each<K::v>(
+        [&](int32_t x) -> ppb_error
+        {
+            seen.push_back(x);
+            return x == 2 ? PPB_ERROR_TRUNCATED_DATA : PPB_OK;
+        }));
+    CHECK(rc == PPB_ERROR_TRUNCATED_DATA);
+    CHECK(r.error() == PPB_ERROR_TRUNCATED_DATA);
+    CHECK(seen.size() == 2); /* 3 was never delivered */
+    CHECK(seen[0] == 1 && seen[1] == 2);
+}
+
+static void
+test_on_bulk_range_fn_error()
+{
+    enum class K : int
+    {
+        v = 1
+    };
+    using S = ppb::auto_schema<ppb::packed_int32<K::v>, ppb::int32<K::v, ppb::field_semantics::always_lexn>>;
+    const uint8_t wire[] = { 0x0a, 0x03, 1, 2, 3 };
+
+    ppb::reader<S> r(std::as_bytes(std::span(wire)));
+    ppb_error rc = r.parse(ppb::on_bulk<K::v>([&](auto) -> ppb_error { return PPB_ERROR_CORRUPT_TAG; },
+        [&](int32_t) -> ppb_error { return PPB_OK; }));
+    CHECK(rc == PPB_ERROR_CORRUPT_TAG);
+    CHECK(r.error() == PPB_ERROR_CORRUPT_TAG);
+}
+
+static void
+test_void_on_each_yields_ok()
+{
+    enum class K : int
+    {
+        v = 1
+    };
+    using S = ppb::auto_schema<ppb::packed_int32<K::v>, ppb::int32<K::v, ppb::field_semantics::always_lexn>>;
+    const uint8_t wire[] = { 0x0a, 0x03, 1, 2, 3 };
+
+    int n = 0;
+    ppb::reader<S> r(std::as_bytes(std::span(wire)));
+    ppb_error rc = r.parse(ppb::on_each<K::v>([&](int32_t) { n++; }));
+    CHECK(rc == PPB_OK);
+    CHECK(r.error() == PPB_OK);
+    CHECK(n == 3);
+}
+
+/* on_bulk for fixed-width field. */
+static void
+test_on_bulk_fixed_width()
+{
+    enum class K : int
+    {
+        w = 2
+    };
+    using S =
+        ppb::auto_schema<ppb::packed_fixed32<K::w>, ppb::fixed32<K::w, ppb::field_semantics::always_lexn>>;
+    const uint8_t packed[] = { 0x12, 0x08, 1, 0, 0, 0, 2, 0, 0, 0 };
+
+    std::vector<uint32_t> out;
+    auto h = ppb::on_bulk<K::w>(
+        [&](std::span<const ppb::le_packed<uint32_t>> view) -> ppb_error
+        {
+            out.reserve(out.size() + view.size());
+            for (auto w : view)
+            {
+                out.push_back(w.value());
+            }
+
+            return PPB_OK;
+        },
+        [&](uint32_t v) -> ppb_error
+        {
+            out.push_back(v);
+            return PPB_OK;
+        });
+
+    ppb::reader<S> r(std::as_bytes(std::span(packed)));
+    CHECK(r.parse(h) == PPB_OK);
+    CHECK(out.size() == 2 && out[0] == 1 && out[1] == 2);
+
+    /* mixed: packed [1,2] then unpacked 3 (tag 0x15). */
+    const uint8_t mixed[] = { 0x12, 0x08, 1, 0, 0, 0, 2, 0, 0, 0, 0x15, 3, 0, 0, 0 };
+    std::vector<uint32_t> out2;
+    auto h2 = ppb::on_bulk<K::w>(
+        [&](std::span<const ppb::le_packed<uint32_t>> view) -> ppb_error
+        {
+            out2.reserve(out2.size() + view.size());
+            for (auto w : view)
+            {
+                out2.push_back(w.value());
+            }
+
+            return PPB_OK;
+        },
+        [&](uint32_t v) -> ppb_error
+        {
+            out2.push_back(v);
+            return PPB_OK;
+        });
+
+    ppb::reader<S> r2(std::as_bytes(std::span(mixed)));
+    CHECK(r2.parse(h2) == PPB_OK);
+    CHECK((out2 == std::vector<uint32_t> { 1, 2, 3 }));
+}
+
+/* check for correct callback order for mixed packed/unpacked encoding. */
+static void
+test_wire_order_mixed_forms()
+{
+    enum class K : int
+    {
+        xs = 1,
+        ws = 2
+    };
+    using S = ppb::auto_schema<ppb::packed_int32<K::xs>, ppb::int32<K::xs, ppb::field_semantics::always_lexn>,
+        ppb::packed_sfixed32<K::ws>, ppb::sfixed32<K::ws, ppb::field_semantics::always_lexn>>;
+
+    auto xs = collect_on_each<S, K::xs, int32_t>({ 0x0a, 0x02, 2, 3, 0x08, 1 });
+    CHECK((xs == std::vector<int32_t> { 2, 3, 1 })); /* wire order, not [1,2,3] */
+
+    auto only = collect_on_each<S, K::xs, int32_t>({ 0x0a, 0x02, 4, 5 });
+    CHECK((only == std::vector<int32_t> { 4, 5 }));
+
+    /* field 2 sfixed32: unpacked 7 (tag 0x15) then packed [8] (tag 0x12 len 4). */
+    auto ws = collect_on_each<S, K::ws, int32_t>({ 0x15, 7, 0, 0, 0, 0x12, 0x04, 8, 0, 0, 0 });
+    CHECK((ws == std::vector<int32_t> { 7, 8 }));
+}
+
+/* more edge cases. */
+static void
+test_edges_and_equivalence()
+{
+    enum class K : int
+    {
+        v = 1
+    };
+    using S = ppb::auto_schema<ppb::packed_int32<K::v>, ppb::int32<K::v, ppb::field_semantics::always_lexn>>;
+
+    CHECK((collect_on_each<S, K::v, int32_t>({ 0x0a, 0x00 }).empty())); /* empty packed */
+    CHECK((collect_on_each<S, K::v, int32_t>({ 0x0a, 0x01, 5 }) ==
+        std::vector<int32_t> { 5 })); /* single-element packed */
+    CHECK((collect_on_each<S, K::v, int32_t>({ 0x0a, 0x02, 0xac, 0x02 }) /* packed [300] */
+        == std::vector<int32_t> { 300 }));
+
+    const uint8_t mixed[] = { 0x0a, 0x01, 5, 0x08, 6 }; /* packed [5], unpacked 6 */
+
+    /* All three readers parse the same `mixed[]` so the differential bites. */
+    std::vector<int32_t> via_each;
+    ppb::reader<S> re(std::as_bytes(std::span(mixed)));
+    (void)re.parse(ppb::on_each<K::v>([&](int32_t v) { via_each.push_back(v); }));
+
+    std::vector<int32_t> via_push;
+    ppb::reader<S> rp(std::as_bytes(std::span(mixed)));
+    (void)rp.parse(ppb::push_back<K::v>(&via_push));
+
+    std::vector<int32_t> via_manual;
+    ppb::reader<S> rm(std::as_bytes(std::span(mixed)));
+    (void)rm.parse(ppb::on<K::v>(
+        [&](auto v) -> ppb_error
+        {
+            if constexpr (ppb::detail::is_packed_range_v<std::decay_t<decltype(v)>>)
+            {
+                for (auto e : v)
+                {
+                    via_manual.push_back(e);
+                }
+            }
+            else
+            {
+                via_manual.push_back(v);
+            }
+
+            return PPB_OK;
+        }));
+
+    CHECK(via_each == via_push);
+    CHECK(via_each == via_manual);
+}
+
+/* specific wire encoding for on_bulk: ignore vs reject the other encoding. */
+static void
+test_single_form_policies()
+{
+    enum class K : int
+    {
+        v = 1
+    };
+    using S = ppb::auto_schema<ppb::packed_int32<K::v>, ppb::int32<K::v, ppb::field_semantics::always_lexn>>;
+
+    const uint8_t mixed[] = { 0x0a, 0x01, 5, 0x08, 6 };
+
+    std::vector<int32_t> kept;
+    ppb::reader<S> r1(std::as_bytes(std::span(mixed)));
+    CHECK(r1.parse(ppb::on_bulk<K::v, ppb::wire_type::len>(
+              [&](auto view) -> ppb_error
+              {
+                  for (auto e : view)
+                  {
+                      kept.push_back(e);
+                  }
+
+                  return PPB_OK;
+              },
+              [&](int32_t) -> ppb_error { return PPB_OK; })) == PPB_OK);
+    CHECK((kept == std::vector<int32_t> { 5 })); /* unpacked 6 was skipped, not collected */
+
+    std::vector<int32_t> got;
+    ppb::reader<S> r2(std::as_bytes(std::span(mixed)));
+    ppb_error rc = r2.parse(ppb::push_back<K::v, ppb::wire_type::len>(&got),
+        ppb::on<K::v, ppb::wire_type::varint>([](auto) -> ppb_error { return PPB_ERROR_CORRUPT_TAG; }));
+    CHECK(rc == PPB_ERROR_CORRUPT_TAG); /* unexpected encoding rejected */
+}
+
+}  // namespace repeated_tests
 
 int
 main()
@@ -4089,6 +4511,21 @@ main()
     submsg_tests::test_on_submessage_typed_message_field();
     submsg_tests::test_on_submessage_zero_length_runs_init();
     submsg_tests::test_on_submessage_validates_every_occurrence();
+
+    repeated_tests::test_int32_packed_equals_unpacked();
+    repeated_tests::test_sfixed32_packed_equals_unpacked();
+    repeated_tests::test_double_packed_equals_unpacked();
+    repeated_tests::test_enum_packed_equals_unpacked();
+    repeated_tests::test_stateful_handler_across_both_forms();
+    repeated_tests::test_stateful_handler_by_value();
+    repeated_tests::test_error_short_circuits_packed_loop();
+    repeated_tests::test_error_short_circuits_unpacked();
+    repeated_tests::test_on_bulk_range_fn_error();
+    repeated_tests::test_void_on_each_yields_ok();
+    repeated_tests::test_on_bulk_fixed_width();
+    repeated_tests::test_wire_order_mixed_forms();
+    repeated_tests::test_edges_and_equivalence();
+    repeated_tests::test_single_form_policies();
 
     std::printf("\n%d checks, %d failures\n", g_check_count, g_fail_count);
     return g_fail_count > 0 ? 1 : 0;

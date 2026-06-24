@@ -542,6 +542,82 @@ on(Fn &&handler)
     return detail::value_handler<Key, wire, std::decay_t<Fn>> { {}, std::forward<Fn>(handler) };
 }
 
+// Two-lambda repeated-field handler, with one for each wire forms of one key.
+// A packed occurrence calls `range_fn` once with an iterable view over the
+// whole run; an unpacked occurrence calls `elem_fn` with one decoded scalar T.
+//
+// The packed view's element type isn't necessarily normalized, but always
+// converts implicitly to T.  For varint fields it yields the decoded T; for
+// fixed-width fields it's a `std::span<const le_packed<T>>`, yielding
+// le_packed<T> -- a little-endian wrapper that converts to T and exposes
+// `.value()`.  A plain `for (T v : view)` loop works the same either way; only
+// type-inspection or `auto` can reveal the difference.
+//
+// `range_fn` runs once over the entire run, with no per-element short-circuit,
+// so stopping early is its own responsibility.  Both callables may return
+// ppb_error or void; a negative return folds into the sticky error.
+//
+// `wire` defaults to `any` (both forms).  Setting a specific wire restricts
+// dispatch to that form and silently ignores the other; to reject the other
+// form instead, add a separate handler that returns an error.
+template <auto Key, wire_type wire = wire_type::any, typename RangeFn, typename ElemFn>
+[[nodiscard]] constexpr auto
+on_bulk(RangeFn range_fn, ElemFn elem_fn)
+{
+    return on<Key, wire>(
+        [range_fn = std::move(range_fn), elem_fn = std::move(elem_fn)](auto &&v) mutable -> ppb_error
+        {
+            if constexpr (detail::is_packed_range_v<std::decay_t<decltype(v)>>)
+            {
+                return detail::fold_call(range_fn, std::forward<decltype(v)>(v));
+            }
+            else
+            {
+                return detail::fold_call(elem_fn, std::forward<decltype(v)>(v));
+            }
+        });
+}
+
+// Per-element repeated handler.  Calls `fn` once per element with the decoded
+// scalar T, whether the field arrived packed or unpacked (fixed-width
+// le_packed<T> elements are normalized to T).  `fn` may return ppb_error or
+// void; a negative return stops the field's remaining elements and folds into
+// the sticky error.
+//
+// One `fn` handles both wire forms of the field, so a stateful by-value handler
+// accumulates across all of the field's elements as a single sequence, even
+// when a message uses both forms.
+template <auto Key, wire_type wire = wire_type::any, typename Fn>
+[[nodiscard]] constexpr auto
+on_each(Fn fn)
+{
+    return on<Key, wire>(
+        [fn = std::move(fn)](auto &&v) mutable -> ppb_error
+        {
+            if constexpr (detail::is_packed_range_v<std::decay_t<decltype(v)>>)
+            {
+                for (auto &&e : v)
+                {
+                    using elem_type = std::decay_t<decltype(detail::normalize_element(e))>;
+                    static_assert(!detail::is_le_packed_v<elem_type>,
+                        "on_each must deliver a decoded scalar, never a le_packed<> wrapper");
+
+                    ppb_error rc = detail::fold_call(fn, detail::normalize_element(e));
+                    if (rc < 0)
+                    {
+                        return rc;
+                    }
+                }
+
+                return PPB_OK;
+            }
+            else
+            {
+                return detail::fold_call(fn, std::forward<decltype(v)>(v));
+            }
+        });
+}
+
 // Handler factory for an embedded sub-message at `Key`.  The wrapper
 // constructs a nested `reader<InnerSchema>` over the payload and
 // dispatches the inner handlers via its `parse()`.
@@ -623,42 +699,16 @@ template <auto Key, wire_type wire = wire_type::any, typename C>
 [[nodiscard]] constexpr auto
 push_back(C *container)
 {
-    return on<Key, wire>(
-        [container](auto v) -> ppb_error
-        {
-            if constexpr (detail::is_packed_range_v<std::decay_t<decltype(v)>>)
-            {
-                for (auto &&elem : v)
-                    container->push_back(elem);
-            }
-            else
-            {
-                container->push_back(std::move(v));
-            }
-
-            return PPB_OK;
-        });
+    return on_each<Key, wire>(
+        [container](auto &&elem) { container->push_back(std::forward<decltype(elem)>(elem)); });
 }
 
 template <auto Key, wire_type wire = wire_type::any, typename C>
 [[nodiscard]] constexpr auto
 emplace_back(C *container)
 {
-    return on<Key, wire>(
-        [container](auto v) -> ppb_error
-        {
-            if constexpr (detail::is_packed_range_v<std::decay_t<decltype(v)>>)
-            {
-                for (auto &&elem : v)
-                    container->emplace_back(elem);
-            }
-            else
-            {
-                container->emplace_back(std::move(v));
-            }
-
-            return PPB_OK;
-        });
+    return on_each<Key, wire>(
+        [container](auto &&elem) { container->emplace_back(std::forward<decltype(elem)>(elem)); });
 }
 
 // Catch-all (unknown-tag) handler: fires once per occurrence of any

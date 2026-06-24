@@ -1168,6 +1168,47 @@ template <typename T> inline constexpr bool is_packed_range_v<std::span<const le
 template <typename T, typename Policy>
 inline constexpr bool is_packed_range_v<packed_varint_view<T, Policy>> = true;
 
+/* Invoke a handler that may return ppb_error or void; void folds to PPB_OK. */
+template <typename Fn, typename Arg>
+[[nodiscard]] constexpr ppb_error
+fold_call(Fn &fn, Arg &&arg)
+{
+    using result_type = decltype(fn(std::forward<Arg>(arg)));
+    static_assert(std::is_void_v<result_type> || std::is_same_v<std::decay_t<result_type>, ppb_error>,
+        "ppb handler callables must return void or ppb_error");
+
+    if constexpr (std::is_void_v<result_type>)
+    {
+        fn(std::forward<Arg>(arg));
+        return PPB_OK;
+    }
+    else
+    {
+        return fn(std::forward<Arg>(arg));
+    }
+}
+
+template <typename> inline constexpr bool is_le_packed_v = false;
+template <typename T> inline constexpr bool is_le_packed_v<ppb::le_packed<T>> = true;
+
+/*
+ * le_packed<T> -> T; everything else passes through.  Lets on_each hand a
+ * single element type to the callback for both wire forms.
+ */
+template <typename E>
+[[nodiscard]] constexpr auto
+normalize_element(E &&e)
+{
+    if constexpr (is_le_packed_v<std::decay_t<E>>)
+    {
+        return e.value();
+    }
+    else
+    {
+        return std::forward<E>(e);
+    }
+}
+
 }  // namespace detail
 
 // Packed repeated field types.  Fixed-width variants decode into a
