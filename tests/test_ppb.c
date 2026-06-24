@@ -698,6 +698,191 @@ test_overread_boundary_exact(void)
     }
 }
 
+/*
+ * prescan and lexn must agree byte-for-byte.  prescan validates the whole
+ * message in one pass; lexn walks strictly-monotonic batches across repeated
+ * calls.  Looping lexn to exhaustion must therefore accept iff prescan accepts
+ * and consume exactly the bytes prescan blessed.  Each buffer is a heap copy at
+ * exactly its length, ASan can easily detect over-reads.
+ */
+
+/*
+ * Loop ppb_lexn (batch size `batch`) to exhaustion over an exact-sized heap
+ * copy of `msg`.  Returns the total bytes consumed, or -1 if any batch reports
+ * an error (matching prescan's negative-on-reject result).
+ */
+static ptrdiff_t
+lexn_consume_all(const uint8_t *msg, size_t len, size_t num_fields, const struct ppb_encoded_tag *tags,
+    size_t batch)
+{
+    uint8_t *p = malloc(len == 0 ? 1 : len);
+    memcpy(p, msg, len);
+
+    struct ppb_field fields[8];
+    zero_fields(num_fields, fields);
+
+    struct ppb_buf buf = make_buf(p, len);
+    ptrdiff_t consumed = 0;
+
+    for (;;)
+    {
+        const char *before = buf.buf;
+        struct ppb_lexn_ret ret = ppb_lexn(&buf, num_fields, tags, fields, batch);
+
+        consumed += (const char *)buf.buf - before;
+        if (ret.status != PPB_OK)
+        {
+            consumed = -1;
+            break;
+        }
+
+        /* No progress without an error means end-of-input. */
+        if (buf.buf == before)
+        {
+            break;
+        }
+    }
+
+    free(p);
+    return consumed;
+}
+
+/*
+ * For every truncation of `msg`, assert prescan and looped-lexn agree on
+ * accept/reject and on bytes consumed, across several batch sizes.  A batch of
+ * 1 forces one field per call; SIZE_MAX lets lexn's monotonic break decide the
+ * batch boundaries, maximizing divergence from prescan.
+ */
+static void
+prescan_lexn_consistency_sweep(const uint8_t *msg, size_t len, size_t num_fields,
+    const struct ppb_encoded_tag *tags)
+{
+    static const size_t batches[] = { 1, 2, SIZE_MAX };
+
+    CHECK(ppb_validate_tags(num_fields, tags) == PPB_OK);
+
+    for (size_t cut = 0; cut <= len; cut++)
+    {
+        uint8_t *p = malloc(cut == 0 ? 1 : cut);
+        memcpy(p, msg, cut);
+
+        struct ppb_field fields[8];
+        zero_fields(num_fields, fields);
+        ptrdiff_t pscan = ppb_prescan(make_buf(p, cut), num_fields, tags, fields, SIZE_MAX);
+        CHECK(pscan < 0 || (size_t)pscan <= cut);
+
+        free(p);
+
+        for (size_t bi = 0; bi < sizeof(batches) / sizeof(batches[0]); bi++)
+        {
+            ptrdiff_t lexn = lexn_consume_all(msg, cut, num_fields, tags, batches[bi]);
+
+            CHECK(lexn < 0 || (size_t)lexn <= cut);
+            CHECK((pscan >= 0) == (lexn >= 0));
+            if (pscan >= 0 && lexn >= 0)
+            {
+                CHECK(lexn == pscan);
+            }
+        }
+    }
+}
+
+static void
+test_prescan_lexn_consistency_exact(void)
+{
+    printf("test_prescan_lexn_consistency_exact\n");
+
+    /* All four wire types, fields in ascending order. */
+    {
+        struct ppb_encoded_tag tags[4];
+        init_four_tags(tags);
+        prescan_lexn_consistency_sweep(four_field_wire, sizeof(four_field_wire), 4, tags);
+    }
+
+    /*
+     * Same four fields, wire order descending: lexn's monotonic break fires on
+     * (nearly) every field, so a full-batch lexn call diverges most from
+     * prescan and the loop takes several batches to catch up.
+     */
+    {
+        static const uint8_t out_of_order[] = {
+            0x25, 0x2a, 0x00, 0x00, 0x00,                         /* field 4 i32 42 */
+            0x1a, 0x05, 0x68, 0x65, 0x6c, 0x6c, 0x6f,             /* field 3 LEN "hello" */
+            0x11, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, /* field 2 i64 1 */
+            0x08, 0x96, 0x01,                                     /* field 1 varint 150 */
+        };
+        struct ppb_encoded_tag tags[4];
+        init_four_tags(tags);
+        prescan_lexn_consistency_sweep(out_of_order, sizeof(out_of_order), 4, tags);
+    }
+
+    /* Repeated field: lexn yields one occurrence per batch. */
+    {
+        static const uint8_t repeated[] = {
+            0x08, 0x01,       /* field 1 varint 1 */
+            0x08, 0x96, 0x01, /* field 1 varint 150 */
+            0x08, 0x01,       /* field 1 varint 1 */
+        };
+        struct ppb_encoded_tag tags[1] = { PPB_TAG(1, PPB_WIRE_VARINT) };
+        prescan_lexn_consistency_sweep(repeated, sizeof(repeated), 1, tags);
+    }
+
+    /* Two sorted runs of the same fields: monotonic break between runs. */
+    {
+        static const uint8_t two_runs[] = {
+            0x08, 0x01, 0x10, 0x02, /* field 1 = 1, field 2 = 2 */
+            0x08, 0x03, 0x10, 0x04, /* field 1 = 3, field 2 = 4 */
+        };
+        struct ppb_encoded_tag tags[2] = {
+            PPB_TAG(1, PPB_WIRE_VARINT),
+            PPB_TAG(2, PPB_WIRE_VARINT),
+        };
+        prescan_lexn_consistency_sweep(two_runs, sizeof(two_runs), 2, tags);
+    }
+
+    /*
+     * Unknown fields skipped without a catch-all: fields 2 and 4 fall to the
+     * dummy slot in both walkers and must be consumed identically.
+     */
+    {
+        struct ppb_encoded_tag tags[2] = {
+            PPB_TAG(1, PPB_WIRE_VARINT),
+            PPB_TAG(3, PPB_WIRE_LEN),
+        };
+        prescan_lexn_consistency_sweep(four_field_wire, sizeof(four_field_wire), 2, tags);
+    }
+
+    /* Catch-all schema: every field matches the wire-typed catch-all. */
+    {
+        struct ppb_encoded_tag tags[4] = {
+            PPB_TAG(-1, PPB_WIRE_VARINT),
+            PPB_TAG(-1, PPB_WIRE_I64),
+            PPB_TAG(-1, PPB_WIRE_LEN),
+            PPB_TAG(-1, PPB_WIRE_I32),
+        };
+        prescan_lexn_consistency_sweep(four_field_wire, sizeof(four_field_wire), 4, tags);
+    }
+
+    /* 10-byte varint value: crosses the 8-byte varint fast/slow seam. */
+    {
+        static const uint8_t varint10[] = {
+            0x08,
+            0xFF,
+            0xFF,
+            0xFF,
+            0xFF,
+            0xFF,
+            0xFF,
+            0xFF,
+            0xFF,
+            0xFF,
+            0x01,
+        };
+        struct ppb_encoded_tag tags[1] = { PPB_TAG(1, PPB_WIRE_VARINT) };
+        prescan_lexn_consistency_sweep(varint10, sizeof(varint10), 1, tags);
+    }
+}
+
 static void
 test_prescan_known_fields(void)
 {
@@ -2778,6 +2963,7 @@ main(void)
     test_peek_tag_error();
     test_peek_tag_range();
     test_overread_boundary_exact();
+    test_prescan_lexn_consistency_exact();
 
     test_prescan_known_fields();
     test_prescan_repeated_fields();
