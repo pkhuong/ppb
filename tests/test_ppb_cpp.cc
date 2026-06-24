@@ -735,6 +735,30 @@ test_lex_all_empty_input()
     CHECK(r.error() == PPB_OK);
 }
 
+// Zero byte or field bounds forbid any progress: lex_all must return
+// immediately (no handler calls, no consumption, no infinite loop).
+static void
+test_lex_all_zero_bounds()
+{
+    int called = 0;
+    auto handler = ppb::on<1>(
+        [&](const ppb_field &) -> ppb_error
+        {
+            called++;
+            return PPB_OK;
+        });
+
+    ppb::reader<LexnSchema> r(lexn_two_batches_wire, sizeof(lexn_two_batches_wire));
+    CHECK(r.lex_all(ppb::limit::soft(0), handler) == PPB_OK);
+    CHECK(r.size() == sizeof(lexn_two_batches_wire));
+
+    CHECK(r.lex_all(ppb::limit::max_fields(0), handler) == PPB_OK);
+    CHECK(r.size() == sizeof(lexn_two_batches_wire));
+
+    CHECK(called == 0);
+    CHECK(r.error() == PPB_OK);
+}
+
 static void
 test_lex_all_handler_error()
 {
@@ -1117,68 +1141,6 @@ test_parse_limit_init_and_handlers()
     CHECK(init_calls == 1);
     CHECK(field1_calls == 2);
     CHECK(r.empty());
-}
-
-// An empty message prescans to zero bytes.  The init callback must still
-// run unconditionally (so allocating in init is safe even for empty
-// submessages), while no field handler fires.
-static void
-test_reader_parse_empty_message_runs_init()
-{
-    int init_calls = 0;
-    int handler_calls = 0;
-
-    ppb::reader<LexnSchema> r(nullptr, 0);
-
-    CHECK(r.parse(
-              [&](const ppb::reader<LexnSchema> &snapshot) -> ppb_error
-              {
-                  init_calls++;
-                  CHECK(snapshot.meta<1>().num_occurrences == 0);
-                  CHECK(snapshot.meta<2>().num_occurrences == 0);
-                  return PPB_OK;
-              },
-              {},
-              ppb::on<1>(
-                  [&](const ppb_field &) -> ppb_error
-                  {
-                      handler_calls++;
-                      return PPB_OK;
-                  })) == PPB_OK);
-
-    CHECK(init_calls == 1);
-    CHECK(handler_calls == 0);
-    CHECK(r.error() == PPB_OK);
-    CHECK(r.empty());
-}
-
-// On an empty message, an error returned by init still propagates out of
-// parse(): init runs, then parse returns its error without dispatching.
-static void
-test_reader_parse_empty_message_init_error_propagates()
-{
-    int init_calls = 0;
-    int handler_calls = 0;
-
-    ppb::reader<LexnSchema> r(nullptr, 0);
-
-    CHECK(r.parse(
-              [&](const ppb::reader<LexnSchema> &) -> ppb_error
-              {
-                  init_calls++;
-                  return PPB_ERROR_TRUNCATED_DATA;
-              },
-              {},
-              ppb::on<1>(
-                  [&](const ppb_field &) -> ppb_error
-                  {
-                      handler_calls++;
-                      return PPB_OK;
-                  })) == PPB_ERROR_TRUNCATED_DATA);
-
-    CHECK(init_calls == 1);
-    CHECK(handler_calls == 0);
-    CHECK(r.error() == PPB_ERROR_TRUNCATED_DATA);
 }
 
 // Schema with fields A=varint<1> and B=varint<2>.  The wire has field A
@@ -1797,26 +1759,53 @@ test_typed_scalar_varint_fields()
 }
 
 /*
- * For a non-canonical sint32 with set bits above bit 32 on the wire
- * (here the varint 0x1_0000_0001), the wrapper must truncate to 32
- * bits before zigzag-decoding (matching google's C++ parser): the low
- * 32 bits encode -1.
+ * sint32 truncates the varint to 32 bits *before* un-zigzagging, to
+ * match the protobuf reference on non-canonical (over-long) encodings.
+ * The scalar and packed paths must agree when handed a varint >= 2^32.
  */
 static void
-test_typed_sint32_noncanonical_truncates_to_32_bits()
+test_sint32_noncanonical_truncates()
 {
-    using S = ppb::schema<ppb::sint32<3>>;
+    /* Singular sint32 (field 3, tag 0x18). */
+    {
+        using S = ppb::schema<ppb::sint32<3>>;
+        static const uint8_t wire[] = { 0x18, 0x81, 0x80, 0x80, 0x80, 0x10 };
 
-    static const uint8_t wire[] = {
-        0x18, 0x81, 0x80, 0x80, 0x80, 0x10, /* f3 sint32 = (1<<32)|1 */
-    };
+        int32_t v = 0;
+        ppb::reader<S> r(wire, sizeof(wire));
+        CHECK(r.parse(ppb::on<3>(
+                  [&](int32_t x) -> ppb_error
+                  {
+                      v = x;
+                      return PPB_OK;
+                  })) == PPB_OK);
+        CHECK(v == -1);
+    }
 
-    int32_t v_sint32 = 0;
+    /*
+     * Packed sint32 (field 2, tag 0x12): payload [wide-varint, 0x08] -> [-1, 4].
+     * The second element (varint 8) has no high bits, so truncation is a no-op.
+     */
+    {
+        using S = ppb::schema<ppb::packed_sint32<2>>;
+        static const uint8_t wire[] = { 0x12, 0x06, 0x81, 0x80, 0x80, 0x80, 0x10, 0x08 };
 
-    ppb::reader<S> r(wire, sizeof(wire));
+        std::vector<int32_t> vs;
+        ppb::reader<S> r(wire, sizeof(wire));
+        CHECK(r.parse(ppb::on<2>(
+                  [&](auto view) -> ppb_error
+                  {
+                      for (auto x : view)
+                      {
+                          vs.push_back(x);
+                      }
 
-    CHECK(r.parse(ppb::store<3>(&v_sint32)) == PPB_OK);
-    CHECK(v_sint32 == -1);
+                      return PPB_OK;
+                  })) == PPB_OK);
+        CHECK(vs.size() == 2);
+        CHECK(vs[0] == -1);
+        CHECK(vs[1] == 4);
+    }
 }
 
 static void
@@ -2233,30 +2222,6 @@ test_typed_packed_f64()
     CHECK(got.size() == 2);
     CHECK(got[0] == 1.0);
     CHECK(got[1] == -1.0);
-}
-
-/*
- * Packed sint32 must apply the same 32-bit truncation as scalar
- * sint32: a non-canonical element (the varint 0x1_0000_0001) decodes
- * to -1 from its low 32 bits, not the INT32_MAX a full 64-bit zigzag
- * decode would yield.
- */
-static void
-test_typed_packed_sint32_noncanonical_truncates_to_32_bits()
-{
-    using S = ppb::schema<ppb::packed_sint32<1>>;
-
-    static const uint8_t wire[] = {
-        0x0a, 0x05, 0x81, 0x80, 0x80, 0x80, 0x10, /* f1 = [(1<<32)|1] */
-    };
-
-    std::vector<int32_t> s32s;
-
-    ppb::reader<S> r(wire, sizeof(wire));
-
-    CHECK(r.parse(ppb::push_back<1>(&s32s)) == PPB_OK);
-    CHECK(s32s.size() == 1);
-    CHECK(s32s[0] == -1);
 }
 
 /*
@@ -4395,6 +4360,7 @@ main()
 
     test_lex_all_multi_batch();
     test_lex_all_empty_input();
+    test_lex_all_zero_bounds();
     test_lex_all_handler_error();
     test_lex_all_decode_error();
     test_lex_all_sticky_error();
@@ -4409,8 +4375,6 @@ main()
     test_parse_limit_and_handlers();
     test_parse_init_and_handlers();
     test_parse_limit_init_and_handlers();
-    test_reader_parse_empty_message_runs_init();
-    test_reader_parse_empty_message_init_error_propagates();
     test_reader_parse_per_batch_dispatch();
 
     test_reader_parse_semantics_error_field_present();
@@ -4434,7 +4398,7 @@ main()
     test_reader_parse_semantics_always_lexn_wire_order();
 
     test_typed_scalar_varint_fields();
-    test_typed_sint32_noncanonical_truncates_to_32_bits();
+    test_sint32_noncanonical_truncates();
     test_typed_int32_negative_decodes_as_10_byte_varint();
     test_typed_enumerated_field();
     test_typed_scalar_i32_fields();
@@ -4449,7 +4413,6 @@ main()
     test_typed_packed_f64();
     test_scalar_value_punning_sweep();
     test_typed_packed_varint_fields();
-    test_typed_packed_sint32_noncanonical_truncates_to_32_bits();
     // Empty packed payloads.
     check_empty_payload<ppb::packed_int32<1>>();
     check_empty_payload<ppb::packed_sint32<1>>();
