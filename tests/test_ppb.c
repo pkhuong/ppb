@@ -2967,6 +2967,190 @@ test_field_value_union_overlay(void)
     }
 }
 
+/*
+ * Reject LEN that doesn't fit in the buffer, but would fit when
+ * truncated to 32 bits before comparison (most useful on 32-bit
+ * platforms like i686).
+ */
+static void
+test_prescan_len_length_widening(void)
+{
+    printf("test_prescan_len_length_widening\n");
+
+    static const uint64_t lens[] = {
+        (uint64_t)1 << 32,       /* low 32 bits = 0 */
+        ((uint64_t)1 << 32) + 5, /* low 32 bits = 5 */
+        ((uint64_t)1 << 32) + 8, /* low 32 bits = 8 */
+        (uint64_t)1 << 40,
+        ((uint64_t)1 << 63) - 1,
+    };
+
+    for (size_t k = 0; k < sizeof(lens) / sizeof(lens[0]); k++)
+    {
+        uint8_t wire[32];
+        size_t n = 0;
+        uint64_t len = lens[k];
+
+        wire[n++] = (1 << 3) | PPB_WIRE_LEN; /* field 1, LEN */
+        while (len >= 0x80)
+        {
+            wire[n++] = (uint8_t)(len | 0x80);
+            len >>= 7;
+        }
+
+        wire[n++] = (uint8_t)len;
+        for (int i = 0; i < 8; i++) /* low 32 bits of every length fit here */
+            wire[n++] = 0x00;
+
+        struct ppb_encoded_tag tags[1] = { PPB_TAG(1, PPB_WIRE_LEN) };
+        CHECK(ppb_validate_tags(1, tags) == PPB_OK);
+
+        struct ppb_field fields[1];
+        zero_fields(1, fields);
+
+        struct ppb_buf buf = make_buf(wire, n);
+        ptrdiff_t ret = ppb_prescan(buf, 1, tags, fields, SIZE_MAX);
+
+        CHECK(ret == PPB_ERROR_TRUNCATED_DATA);
+        CHECK(fields[0].v.ptr == NULL);
+    }
+}
+
+/*
+ * Try to catch pointer + LEN overflow.
+ *
+ * We have to bound-check the length before offseting the pointer, but
+ * it would be easy to overflow back into a valid interior pointer
+ * with a very large length.  Check for that, with heap-allocated inputs
+ * to help ASan detect issues.
+ */
+static size_t
+put_varint(uint8_t *out, uint64_t v)
+{
+    size_t n = 0;
+
+    while (v >= 0x80)
+    {
+        out[n++] = (uint8_t)(v | 0x80);
+        v >>= 7;
+    }
+
+    out[n++] = (uint8_t)v;
+    return n;
+}
+
+/*
+ * Build [0x0A][varint(len_field)][payload_len bytes] on a heap buffer at
+ * exactly its length, prescan it over a single LEN tag, copy out the field,
+ * free the buffer, and return the prescan result.
+ */
+static ptrdiff_t
+prescan_len_field(uint64_t len_field, size_t payload_len, struct ppb_field *out, size_t *out_total)
+{
+    uint8_t header[1 + 10];
+    size_t hn = 0;
+
+    header[hn++] = (1 << 3) | PPB_WIRE_LEN; /* field 1, LEN */
+    hn += put_varint(header + hn, len_field);
+
+    size_t total = hn + payload_len;
+    uint8_t *p = malloc(total == 0 ? 1 : total);
+
+    memcpy(p, header, hn);
+    memset(p + hn, 0x5A, payload_len);
+
+    const struct ppb_encoded_tag tags[] = { PPB_TAG(1, PPB_WIRE_LEN) };
+    struct ppb_field fields[1];
+    zero_fields(1, fields);
+
+    ptrdiff_t rc = ppb_prescan(make_buf(p, total), 1, tags, fields, SIZE_MAX);
+
+    if (out != NULL)
+        *out = fields[0];
+    if (out_total != NULL)
+        *out_total = total;
+
+    free(p);
+    return rc;
+}
+
+static void
+test_len_payload_bounds_exact(void)
+{
+    printf("test_len_payload_bounds_exact\n");
+
+    /* Exact fit: len == bytes available; payload spans to the buffer end. */
+    static const size_t fits[] = { 0, 1, 5, 128, 300 };
+    for (size_t i = 0; i < sizeof(fits) / sizeof(fits[0]); i++)
+    {
+        size_t k = fits[i];
+        struct ppb_field f;
+        size_t total;
+        ptrdiff_t rc = prescan_len_field(k, k, &f, &total);
+
+        CHECK(rc >= 0 && (size_t)rc == total);
+        CHECK(f.v.payload.size == k);
+    }
+
+    /* One byte short: len == available + 1 rejects, no over-read. */
+    static const size_t shorts[] = { 0, 1, 5, 128, 300 };
+    for (size_t i = 0; i < sizeof(shorts) / sizeof(shorts[0]); i++)
+    {
+        ptrdiff_t rc = prescan_len_field((uint64_t)shorts[i] + 1, shorts[i], NULL, NULL);
+
+        CHECK(rc == PPB_ERROR_TRUNCATED_DATA);
+    }
+
+    /*
+     * Lengths past the buffer -- including > SIZE_MAX on a 32-bit host --
+     * reject without truncation.  Eight payload bytes are present, so a
+     * `(size_t)len` truncation that wrapped into [0, 8] would mis-accept.
+     */
+    static const uint64_t huge[] = {
+        (uint64_t)UINT32_MAX + 1, /* 2^32 */
+        (uint64_t)PTRDIFF_MAX,
+        (uint64_t)PTRDIFF_MAX + 1,
+        SIZE_MAX,
+        UINT64_MAX,
+    };
+    for (size_t i = 0; i < sizeof(huge) / sizeof(huge[0]); i++)
+    {
+        struct ppb_field f;
+        ptrdiff_t rc = prescan_len_field(huge[i], 8, &f, NULL);
+
+        CHECK(rc == PPB_ERROR_TRUNCATED_DATA);
+        CHECK(f.v.payload.size == 0);
+    }
+
+    /*
+     * Overlong (10-byte all-continuation) length varint: decode fails, and the
+     * UINT64_MAX on_error sentinel deterministically fails buf_check.
+     */
+    {
+        uint8_t wire[1 + 10 + 8];
+        size_t n = 0;
+
+        wire[n++] = (1 << 3) | PPB_WIRE_LEN;
+        memset(wire + n, 0xFF, 10);
+        n += 10;
+        memset(wire + n, 0x5A, 8);
+        n += 8;
+
+        uint8_t *p = malloc(n);
+        memcpy(p, wire, n);
+
+        const struct ppb_encoded_tag tags[] = { PPB_TAG(1, PPB_WIRE_LEN) };
+        struct ppb_field fields[1];
+        zero_fields(1, fields);
+
+        ptrdiff_t rc = ppb_prescan(make_buf(p, n), 1, tags, fields, SIZE_MAX);
+        CHECK(rc == PPB_ERROR_CORRUPT_VARINT);
+        CHECK(fields[0].v.payload.size == 0);
+
+        free(p);
+    }
+}
+
 int
 main(void)
 {
@@ -3042,6 +3226,8 @@ main(void)
     test_prescan_deterministic();
 
     test_field_value_union_overlay();
+    test_prescan_len_length_widening();
+    test_len_payload_bounds_exact();
 
     printf("\n%d checks, %d failures\n", g_check_count, g_fail_count);
     return g_fail_count > 0 ? 1 : 0;
