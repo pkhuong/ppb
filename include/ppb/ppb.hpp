@@ -230,14 +230,18 @@ struct bytes;
 // message of type `InnerSchema`.  On the wire it's a plain `bytes`
 // field; the extra type information lets `ppb::on_submessage<K, S>`
 // statically verify that the schema and the handler agree on the
-// inner type.  Last-write-wins by default.
+// inner type.
+//
+// `singular` by default, not `last_write_wins`: protobuf parses (and
+// merges) every occurrence of a singular message field, so multiple
+// occurrences must be descended into rather than discarding all but
+// the last.
 //
 // N.B., by default, the `limit::max_depth()` is set to 0, so
 // `on_submessage` always fails with `PPB_ERROR_DEPTH_EXCEEDED`; relax
 // that the recursion depth budget to a strictly positive value to
 // enable submessage parsing.
-template <auto K, typename InnerSchema, field_semantics sem = field_semantics::last_write_wins>
-struct message;
+template <auto K, typename InnerSchema, field_semantics sem = field_semantics::singular> struct message;
 
 // Convenience aliases for `proto3_zero_default` semantics: same as
 // `last_write_wins`, but absent fields are also dispatched with their

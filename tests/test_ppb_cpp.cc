@@ -3790,6 +3790,59 @@ test_on_submessage_zero_length_runs_init()
     CHECK(inner_handler_calls == 0);
 }
 
+// A singular (`ppb::message<K, S>`) field that appears more than once
+// must be descended into on EVERY occurrence, the way libprotobuf
+// parses (and merges) each one.  The divergence shows up as
+// undetected malformed messages, and incompletely parsed submessages
+// when a later entry overrides only a subset of fields.
+using SingInner = ppb::schema<ppb::varint<1>>;
+using SingOuter = ppb::schema<ppb::message<1, SingInner>>;
+
+static void
+test_on_submessage_validates_every_occurrence()
+{
+    // First occurrence is malformed (LEN(1) holding tag 0x08 with its varint
+    // value truncated); the second is an empty message.  Descending into every
+    // occurrence rejects on the malformed first one.
+    static const uint8_t malformed_then_empty[] = {
+        0x0a, 0x01, 0x08,  // field 1 = LEN(1) { tag 1 varint, value truncated }
+        0x0a, 0x00,  // field 1 = LEN(0) empty
+    };
+
+    {
+        ppb::reader<SingOuter> r(malformed_then_empty, sizeof(malformed_then_empty));
+
+        ppb_error err = r.parse(ppb::limit::max_depth(2),
+            ppb::on_submessage<1, SingInner>(
+                ppb::on<1>([](const ppb_field &) -> ppb_error { return PPB_OK; })));
+
+        CHECK(err != PPB_OK);
+    }
+
+    // Both occurrences valid: the first carries field 1 = 1, the second is
+    // empty.  Merging across occurrences keeps the value from the first.
+    static const uint8_t valued_then_empty[] = {
+        0x0a, 0x02, 0x08, 0x01,  // field 1 = LEN(2) { tag 1 varint, value 1 }
+        0x0a, 0x00,  // field 1 = LEN(0) empty
+    };
+
+    {
+        ppb::reader<SingOuter> r(valued_then_empty, sizeof(valued_then_empty));
+
+        uint64_t inner_v = 0;
+        ppb_error err = r.parse(ppb::limit::max_depth(2),
+            ppb::on_submessage<1, SingInner>(ppb::on<1>(
+                [&](const ppb_field &f) -> ppb_error
+                {
+                    inner_v = f.v.u64;
+                    return PPB_OK;
+                })));
+
+        CHECK(err == PPB_OK);
+        CHECK(inner_v == 1);
+    }
+}
+
 }  // namespace submsg_tests
 
 int
@@ -3949,6 +4002,7 @@ main()
     submsg_tests::test_on_submessage_with_init();
     submsg_tests::test_on_submessage_typed_message_field();
     submsg_tests::test_on_submessage_zero_length_runs_init();
+    submsg_tests::test_on_submessage_validates_every_occurrence();
 
     std::printf("\n%d checks, %d failures\n", g_check_count, g_fail_count);
     return g_fail_count > 0 ? 1 : 0;

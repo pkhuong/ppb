@@ -693,25 +693,25 @@ static_assert(!ppb::detail::is_message_field_v<ppb::varint<K::f1>>);
 static_assert(std::is_same_v<typename ppb::message<K::f1, Inner>::inner_schema, Inner>);
 static_assert(std::is_same_v<typename ppb::unpacked_message<K::f1, Inner>::inner_schema, Inner>);
 
-// Convenience aliases pin the expected semantics.
-static_assert(ppb::message<K::f1, Inner>::semantics() == ppb::field_semantics::last_write_wins);
+// Check the default semantics for convenience submessage aliases.
+static_assert(ppb::message<K::f1, Inner>::semantics() == ppb::field_semantics::singular);
 static_assert(ppb::unpacked_message<K::f1, Inner>::semantics() == ppb::field_semantics::repeated);
 
 }  // namespace test_on_submessage
 
 // Positive counterpart to PPB_FAIL_MESSAGE_PROTO3:
-// message<> with last_write_wins (the default) and repeated semantics both compile.
+// message<> with singular (the default) and repeated semantics both compile.
 namespace test_message_valid_semantics
 {
 using Inner = ppb::schema<ppb::varint<K::f1>>;
 
 static_assert(sizeof(ppb::message<K::f1, Inner>) > 0);
-static_assert(ppb::message<K::f1, Inner>::semantics() == ppb::field_semantics::last_write_wins);
+static_assert(ppb::message<K::f1, Inner>::semantics() == ppb::field_semantics::singular);
 static_assert(sizeof(ppb::message<K::f1, Inner, ppb::field_semantics::repeated>) > 0);
 }  // namespace test_message_valid_semantics
 
 // Positive counterpart to PPB_FAIL_ON_SUBMESSAGE_PROTO3_FIELD:
-// on_submessage with a last_write_wins message field compiles through
+// on_submessage with a singular (default) message field compiles through
 // run_handler_for_idx (the prescan overload triggers the full path).
 namespace test_on_submessage_non_proto3_field
 {
