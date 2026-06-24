@@ -461,8 +461,10 @@ test_peek_tag_error(void)
  * Fast path (>=8 bytes): 7 bytes with continuation bit set, 8th byte with
  * high bit clear — all 63 non-high-bit positions set → 0x7FFFFFFFFFFFFFFF.
  *
- * Slow path (<8 bytes): reads one byte at a time until a byte with high bit
- * clear; a single 0x7F byte gives the max single-byte value 127, also < 2^63.
+ * Slow path: peek_varint_slow with limb_width=8 loops while shift < 64, so it
+ * accepts at most 8 bytes.  Through the public peek_tag it only runs when
+ * src.size < 8 (<= 7 bytes, max value 2^55-1); but even when called directly
+ * it can only return a value < 2^63.
  *
  * Error cases use 8 bytes of tail padding so the fast path is unambiguously
  * exercised (buf.size > 8), and then call peek_varint_slow explicitly to
@@ -492,6 +494,36 @@ test_peek_tag_range(void)
         int rc = peek_tag(buf, &val);
         CHECK(rc == 1);
         CHECK(val == 0x7F);
+        CHECK(val < ((uint64_t)1 << 63));
+    }
+
+    /*
+     * Exercise the peek_tag slow path with src.size < 8.
+     */
+    for (size_t n = 2; n <= 7; n++)
+    {
+        uint8_t data[7];
+        for (size_t i = 0; i + 1 < n; i++)
+            data[i] = 0xFF;
+        data[n - 1] = 0x7F;
+
+        uint64_t val = 0;
+        int rc = peek_tag(make_buf(data, n), &val);
+        CHECK(rc == (int)n);
+        CHECK(val == (((uint64_t)1 << (8 * n - 1)) - 1));
+        CHECK(val < ((uint64_t)1 << 63));
+    }
+
+    /*
+     * Also exercise the slow path directly, with an 8-byte input.
+     */
+    {
+        uint8_t data[] = { 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x7F };
+        uint64_t val = 0;
+        int rc = peek_varint_slow(make_buf(data, sizeof(data)), &val, /*limb_width=*/8,
+            PPB_ERROR_CORRUPT_TAG);
+        CHECK(rc == 8);
+        CHECK(val == (UINT64_MAX >> 1));  /* 2^63 - 1 */
         CHECK(val < ((uint64_t)1 << 63));
     }
 
