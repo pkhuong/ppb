@@ -771,6 +771,11 @@ template <typename... Fs> struct reader<schema<Fs...>>
     // re-running prescan/lexn on the same bytes with different
     // handlers; for stream processing, construct a fresh reader per
     // message.
+    //
+    // Skipping this call before another `parse()`/`prescan()` folds
+    // the new message's statistics onto the old ones: `meta<>()`
+    // counts and byte totals double-count, and stale per-field values
+    // can be redispatched as if they appeared in the new message.
     constexpr void reset_fields() noexcept { m_fields = {}; }
 
     // High-level driver: prescan + optional lexn pass + dispatch.

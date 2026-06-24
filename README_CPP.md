@@ -414,6 +414,11 @@ sub-message.  Declare the outer field as `ppb::message<K, InnerSchema>`
 and pass the inner handlers to `ppb::on_submessage<K, InnerSchema>(...)`.
 The wrapper builds the inner reader and parses the payload.
 
+A malformed inner message whose fields overrun the declared payload
+length is reported as `PPB_ERROR_LIMIT_EXCEEDED` (the payload length
+acts as the inner parse's hard byte limit), not
+`PPB_ERROR_TRUNCATED_DATA`.
+
 `on_submessage<K, S>` is bound to `wire_type::len` and will match
 *any* LEN field at key `K` in the outer schema -- `message<K, S>`,
 `unpacked_message<K, S>`, but also `bytes<K>`, `utf8string<K>`,
