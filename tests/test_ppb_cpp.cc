@@ -4401,6 +4401,130 @@ test_on_submessage_validates_every_occurrence()
     }
 }
 
+/*
+ * Recursive depth cap is exact and fails closed.
+ *
+ * The C core is iterative, but on_submessage descends via nested C++
+ * reader calls.  Schemas are acyclic, so we cut the knot with an
+ * opaque `bytes` field and explicit recursion in the handlers.  We
+ * also confirm that omitting an explicit depth limit forbids any
+ * recursion.
+ */
+namespace depth_cap
+{
+
+// Self-recursive: field 1 (LEN) nests another Rec; field 2 is a leaf marker.
+using Rec = ppb::schema<ppb::bytes<1>, ppb::varint<2>>;
+
+struct DepthState
+{
+    bool leaf_fired = false;
+};
+
+// Handler tree that descends field 1 up to D levels; on<2> at every level sets
+// the marker when the leaf message (field 2) is actually reached.
+template <int D>
+static auto
+make_depth_handler(DepthState &st)
+{
+    auto marker = [&st](const ppb_field &) -> ppb_error
+    {
+        st.leaf_fired = true;
+        return PPB_OK;
+    };
+
+    if constexpr (D == 1)
+    {
+        return ppb::on_submessage<1, Rec>(ppb::on<2>(marker));
+    }
+    else
+    {
+        return ppb::on_submessage<1, Rec>(make_depth_handler<D - 1>(st), ppb::on<2>(marker));
+    }
+}
+
+static void
+encode_varint(std::vector<uint8_t> &out, uint64_t v)
+{
+    do
+    {
+        uint8_t b = v & 0x7f;
+        v >>= 7;
+        if (v != 0)
+        {
+            b |= 0x80;
+        }
+
+        out.push_back(b);
+    } while (v != 0);
+}
+
+// `levels` LEN wrappers (field 1) around a leaf { field 2 = varint 42 }.
+static std::vector<uint8_t>
+build_nested(int levels)
+{
+    std::vector<uint8_t> cur = { 0x10, 0x2a }; /* leaf: field 2 varint 42 */
+
+    for (int i = 0; i < levels; i++)
+    {
+        std::vector<uint8_t> wrapped;
+        wrapped.push_back(0x0a); /* field 1, LEN */
+        encode_varint(wrapped, cur.size());
+        wrapped.insert(wrapped.end(), cur.begin(), cur.end());
+        cur = std::move(wrapped);
+    }
+
+    return cur;
+}
+
+static void
+test_on_submessage_depth_cap_exact()
+{
+    constexpr int D = 20; /* static handler ceiling, >= every input depth below */
+
+    auto run = [](int input_levels, uint32_t max_depth, bool expect_leaf, ppb_error expect_err)
+    {
+        std::vector<uint8_t> msg = build_nested(input_levels);
+
+        // Exact-sized heap copy so any over-read of the nested payload trips an
+        // ASan red-zone.
+        auto *p = new uint8_t[msg.size()];
+        std::memcpy(p, msg.data(), msg.size());
+
+        DepthState st;
+        ppb::reader<Rec> r(p, msg.size());
+        ppb_error err = r.parse(ppb::limit::max_depth(max_depth), make_depth_handler<D>(st));
+
+        CHECK(err == expect_err);
+        CHECK(st.leaf_fired == expect_leaf);
+
+        delete[] p;
+    };
+
+    // Off-by-one: input nested exactly M descends to the leaf; M+1 fails closed
+    // with DEPTH_EXCEEDED and the leaf never fires.
+    for (uint32_t m : { 1u, 2u, 4u, 8u, 16u })
+    {
+        run(/*input_levels=*/static_cast<int>(m), /*max_depth=*/m, /*expect_leaf=*/true, PPB_OK);
+        run(/*input_levels=*/static_cast<int>(m) + 1, /*max_depth=*/m, /*expect_leaf=*/false,
+            PPB_ERROR_DEPTH_EXCEEDED);
+    }
+
+    // Positive control: a budget of 20 really does descend 20 levels (so the cap,
+    // not some other limit, is what gates the cases above).
+    run(/*input_levels=*/20, /*max_depth=*/20, /*expect_leaf=*/true, PPB_OK);
+
+    // Anti-DoS: input 10000 levels deep with a cap of 4 fails closed without
+    // unbounded recursion -- the descent stops at depth 5 (== max_depth+1)
+    // regardless of input depth, so the process must not stack-overflow.
+    run(/*input_levels=*/10000, /*max_depth=*/4, /*expect_leaf=*/false, PPB_ERROR_DEPTH_EXCEEDED);
+
+    // Default limit{} (max_depth 0) rejects even a single nesting.
+    run(/*input_levels=*/1, /*max_depth=*/0, /*expect_leaf=*/false, PPB_ERROR_DEPTH_EXCEEDED);
+}
+
+}  // namespace depth_cap
+
 }  // namespace submsg_tests
 
 namespace repeated_tests
@@ -4986,6 +5110,7 @@ main()
     submsg_tests::test_on_submessage_typed_message_field();
     submsg_tests::test_on_submessage_zero_length_runs_init();
     submsg_tests::test_on_submessage_validates_every_occurrence();
+    submsg_tests::depth_cap::test_on_submessage_depth_cap_exact();
 
     repeated_tests::test_int32_packed_equals_unpacked();
     repeated_tests::test_sfixed32_packed_equals_unpacked();
