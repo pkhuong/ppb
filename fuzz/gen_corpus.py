@@ -388,6 +388,19 @@ def synthetic_entries():
         bytes([6, 5, 5 | (1 << 3), 6 | (2 << 3), 4 | (1 << 3), 3, 7 | (3 << 3)]) + _cpp_seq_buf
     )
 
+    # Overlong framing varints: a varint-length tag or LEN length padded with
+    # extra continuation bytes.
+    #
+    # 6-byte overlong encoding of tag 120 (field 15, varint), value 7.
+    yield "syn_overlong_tag", bytes([0xF8, 0x80, 0x80, 0x80, 0x80, 0x00, 0x07])
+    # 7-byte overlong LEN length (value 0), framed alongside other scalar fields.
+    yield "syn_overlong_len", bytes(
+        [0x0A, 0x04, 0x0A, 0x00, 0x38, 0x07, 0x2A, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x00, 0x78, 0x28]
+    )
+    # A LEN payload starting with `80 00`, a 2-byte overlong encoding of tag 0
+    # (field number 0) -- a malformed field number that must be rejected.
+    yield "syn_overlong_field0", bytes([0x0A, 0x03, 0x80, 0x00, 0x46])
+
     # Unsupported wire types (3=SGROUP, 4=EGROUP, 6/7=reserved)
     for wt in [3, 4, 6, 7]:
         yield f"syn_wire_type_{wt}", encode_tag(1, wt)
