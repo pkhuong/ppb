@@ -2,6 +2,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <optional>
 #include <ppb/ppb.hpp>
 #include <string>
 #include <string_view>
@@ -2484,6 +2485,94 @@ test_typed_packed_varint_fields()
     CHECK(u64s[1] == 200);
 }
 
+// Whenever ppb calls a handler with a view, that view must point into
+// the input span, not some temporary.  Test that with ASan.
+static void
+test_borrowed_views_alias_input_exact()
+{
+    using S = ppb::schema<ppb::utf8string<1>, ppb::bytes<2>, ppb::packed_fixed32<3>, ppb::packed_int32<4>>;
+
+    static const uint8_t wire[] = {
+        0x0a, 0x05, 0x68, 0x65, 0x6c, 0x6c, 0x6f, /* f1 utf8string "hello" */
+        0x12, 0x03, 0xca, 0xfe, 0xbe, /* f2 bytes {ca fe be} */
+        0x1a, 0x08, 0xef, 0xbe, 0xad, 0xde, 0xbe, 0xba, 0xfe, 0xca, /* f3 packed_fixed32 */
+        0x22, 0x04, 0x01, 0x02, 0xac, 0x02, /* f4 packed_int32 [1,2,300] */
+    };
+
+    const size_t n = sizeof(wire);
+    auto *p = new uint8_t[n];
+    std::memcpy(p, wire, n);
+
+    auto in_input = [&](const void *q) -> bool
+    {
+        auto a = reinterpret_cast<uintptr_t>(q);
+        return a >= reinterpret_cast<uintptr_t>(p) && a < reinterpret_cast<uintptr_t>(p) + n;
+    };
+
+    std::string_view sv;
+    std::span<const std::byte> bytes_span;
+    std::span<const ppb::le_packed<uint32_t>> fixed_span;
+    std::optional<ppb::detail::packed_varint_view<int32_t, ppb::detail::identity_decode>> pv;
+
+    {
+        ppb::reader<S> r(p, n);
+        ppb_error err = r.parse([](const ppb::reader<S> &) -> ppb_error { return PPB_OK; }, {},
+            ppb::on<1>(
+                [&](std::string_view s) -> ppb_error
+                {
+                    sv = s;
+                    return PPB_OK;
+                }),
+            ppb::on<2>(
+                [&](std::span<const std::byte> s) -> ppb_error
+                {
+                    bytes_span = s;
+                    return PPB_OK;
+                }),
+            ppb::on<3>(
+                [&](std::span<const ppb::le_packed<uint32_t>> s) -> ppb_error
+                {
+                    fixed_span = s;
+                    return PPB_OK;
+                }),
+            ppb::on<4>(
+                [&](auto view) -> ppb_error
+                {
+                    pv = view;
+                    return PPB_OK;
+                }));
+
+        CHECK(err == PPB_OK);
+        CHECK(r.empty());
+    }
+
+    /* Consumed after reader destruction: each view still reads the input bytes. */
+    CHECK(sv == "hello");
+    CHECK(in_input(sv.data()));
+
+    CHECK(bytes_span.size() == 3);
+    CHECK(static_cast<uint8_t>(bytes_span[0]) == 0xca);
+    CHECK(in_input(bytes_span.data()));
+
+    CHECK(fixed_span.size() == 2);
+    CHECK(fixed_span[0].value() == 0xDEADBEEFu);
+    CHECK(fixed_span[1].value() == 0xCAFEBABEu);
+    CHECK(in_input(fixed_span.data()));
+
+    std::vector<int32_t> pvs;
+    for (auto v : *pv)
+    {
+        pvs.push_back(v);
+    }
+
+    CHECK(pvs.size() == 3);
+    CHECK(pvs[0] == 1);
+    CHECK(pvs[1] == 2);
+    CHECK(pvs[2] == 300);
+
+    delete[] p;
+}
+
 // Helpers for sticky-error + packed payload tests.
 //
 // check_corrupt_after_sticky: schema has error-semantics field 1
@@ -4508,6 +4597,7 @@ main()
     test_packed_fixed_alignment_length_sweep();
     test_scalar_value_punning_sweep();
     test_typed_packed_varint_fields();
+    test_borrowed_views_alias_input_exact();
     // Empty packed payloads.
     check_empty_payload<ppb::packed_int32<1>>();
     check_empty_payload<ppb::packed_sint32<1>>();
