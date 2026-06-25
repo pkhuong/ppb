@@ -352,16 +352,16 @@ def synthetic_entries():
     # Still valid protobuf bytes, but these are specifically targeted
     # at two configs in the C++ fuzz target:
     #
-    #   Config B: field 1 packed varint, field 2 packed fixed32,
-    #             field 4 repeated bytes.
-    #   Config C: field 1 = val (varint), field 2 = sub (LEN message).
+    #   packed_views: field 1 packed varint, field 2 packed fixed32,
+    #                 field 4 repeated bytes.
+    #   submessage_depth: field 1 = val (varint), field 2 = sub (LEN message).
 
-    # Packed int32 payload (Config B field 1): varints 1, 2, 300.
+    # Packed int32 payload (packed_views field 1): varints 1, 2, 300.
     yield "syn_cpp_packed_varint", field_len(
         1, encode_varint(1) + encode_varint(2) + encode_varint(300)
     )
 
-    # Packed fixed32 payload (Config B field 2): two LE uint32 elements.
+    # Packed fixed32 payload (packed_views field 2): two LE uint32 elements.
     _cpp_packed_fixed = struct.pack("<II", 1, 0xDEADBEEF)
     yield "syn_cpp_packed_fixed32", field_len(2, _cpp_packed_fixed)
 
@@ -369,15 +369,15 @@ def synthetic_entries():
     # size % sizeof(element) guard in the wrapper's le_packed span).
     yield "syn_cpp_packed_fixed32_misaligned", field_len(2, _cpp_packed_fixed + b"\x01")
 
-    # Repeated bytes (Config B field 4), including an empty occurrence.
+    # Repeated bytes (packed_views field 4), including an empty occurrence.
     yield "syn_cpp_bytes_field", field_len(4, b"hello") + field_len(4, b"")
 
-    # Two-deep nested submessage (Config C: SchemaTop -> Mid -> Leaf).
+    # Two-deep nested submessage (submessage_depth: SchemaTop -> Mid -> Leaf).
     _cpp_leaf = field_varint(1, 42)
     _cpp_mid = field_varint(1, 7) + field_len(2, _cpp_leaf)
     yield "syn_cpp_nested_submessage", field_varint(1, 1) + field_len(2, _cpp_mid)
 
-    # Config E API-sequence programs: <n_ops & 15> <opcodes...> <wire buffer>.
+    # api_sequence programs: <n_ops & 15> <opcodes...> <wire buffer>.
     # Opcode low 3 bits: 0/7 prescan, 1 parse, 2 lexn, 3 lex_all,
     # 4 reset_fields (+ fresh-reader differential), 5 copy differential,
     # 6 parse under limit::hard(opcode >> 3).
