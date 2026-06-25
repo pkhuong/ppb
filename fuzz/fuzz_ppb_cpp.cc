@@ -8,10 +8,13 @@
  */
 #include "ppb/ppb.hpp"
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <span>
 #include <string_view>
+#include <tuple>
 #include <vector>
 
 #define POSTCOND(cond)        \
@@ -288,68 +291,409 @@ exercise_config_d(std::span<const std::byte> input)
 }
 
 /*
- * Config E: the scalar `sint32` and packed `sint32` paths must decode
- * any payload to the same value, and that value must match `ppb_zag32`.
+ * Config E: stateful API-sequence program over one reader.  input[0]
+ * picks how many opcode bytes follow; the rest is the wire buffer.
+ * Ops interleave prescan / parse / lexn / lex_all / reset_fields,
+ * including reuse *without* reset_fields(), and assert our stateful
+ * cross-call invariants:
  *
- * Feed potentially non-canonical varints to both code paths and compare.
+ *   - sticky-error short-circuit: the same error is returned, the input span
+ *     does not advance, metadata is untouched, and no handler fires;
+ *   - error() is monotone: PPB_OK -> E at most once, then constant;
+ *   - input() is always a suffix of the constructing span, and prescan() never
+ *     advances it;
+ *   - unknown_field() is soft-sticky: once set, never changes;
+ *   - reset_fields() restores fresh per-field metadata, preserves
+ *     error()/unknown_field(), and an error-free reader behaves exactly like a
+ *     freshly-constructed one afterwards (checked differentially);
+ *   - readers are value types: a copy executes the same op with identical
+ *     observable results (checked differentially).
  */
-using SchemaScalarSint32 = ppb::schema<ppb::sint32<1>>;
-using SchemaPackedSint32 = ppb::schema<ppb::packed_sint32<1>>;
+struct meta_snapshot
+{
+    ppb_field_meta m[5];
+};
+
+meta_snapshot
+snap_meta(const ppb::reader<SchemaA> &r)
+{
+    return { { r.meta<FA::i>(), r.meta<FA::u>(), r.meta<FA::d>(), r.meta<FA::f>(), r.meta<FA::s>() } };
+}
+
+bool
+meta_equal(const meta_snapshot &a, const meta_snapshot &b)
+{
+    for (size_t i = 0; i < 5; i++)
+    {
+        if (a.m[i].lost_distinct_u64 != b.m[i].lost_distinct_u64 ||
+            a.m[i].num_occurrences != b.m[i].num_occurrences || a.m[i].total_bytes != b.m[i].total_bytes ||
+            a.m[i].min_nonzero_bytes != b.m[i].min_nonzero_bytes || a.m[i].max_bytes != b.m[i].max_bytes)
+            return false;
+    }
+
+    return true;
+}
+
+struct op_result
+{
+    ppb_error err;
+    ptrdiff_t scanned;
+    size_t calls[6];
+};
+
+bool
+op_result_equal(const op_result &a, const op_result &b)
+{
+    if (a.err != b.err || a.scanned != b.scanned)
+        return false;
+
+    for (size_t i = 0; i < 6; i++)
+    {
+        if (a.calls[i] != b.calls[i])
+            return false;
+    }
+
+    return true;
+}
+
+auto
+make_counting_tuple(op_result *res)
+{
+    return std::tuple {
+        ppb::on<FA::i>(
+            [res](int32_t) -> ppb_error
+            {
+                res->calls[0]++;
+                return PPB_OK;
+            }),
+        ppb::on<FA::u>(
+            [res](uint64_t) -> ppb_error
+            {
+                res->calls[1]++;
+                return PPB_OK;
+            }),
+        ppb::on<FA::d>(
+            [res](double) -> ppb_error
+            {
+                res->calls[2]++;
+                return PPB_OK;
+            }),
+        ppb::on<FA::f>(
+            [res](float) -> ppb_error
+            {
+                res->calls[3]++;
+                return PPB_OK;
+            }),
+        ppb::on<FA::s>(
+            [res](std::string_view) -> ppb_error
+            {
+                res->calls[4]++;
+                return PPB_OK;
+            }),
+        ppb::on_unknown<>(
+            [res](const ppb_field &) -> ppb_error
+            {
+                res->calls[5]++;
+                return PPB_OK;
+            }),
+    };
+}
+
+/* Runs prescan (0), parse (1), lexn (2), or lex_all (3) under `bounds`. */
+op_result
+do_simple_op(ppb::reader<SchemaA> &r, unsigned which, ppb::limit bounds)
+{
+    op_result res = {};
+    auto tup = make_counting_tuple(&res);
+
+    switch (which & 3)
+    {
+    case 0:
+        res.scanned = r.prescan(bounds);
+        break;
+
+    case 1:
+        (void)r.parse_tuple(std::nullopt, bounds, tup);
+        break;
+
+    case 2:
+        (void)r.lexn_tuple(bounds, tup);
+        break;
+
+    case 3:
+        (void)r.lex_all_tuple(bounds, tup);
+        break;
+    }
+
+    res.err = r.error();
+    return res;
+}
 
 void
 exercise_config_e(std::span<const std::byte> input)
 {
-    /* Interpret the input prefix as one zigzag-encoded varint. */
-    ppb_error err = PPB_OK;
-    ppb_buf buf = {
-        .buf = input.data(),
-        .size = input.size(),
-    };
-    uint64_t enc = ppb_decode_varint(&buf, &err);
-    if (err != PPB_OK)
+    if (input.empty())
         return;
 
-    size_t varint_len = input.size() - buf.size;
+    const size_t n_ops = static_cast<uint8_t>(input[0]) & 15;
+    if (input.size() < 1 + n_ops)
+        return;
 
-    /*
-     * Frame that varint as a scalar sint32 field and as a single-element
-     * packed sint32 field.  A varint is at most 10 bytes, so the packed
-     * length always fits in one byte.
-     */
-    std::vector<std::byte> scalar_msg;
-    scalar_msg.reserve(1 + varint_len);
-    scalar_msg.push_back(std::byte { 0x08 }); /* field 1, wire varint */
-    scalar_msg.insert(scalar_msg.end(), input.begin(), input.begin() + varint_len);
+    const auto ops = input.subspan(1, n_ops);
+    const auto buf = input.subspan(1 + n_ops);
 
-    std::vector<std::byte> packed_msg;
-    packed_msg.reserve(2 + varint_len);
-    packed_msg.push_back(std::byte { 0x0a }); /* field 1, wire len */
-    packed_msg.push_back(static_cast<std::byte>(varint_len));
-    packed_msg.insert(packed_msg.end(), input.begin(), input.begin() + varint_len);
+    /* Reference for "reset_fields() restores fresh metadata". */
+    const meta_snapshot fresh_meta = snap_meta(ppb::reader<SchemaA>(buf));
 
-    int32_t v_scalar = 0;
-    size_t scalar_calls = 0;
+    ppb::reader<SchemaA> r(buf);
 
-    ppb::reader<SchemaScalarSint32> rs { std::span<const std::byte>(scalar_msg) };
-    if (rs.parse(ppb::on<1>(
-            [&](int32_t v) -> ppb_error
+    for (const std::byte raw : ops)
+    {
+        const auto op = static_cast<uint8_t>(raw);
+        const unsigned arg = op >> 3;
+
+        const ppb_error before_err = r.error();
+        const auto before_in = r.input();
+        const meta_snapshot before_meta = snap_meta(r);
+        const auto before_unknown = r.unknown_field();
+
+        switch (op & 7)
+        {
+        case 0:
+        case 7:
+        {
+            const ppb::limit bounds = (op & 7) == 7 ? ppb::limit::soft(arg) : ppb::limit {};
+            const op_result res = do_simple_op(r, /*which=*/0, bounds);
+
+            /* prescan never advances the input span. */
+            POSTCOND(r.input().data() == before_in.data() && r.input().size() == before_in.size());
+
+            if (before_err != PPB_OK)
+                POSTCOND(res.scanned == ptrdiff_t(before_err));
+
+            break;
+        }
+
+        case 1:
+        case 2:
+        case 3:
+        {
+            const op_result res = do_simple_op(r, op & 3, ppb::limit {});
+
+            if (before_err != PPB_OK)
             {
-                v_scalar = v;
-                scalar_calls++;
-                return PPB_OK;
-            })) != PPB_OK)
-        return;
+                /* Sticky short-circuit: nothing observable happens. */
+                POSTCOND(res.err == before_err);
+                POSTCOND(r.input().data() == before_in.data() && r.input().size() == before_in.size());
+                POSTCOND(meta_equal(snap_meta(r), before_meta));
 
-    std::vector<int32_t> v_packed;
+                for (size_t calls : res.calls)
+                {
+                    POSTCOND(calls == 0);
+                }
+            }
 
-    ppb::reader<SchemaPackedSint32> rp { std::span<const std::byte>(packed_msg) };
-    if (rp.parse(ppb::push_back<1>(&v_packed)) != PPB_OK)
-        return;
+            break;
+        }
 
-    POSTCOND(scalar_calls == 1);
-    POSTCOND(v_packed.size() == 1);
-    POSTCOND(v_scalar == v_packed[0]);
-    POSTCOND(v_scalar == ppb_zag32(static_cast<uint32_t>(enc)));
+        case 4:
+        {
+            r.reset_fields();
+
+            POSTCOND(r.error() == before_err);
+            POSTCOND(meta_equal(snap_meta(r), fresh_meta));
+            POSTCOND(r.input().data() == before_in.data() && r.input().size() == before_in.size());
+
+            if (before_err == PPB_OK)
+            {
+                /*
+                 * An error-free reader after reset_fields() must be
+                 * indistinguishable from a fresh reader over input() (modulo the
+                 * soft-sticky unknown_field() slot, which reset_fields()
+                 * documents as preserved).
+                 */
+                ppb::reader<SchemaA> from_reset = r;
+                ppb::reader<SchemaA> fresh(r.input());
+                const op_result a = do_simple_op(from_reset, arg & 3, ppb::limit {});
+                const op_result b = do_simple_op(fresh, arg & 3, ppb::limit {});
+
+                POSTCOND(op_result_equal(a, b));
+                POSTCOND(from_reset.error() == fresh.error());
+                POSTCOND(from_reset.input().data() == fresh.input().data() &&
+                    from_reset.input().size() == fresh.input().size());
+                POSTCOND(meta_equal(snap_meta(from_reset), snap_meta(fresh)));
+            }
+
+            break;
+        }
+
+        case 5:
+        {
+            /* Value-type check: a copy executes the same op identically. */
+            ppb::reader<SchemaA> copy = r;
+            const op_result a = do_simple_op(r, arg & 3, ppb::limit {});
+            const op_result b = do_simple_op(copy, arg & 3, ppb::limit {});
+
+            POSTCOND(op_result_equal(a, b));
+            POSTCOND(r.error() == copy.error());
+            POSTCOND(r.input().data() == copy.input().data() && r.input().size() == copy.input().size());
+            POSTCOND(meta_equal(snap_meta(r), snap_meta(copy)));
+            break;
+        }
+
+        case 6:
+        {
+            const op_result res = do_simple_op(r, /*which=*/1, ppb::limit::hard(arg));
+
+            if (before_err != PPB_OK)
+                POSTCOND(res.err == before_err);
+
+            break;
+        }
+        }
+
+        /* Cross-call contract, after every op. */
+        if (before_err != PPB_OK)
+            POSTCOND(r.error() == before_err);
+
+        if (before_unknown.has_value())
+            POSTCOND(r.unknown_field() == before_unknown);
+
+        /* input() is always a suffix of the constructing span. */
+        POSTCOND(r.input().data() >= buf.data());
+        POSTCOND(r.input().data() + r.input().size() == buf.data() + buf.size());
+    }
+}
+
+/*
+ * Config F: C-vs-C++ differential over Schema A.  The C-side tag array is built
+ * independently with PPB_TAG and matches SchemaA::s_encoded_tags.  The same input
+ * goes through the raw C API and a ppb::reader; prescan and a lockstep lexn loop
+ * must agree on consumption, error codes, and the full per-field state of the
+ * five specific slots (the catch-all slots are not reachable through the wrapper
+ * API).
+ */
+constexpr ppb_encoded_tag k_tags_f[] = {
+    PPB_TAG(1, PPB_WIRE_VARINT),
+    PPB_TAG(2, PPB_WIRE_VARINT),
+    PPB_TAG(3, PPB_WIRE_I64),
+    PPB_TAG(4, PPB_WIRE_I32),
+    PPB_TAG(5, PPB_WIRE_LEN),
+    PPB_TAG(-1, PPB_WIRE_VARINT),
+    PPB_TAG(-1, PPB_WIRE_I64),
+    PPB_TAG(-1, PPB_WIRE_LEN),
+    PPB_TAG(-1, PPB_WIRE_I32),
+};
+constexpr size_t k_num_tags_f = sizeof(k_tags_f) / sizeof(k_tags_f[0]);
+
+static_assert(
+    []
+    {
+        if (SchemaA::s_encoded_tags.size() != k_num_tags_f)
+            return false;
+
+        for (size_t i = 0; i < k_num_tags_f; i++)
+        {
+            if (SchemaA::s_encoded_tags[i].bits != k_tags_f[i].bits)
+                return false;
+        }
+
+        return true;
+    }(),
+    "config F's hand-built tag array must mirror Schema A's");
+
+bool
+field_state_equal(const ppb_field &a, const ppb_field &b)
+{
+    return a.m.lost_distinct_u64 == b.m.lost_distinct_u64 && a.m.num_occurrences == b.m.num_occurrences &&
+        a.m.total_bytes == b.m.total_bytes && a.m.min_nonzero_bytes == b.m.min_nonzero_bytes &&
+        a.m.max_bytes == b.m.max_bytes && a.v.ptr == b.v.ptr && a.v.u64 == b.v.u64 &&
+        a.v.payload.buf == b.v.payload.buf && a.v.payload.size == b.v.payload.size;
+}
+
+std::array<ppb_field, 5>
+snap_specific_fields(const ppb::reader<SchemaA> &r)
+{
+    return { r.field<FA::i>(), r.field<FA::u>(), r.field<FA::d>(), r.field<FA::f>(), r.field<FA::s>() };
+}
+
+void
+exercise_config_f(std::span<const std::byte> input)
+{
+    POSTCOND(ppb_validate_tags(k_num_tags_f, k_tags_f) == PPB_OK);
+
+    /* Prescan differential. */
+    {
+        ppb_field c_fields[k_num_tags_f] = {};
+        const ppb_buf c_buf = { .buf = input.data(), .size = input.size() };
+        const ptrdiff_t c_scanned = ppb_prescan(c_buf, k_num_tags_f, k_tags_f, c_fields, SIZE_MAX);
+
+        ppb::reader<SchemaA> r(input);
+        const ptrdiff_t cpp_scanned = r.prescan();
+
+        POSTCOND(cpp_scanned == c_scanned);
+        POSTCOND(r.error() == (c_scanned < 0 ? ppb_error(c_scanned) : PPB_OK));
+
+        const auto cpp_fields = snap_specific_fields(r);
+        for (size_t i = 0; i < cpp_fields.size(); i++)
+        {
+            POSTCOND(field_state_equal(cpp_fields[i], c_fields[i]));
+        }
+    }
+
+    /* Lockstep lexn-loop differential. */
+    ppb_field c_fields[k_num_tags_f] = {};
+    ppb_buf c_buf = { .buf = input.data(), .size = input.size() };
+    ppb::reader<SchemaA> r(input);
+
+    for (size_t iter = 0; r.error() == PPB_OK && !r.input().empty(); iter++)
+    {
+        /* Every clean batch consumes at least one byte. */
+        POSTCOND(iter < input.size());
+
+        ppb_field c_before[k_num_tags_f];
+        for (size_t i = 0; i < k_num_tags_f; i++)
+        {
+            c_before[i] = c_fields[i];
+        }
+
+        op_result res = {};
+        auto tup = make_counting_tuple(&res);
+        const ppb_error cpp_err = r.lexn_tuple(ppb::limit {}, tup);
+
+        const ppb_lexn_ret ret = ppb_lexn(&c_buf, k_num_tags_f, k_tags_f, c_fields, SIZE_MAX);
+
+        POSTCOND(cpp_err == ret.status);
+        POSTCOND(r.error() == ret.status);
+        POSTCOND(r.input().size() == c_buf.size);
+
+        const auto cpp_fields = snap_specific_fields(r);
+        for (size_t i = 0; i < cpp_fields.size(); i++)
+        {
+            POSTCOND(field_state_equal(cpp_fields[i], c_fields[i]));
+        }
+
+        /* The dispatch-count oracle only applies to clean batches. */
+        if (ret.status != PPB_OK)
+            continue;
+
+        for (size_t i = 0; i < 5; i++)
+        {
+            POSTCOND(res.calls[i] == (c_fields[i].v.ptr != c_before[i].v.ptr ? 1u : 0u));
+        }
+
+        size_t catchall_moved = 0;
+        for (size_t i = 5; i < k_num_tags_f; i++)
+        {
+            catchall_moved += c_fields[i].v.ptr != c_before[i].v.ptr ? 1 : 0;
+        }
+
+        /* A batch always ends after at most one catch-all field. */
+        POSTCOND(catchall_moved <= 1);
+        POSTCOND(res.calls[5] == catchall_moved);
+    }
+
+    POSTCOND(r.input().size() == c_buf.size);
 }
 
 }  // namespace
@@ -364,6 +708,7 @@ LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
     exercise_config_c(input);
     exercise_config_d(input);
     exercise_config_e(input);
+    exercise_config_f(input);
 
     return 0;
 }

@@ -377,6 +377,17 @@ def synthetic_entries():
     _cpp_mid = field_varint(1, 7) + field_len(2, _cpp_leaf)
     yield "syn_cpp_nested_submessage", field_varint(1, 1) + field_len(2, _cpp_mid)
 
+    # Config E API-sequence programs: <n_ops & 15> <opcodes...> <wire buffer>.
+    # Opcode low 3 bits: 0/7 prescan, 1 parse, 2 lexn, 3 lex_all,
+    # 4 reset_fields (+ fresh-reader differential), 5 copy differential,
+    # 6 parse under limit::hard(opcode >> 3).
+    _cpp_seq_buf = field_varint(1, 150) + field_len(5, b"hi") + field_varint(9, 1)
+    yield "syn_cpp_seq_parse_reset_parse", bytes([3, 1, 4, 1]) + _cpp_seq_buf
+    yield "syn_cpp_seq_misuse_reparse", bytes([4, 0, 2, 1, 1]) + _cpp_seq_buf
+    yield "syn_cpp_seq_copy_and_limits", (
+        bytes([6, 5, 5 | (1 << 3), 6 | (2 << 3), 4 | (1 << 3), 3, 7 | (3 << 3)]) + _cpp_seq_buf
+    )
+
     # Unsupported wire types (3=SGROUP, 4=EGROUP, 6/7=reserved)
     for wt in [3, 4, 6, 7]:
         yield f"syn_wire_type_{wt}", encode_tag(1, wt)
