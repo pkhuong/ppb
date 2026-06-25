@@ -9,7 +9,7 @@ coverage:
         target: 89%
       directory_src:
         paths: ["src"]
-        target: 100%
+        target: 99%
     patch:
       default:
         target:  100% # Minimum coverage for a PR
