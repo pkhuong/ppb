@@ -3269,6 +3269,254 @@ test_dispatch_high_indices()
     CHECK(r.error() == PPB_OK);
 }
 
+/*
+ * A 20-field schema with mixed wire types, to exercise the ppb.hpp
+ * dispatch logic on fields that straddle the 15/16 handler-block
+ * boundary.
+ */
+using WideMixSchema =
+    ppb::schema<ppb::varint<1>, ppb::i64<2>, ppb::len<3>, ppb::i32<4>, ppb::varint<5>, ppb::i64<6>,
+        ppb::len<7>, ppb::i32<8>, ppb::varint<9>, ppb::i64<10>, ppb::len<11>, ppb::i32<12>, ppb::varint<13>,
+        ppb::i64<14>, ppb::len<15>, ppb::i32<16>, ppb::varint<17>, ppb::i64<18>, ppb::len<19>, ppb::i32<20>>;
+
+struct WideMixState
+{
+    bool fired[21] = {};
+    uint64_t tag[21] = {};
+};
+
+// Wire code the schema declares for field K: cycle VARINT/I64/LEN/I32.
+static uint64_t
+wide_mix_wire_for(int K)
+{
+    switch ((K - 1) % 4)
+    {
+    case 0:
+        return 0; /* VARINT */
+    case 1:
+        return 1; /* I64 */
+    case 2:
+        return 2; /* LEN */
+    default:
+        return 5; /* I32 */
+    }
+}
+
+template <int K>
+static void
+wide_mix_record(WideMixState &st, const ppb_field &f, const std::byte *msg_end)
+{
+    st.fired[K] = true;
+
+    const auto *tp = static_cast<const std::byte *>(f.v.ptr);
+    CHECK(tp != nullptr);
+    CHECK(tp < msg_end);
+
+    /* Re-decode the tag, bounded by the message end (no over-read). */
+    ppb_buf b = { .buf = tp, .size = size_t(msg_end - tp) };
+    ppb_error e = PPB_OK;
+    st.tag[K] = ppb_decode_varint(&b, &e);
+    CHECK(e == PPB_OK);
+}
+
+template <auto K>
+static auto
+wide_mix_handler(WideMixState &st, const std::byte *msg_end)
+{
+    return ppb::on<K>(
+        [&st, msg_end](const ppb_field &f) -> ppb_error
+        {
+            wide_mix_record<static_cast<int>(K)>(st, f, msg_end);
+            return PPB_OK;
+        });
+}
+
+static void
+test_dispatch_wide_mixed_wire_boundary()
+{
+    /*
+     * Fields 14..18 straddle the index-15/16 seam; payload content is
+     * irrelevant (handlers read the tag, not the value).
+     */
+    static const uint8_t bytes[] = {
+        0x71, 0x0E, 0, 0, 0, 0, 0, 0, 0, /* f14 I64 */
+        0x7A, 0x02, 0xAA, 0xBB, /* f15 LEN */
+        0x85, 0x01, 0x10, 0, 0, 0, /* f16 I32 (2-byte tag) */
+        0x88, 0x01, 0x2A, /* f17 VARINT (2-byte tag) */
+        0x91, 0x01, 0x12, 0, 0, 0, 0, 0, 0, 0, /* f18 I64 (2-byte tag) */
+    };
+
+    /* Exact-sized heap copy for ASan. */
+    const size_t n = sizeof(bytes);
+    auto *msg = new uint8_t[n];
+    std::memcpy(msg, bytes, n);
+    const std::byte *const msg_end = reinterpret_cast<const std::byte *>(msg) + n;
+
+    auto verify = [&](WideMixState &st)
+    {
+        for (int K : { 14, 15, 16, 17, 18 })
+        {
+            CHECK(st.fired[K]);
+            CHECK((st.tag[K] >> 3) == uint64_t(K)); /* dispatched index == field number */
+            CHECK((st.tag[K] & 7) == wide_mix_wire_for(K)); /* and the right wire type */
+        }
+
+        CHECK(!st.fired[13]); /* absent straddling field: range check excludes it */
+        CHECK(!st.fired[19]);
+    };
+
+    /* parse() fast path. */
+    {
+        WideMixState st;
+        ppb::reader<WideMixSchema> r(msg, n);
+        (void)r.parse(wide_mix_handler<13>(st, msg_end), wide_mix_handler<14>(st, msg_end),
+            wide_mix_handler<15>(st, msg_end), wide_mix_handler<16>(st, msg_end),
+            wide_mix_handler<17>(st, msg_end), wide_mix_handler<18>(st, msg_end),
+            wide_mix_handler<19>(st, msg_end));
+        CHECK(r.error() == PPB_OK);
+        verify(st);
+    }
+
+    /* prescan + dispatch(): lower_bound = 1, range = UINTPTR_MAX-1. */
+    {
+        WideMixState st;
+        ppb::reader<WideMixSchema> r(msg, n);
+        CHECK(r.prescan() > 0);
+        CHECK(r.dispatch(wide_mix_handler<13>(st, msg_end), wide_mix_handler<14>(st, msg_end),
+                  wide_mix_handler<15>(st, msg_end), wide_mix_handler<16>(st, msg_end),
+                  wide_mix_handler<17>(st, msg_end), wide_mix_handler<18>(st, msg_end),
+                  wide_mix_handler<19>(st, msg_end)) == PPB_OK);
+        verify(st);
+    }
+
+    /*
+     * lex_all(): lexn_tuple per batch, lower_bound = base.  Default limit (one
+     * batch) and forced single-field batches (advancing base across the seam).
+     */
+    for (ppb::limit lim : { ppb::limit {}, ppb::limit::max_fields(1) })
+    {
+        WideMixState st;
+        ppb::reader<WideMixSchema> r(msg, n);
+        CHECK(r.lex_all(lim, wide_mix_handler<13>(st, msg_end), wide_mix_handler<14>(st, msg_end),
+                  wide_mix_handler<15>(st, msg_end), wide_mix_handler<16>(st, msg_end),
+                  wide_mix_handler<17>(st, msg_end), wide_mix_handler<18>(st, msg_end),
+                  wide_mix_handler<19>(st, msg_end)) == PPB_OK);
+        verify(st);
+    }
+
+    delete[] msg;
+}
+
+// A corrupt/inconsistent schema could hand `dispatch` a begin/end
+// past `num_fields`; the compile-time `if constexpr (base + I <
+// limit)` guard must keep every invoked index < limit regardless.
+template <size_t N>
+static void
+check_dispatch_out_of_range()
+{
+    const size_t pts[] = { 0, 1, N / 2, N - 1, N, N + 1, 2 * N + 1, SIZE_MAX };
+
+    for (size_t begin : pts)
+    {
+        for (size_t end : pts)
+        {
+            size_t n = 0;
+
+            ppb::detail::dispatch<N>(begin, end,
+                [&]<size_t I>(std::integral_constant<size_t, I>)
+                {
+                    static_assert(I < N, "dispatch invoked an out-of-bounds index");
+                    CHECK(I == begin + n);
+                    n++;
+                    return true;
+                });
+
+            size_t hi = end < N ? end : N;
+            CHECK(n == (begin < hi ? hi - begin : 0));
+        }
+    }
+}
+
+static void
+test_dispatch_out_of_range_bounds()
+{
+    check_dispatch_out_of_range<2>();
+    check_dispatch_out_of_range<3>();
+    check_dispatch_out_of_range<7>();
+    check_dispatch_out_of_range<16>();
+    check_dispatch_out_of_range<17>();
+    check_dispatch_out_of_range<32>();
+    check_dispatch_out_of_range<48>();
+}
+
+// A field number appearing under a wire type other than its schema descriptor's
+// must never hand a typed handler a mismatched representation: find_tag matches
+// the exact .bits (field # AND wire type), so the C core only fills a LEN slot
+// from a LEN-wire match, and `payload` is a separate struct member (never
+// overlaid on the scalar bytes).
+//
+// Parse field 2 as every wire type and assert the LEN handler only
+// ever sees an input-bounded payload, and the varint slot's payload
+// stays the zero-initialised {nullptr, 0}.
+static void
+test_wire_type_mismatch_payload_bounded()
+{
+    using WS = ppb::schema<ppb::varint<1>, ppb::utf8string<2>, ppb::i64<3>, ppb::i32<4>>;
+
+    static const uint8_t f2_varint[] = { 0x10, 0xFF, 0xFF, 0x01 };  // 2:VARINT, not a match
+    static const uint8_t f2_i64[] = { 0x11, 1, 2, 3, 4, 5, 6, 7, 8 };  // 2:I64, not a match
+    static const uint8_t f2_i32[] = { 0x15, 0xDE, 0xAD, 0xBE, 0xEF };  // 2:I32, not a match
+    static const uint8_t f2_len[] = { 0x12, 0x03, 'h', 'i', '!' };  // 2:LEN, matches
+    static const uint8_t f1_len[] = { 0x0A, 0x04, 'a', 'b', 'c', 'd' };  // 1:LEN, not a match
+    static const uint8_t mixed[] = { 0x08, 0x96, 0x01, 0x12, 0x02, 'x', 'y' };  // 1:VARINT + 2:LEN
+
+    struct Msg
+    {
+        const uint8_t *p;
+        size_t n;
+    };
+
+    const Msg msgs[] = {
+        { f2_varint, sizeof(f2_varint) },
+        { f2_i64, sizeof(f2_i64) },
+        { f2_i32, sizeof(f2_i32) },
+        { f2_len, sizeof(f2_len) },
+        { f1_len, sizeof(f1_len) },
+        { mixed, sizeof(mixed) },
+    };
+
+    int len_calls = 0;
+
+    for (const Msg &m : msgs)
+    {
+        for (size_t cut = 0; cut <= m.n; cut++)
+        {
+            const char *lo = reinterpret_cast<const char *>(m.p);
+            const char *hi = lo + cut;
+
+            ppb::reader<WS> r(m.p, cut);
+            (void)r.parse(ppb::on<2>(
+                              [&](std::string_view sv) -> ppb_error
+                              {
+                                  len_calls++;
+                                  CHECK(sv.empty() ||
+                                      (sv.data() >= lo && sv.data() <= hi &&
+                                          size_t(hi - sv.data()) >= sv.size()));
+                                  return PPB_OK;
+                              }),
+                ppb::on<1>(
+                    [&](const ppb_field &f) -> ppb_error
+                    {
+                        /* scalar slot: payload is a separate, zero-init member. */
+                        CHECK(f.v.payload.buf == nullptr);
+                        return PPB_OK;
+                    }));
+        }
+    }
+
+    CHECK(len_calls > 0);  // the valid-LEN inputs did reach the handler
+}
+
 // lexn sticky error: calling lexn after error is already set short-circuits.
 static void
 test_lexn_sticky_error()
@@ -4632,6 +4880,9 @@ main()
     test_dispatch_limit_0();
     test_dispatch_limit_1();
     test_dispatch_high_indices();
+    test_dispatch_wide_mixed_wire_boundary();
+    test_dispatch_out_of_range_bounds();
+    test_wire_type_mismatch_payload_bounded();
     test_lexn_sticky_error();
     test_prescan_sticky_error();
     test_parse_init_error_branch();
