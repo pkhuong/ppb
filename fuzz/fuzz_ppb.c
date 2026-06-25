@@ -12,6 +12,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <stdlib.h>
 #include <string.h>
 
 #define POSTCOND(cond)        \
@@ -608,36 +609,61 @@ fuzz_invalid_tags(const uint8_t *data, size_t size)
     if (size < header)
         return;
 
-    struct ppb_encoded_tag tags[MAX_FIELDS];
-    memcpy(tags, data + 1, num_tags * sizeof(tags[0]));
+    /* Heap-allocate tags[] and fields[] at exactly num_tags elements for ASan. */
+    struct ppb_encoded_tag *tags = num_tags ? malloc(num_tags * sizeof(*tags)) : NULL;
+    struct ppb_field *fields = num_tags ? malloc(num_tags * sizeof(*fields)) : NULL;
+
+    if (num_tags && (tags == NULL || fields == NULL))
+    {
+        free(tags);
+        free(fields);
+        return;
+    }
+
+    if (num_tags)
+    {
+        memcpy(tags, data + 1, num_tags * sizeof(*tags));
+    }
 
     const uint8_t *msg = data + header;
     size_t msg_size = size - header;
-
-    struct ppb_field fields[MAX_FIELDS];
     struct ppb_buf buf;
 
+    /* Deliberately ignore the result: an invalid tags[] must stay UB-free. */
     ppb_validate_tags(num_tags, tags);
 
-    memset(fields, 0, num_tags * sizeof(fields[0]));
+    if (num_tags)
+    {
+        memset(fields, 0, num_tags * sizeof(*fields));
+    }
+
     buf = (struct ppb_buf) { msg, msg_size };
     ptrdiff_t pr = ppb_prescan(buf, num_tags, tags, fields, SIZE_MAX);
     if (pr >= 0)
         POSTCOND((size_t)pr <= msg_size);
 
-    memset(fields, 0, num_tags * sizeof(fields[0]));
+    if (num_tags)
+    {
+        memset(fields, 0, num_tags * sizeof(*fields));
+    }
+
     buf = (struct ppb_buf) { msg, msg_size };
     while (buf.size > 0)
     {
         size_t initial_size = buf.size;
         struct ppb_lexn_ret ret = ppb_lexn(&buf, num_tags, tags, fields, SIZE_MAX);
+
         check_buf_valid(buf, msg, msg_size);
+        POSTCOND(ret.first_field + ret.field_range <= num_tags);
         if (ret.status != PPB_OK)
             break;
 
-        // must make progress
+        /* must make progress */
         POSTCOND(buf.size < initial_size);
     }
+
+    free(fields);
+    free(tags);
 }
 
 static void
