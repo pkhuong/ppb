@@ -2224,6 +2224,100 @@ test_typed_packed_f64()
     CHECK(got[1] == -1.0);
 }
 
+/* Reads a little-endian UInt from p. */
+template <typename UInt>
+static UInt
+le_assemble(const uint8_t *p)
+{
+    UInt v = 0;
+    for (size_t i = 0; i < sizeof(UInt); i++)
+    {
+        v |= static_cast<UInt>(static_cast<UInt>(p[i]) << (8 * i));
+    }
+
+    return v;
+}
+
+/*
+ * Runs the production `extract_value` over every start alignment and
+ * multiple lengths with exact-sized heap payloads, so a
+ * partial-element tail over-read trips an ASan red-zone.  The
+ * per-element value checks add useful coverage on big-endian
+ * platforms.
+ */
+template <typename Field, typename T, typename UInt>
+static void
+sweep_packed_fixed()
+{
+    static_assert(sizeof(T) == sizeof(UInt));
+    constexpr size_t elt = sizeof(T);
+
+    for (size_t pad = 0; pad < 16; pad++)
+    {
+        for (size_t len = 0; len <= 3 * elt + 1; len++)
+        {
+            /*
+             * The payload occupies the last `len` bytes of an
+             * exact-sized allocation, so its end coincides with the
+             * allocation end and any tail over-read hits a red-zone;
+             * the `pad` head bytes vary the start alignment.
+             */
+            const size_t total = pad + len;
+            uint8_t *base = new uint8_t[total == 0 ? 1 : total];
+            uint8_t *payload = base + pad;
+            for (size_t i = 0; i < len; i++)
+            {
+                payload[i] = static_cast<uint8_t>(0x80u + i * 7u + pad);
+            }
+
+            ppb_field field {};
+            field.v.payload.buf = payload;
+            field.v.payload.size = len;
+
+            ppb_error err = PPB_OK;
+            std::span<const ppb::le_packed<T>> view = Field::extract_value(field, &err);
+
+            if (len % elt != 0)
+            {
+                /* Partial trailing element: empty span, error, no tail read. */
+                CHECK(view.size() == 0);
+                CHECK(err == PPB_ERROR_TRUNCATED_DATA);
+            }
+            else
+            {
+                CHECK(err == PPB_OK);
+                CHECK(view.size() == len / elt);
+
+                size_t idx = 0;
+                for (const ppb::le_packed<T> &e : view)
+                {
+                    T got = static_cast<T>(e); /* le_packed<T>::value(): the code under test */
+                    UInt got_bits;
+                    std::memcpy(&got_bits, &got, sizeof(UInt));
+
+                    CHECK(got_bits == le_assemble<UInt>(payload + idx * elt));
+                    idx++;
+                }
+
+                CHECK(idx == len / elt);
+            }
+
+            delete[] base;
+        }
+    }
+}
+
+static void
+test_packed_fixed_alignment_length_sweep()
+{
+    sweep_packed_fixed<ppb::packed_fixed32<1>, uint32_t, uint32_t>();
+    sweep_packed_fixed<ppb::packed_sfixed32<1>, int32_t, uint32_t>();
+    sweep_packed_fixed<ppb::packed_f32<1>, float, uint32_t>();
+    sweep_packed_fixed<ppb::packed_fixed64<1>, uint64_t, uint64_t>();
+    sweep_packed_fixed<ppb::packed_sfixed64<1>, int64_t, uint64_t>();
+    sweep_packed_fixed<ppb::packed_f64<1>, double, uint64_t>();
+}
+
 /*
  * Drive every scalar `extract_value` over adversarial 64-bit payloads
  * (all-ones, the sign bit alone, and float/double NaN/inf bit
@@ -4411,6 +4505,7 @@ main()
     test_typed_packed_fixed_fields();
     test_typed_packed_sfixed32();
     test_typed_packed_f64();
+    test_packed_fixed_alignment_length_sweep();
     test_scalar_value_punning_sweep();
     test_typed_packed_varint_fields();
     // Empty packed payloads.
