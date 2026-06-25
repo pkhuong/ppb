@@ -3021,6 +3021,81 @@ test_reuse_reader_without_reset_fields()
     CHECK(r.unknown_field().has_value());
 }
 
+/*
+ * Reusing a reader on a second, shorter message must not redispatch a
+ * field only the first message carried.  reset_fields() zeroes every
+ * per-field slot (v.ptr/v.payload included), but reuse without it
+ * leaves those stale; the handler still must not fire for a field the
+ * second message omits.
+ */
+static void
+test_reader_reuse_stale_payload_exact()
+{
+    /*
+     * msg1: field 1 varint 1, field 2 LEN "stale" (two fields).
+     * msg2: field 1 varint 2 (one field in a second, shorter, message).
+     */
+    static const uint8_t bytes[] = {
+        0x08, 0x01, /* msg1 field 1 varint 1 */
+        0x12, 0x05, 0x73, 0x74, 0x61, 0x6c, 0x65, /* msg1 field 2 LEN "stale" */
+        0x08, 0x02, /* msg2 field 1 varint 2 */
+    };
+
+    auto run = [](bool reset_between)
+    {
+        const size_t n = sizeof(bytes);
+        auto *msg = new uint8_t[n];
+        std::memcpy(msg, bytes, n);
+
+        int field1_value = -1;
+        int field1_calls = 0;
+        int field2_calls = 0;
+        std::string field2_payload;
+
+        auto h1 = [&](const ppb_field &f) -> ppb_error
+        {
+            field1_calls++;
+            field1_value = static_cast<int>(f.v.u64);
+            return PPB_OK;
+        };
+        auto h2 = [&](const ppb_field &f) -> ppb_error
+        {
+            field2_calls++;
+            field2_payload.assign(static_cast<const char *>(f.v.payload.buf), f.v.payload.size);
+            return PPB_OK;
+        };
+        auto init = [](const ppb::reader<LexnSchema> &) -> ppb_error { return PPB_OK; };
+
+        ppb::reader<LexnSchema> r(msg, n);
+
+        /* First parse consumes msg1's two fields and records the payload. */
+        CHECK(r.parse(init, ppb::limit::max_fields(2), ppb::on<1>(h1), ppb::on<2>(h2)) == PPB_OK);
+        CHECK(field1_calls == 1);
+        CHECK(field1_value == 1);
+        CHECK(field2_calls == 1);
+        CHECK(field2_payload == "stale");
+
+        if (reset_between)
+        {
+            r.reset_fields();
+        }
+
+        // Second parse over msg 2.  That one doesn't have field 2, so
+        // the handler h2 should never fire, even without `reset_fields()`.
+        CHECK(r.parse(init, ppb::on<1>(h1), ppb::on<2>(h2)) == PPB_OK);
+        CHECK(field1_calls == 2);
+        CHECK(field1_value == 2);
+        CHECK(field2_calls == 1); /* stale field 2 not redispatched */
+        CHECK(r.error() == PPB_OK);
+        CHECK(r.empty());
+
+        delete[] msg;
+    };
+
+    run(/*reset_between=*/false);
+    run(/*reset_between=*/true);
+}
+
 // parse() on empty input (prescan reads 0 bytes): a valid empty message
 // still runs `init`, but no field handlers fire.
 static void
@@ -4869,6 +4944,7 @@ main()
     test_parse_corrupt_underlying_in_init();
     test_dispatch_when_ok_and_when_error();
     test_reuse_reader_without_reset_fields();
+    test_reader_reuse_stale_payload_exact();
     test_parse_empty_prescan();
     test_parse_empty_init_error();
     test_parse_empty_no_init();
