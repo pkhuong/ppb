@@ -20,7 +20,7 @@ SHARED_OBJS := $(SHARED_C_OBJS)
 
 PROTOSCOPE ?= protoscope
 
-.PHONY: all clean format unit unit_cpp test regen_test fuzz fuzz-corpus compile_fail analyze-clang analyze-gcc tysan fuzz_cpp fuzz_cpp_msan fuzz_cpp_tysan FORCE
+.PHONY: all clean format unit unit_cpp test regen_test fuzz fuzz-corpus compile_fail analyze-clang analyze-gcc tysan fuzz_cpp fuzz_cpp_msan fuzz_cpp_tysan sweep sweep_cpp sweep-seeds FORCE
 
 all: build/libppb.a build/libppb.so build/picoscope build/ubench
 
@@ -128,6 +128,22 @@ build/fuzz_ppb_cpp: fuzz/fuzz_ppb_cpp.cc build/fuzz/ppb_asan.o $(CPP_HEADERS)
 
 fuzz_cpp: build/fuzz_ppb_cpp fuzz-corpus
 	build/fuzz_ppb_cpp -max_total_time=$(FUZZ_TIME) -max_len=$(FUZZ_MAX_LEN) $(FUZZ_FLAGS) fuzz/corpus
+
+# Feed a deterministic enumeration of mutated inputs to preexisting fuzzers.
+FUZZ_CXXFLAGS_NOLINK := $(CXXFLAGS) -g -fsanitize=fuzzer-no-link,address,undefined
+
+sweep-seeds: fuzz/gen_corpus.py
+	@mkdir -p build/sweep_seeds
+	python3 fuzz/gen_corpus.py build/sweep_seeds
+
+build/sweep_ppb_cpp: fuzz/sweep_main.cc fuzz/fuzz_ppb_cpp.cc build/fuzz/ppb_asan.o $(CPP_HEADERS)
+	@mkdir -p $(dir $@)
+	$(FUZZ_CXX) $(FUZZ_CXXFLAGS_NOLINK) -o $@ fuzz/sweep_main.cc fuzz/fuzz_ppb_cpp.cc build/fuzz/ppb_asan.o
+
+sweep_cpp: build/sweep_ppb_cpp sweep-seeds
+	build/sweep_ppb_cpp build/sweep_seeds/*
+
+sweep: sweep_cpp
 
 # MemorySanitizer fuzzing build.  MSan needs the C core instrumented,
 # like ASan.
