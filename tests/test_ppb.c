@@ -1547,9 +1547,11 @@ test_lexn_out_of_order(void)
 }
 
 /*
- * Unknown field 99 (no catch-all) is silently consumed into dummy;
- * prev_tag_id is NOT updated, so field 3 is still monotonic.
- * One call returns both field 1 and field 3.
+ * Unknown fields (no catch-all) are silently consumed into dummy;
+ * prev_tag_id is NOT updated, so field 3 is still monotonic.  One call returns
+ * both field 1 and field 3.  Covers an unknown with a single-byte tag and field
+ * number inside the schema's range (field 2) as well as one with a multi-byte
+ * tag above it (field 99).
  */
 static void
 test_lexn_unknown_field_skipped(void)
@@ -1558,33 +1560,8 @@ test_lexn_unknown_field_skipped(void)
 
     static const uint8_t wire[] = {
         0x08, 0x01,        /* field 1 varint 1 */
-        0x98, 0x06, 0x02,  /* field 99 varint 2 (unknown) */
-        0x18, 0x03,        /* field 3 varint 3 */
-    };
-
-    struct ppb_encoded_tag tags[2] = { PPB_TAG(1, PPB_WIRE_VARINT), PPB_TAG(3, PPB_WIRE_VARINT) };
-    struct ppb_field fields[2];
-    zero_fields(2, fields);
-
-    struct ppb_buf buf = make_buf(wire, sizeof(wire));
-    struct ppb_lexn_ret ret = ppb_lexn(&buf, 2, tags, fields, 4);
-
-    CHECK(ret.status == PPB_OK);
-    CHECK(ret.first_field == 0);
-    CHECK(ret.field_range == 2);
-    CHECK(fields[0].v.u64 == 1);
-    CHECK(fields[1].v.u64 == 3);
-    CHECK(buf.size == 0);
-}
-
-static void
-test_lexn_unknown_field_in_order_skipped(void)
-{
-    printf("test_lexn_unknown_field_in_order_skipped\n");
-
-    static const uint8_t wire[] = {
-        0x08, 0x01,        /* field 1 varint 1 */
-        0x10, 0x02,        /* field 2 varint 2 (unknown) */
+        0x10, 0x02,        /* field 2 varint 2 (unknown, single-byte tag, in range) */
+        0x98, 0x06, 0x02,  /* field 99 varint 2 (unknown, multi-byte tag, above range) */
         0x18, 0x03,        /* field 3 varint 3 */
     };
 
@@ -3186,7 +3163,6 @@ main(void)
     test_lexn_catchall_fields_in_order();
     test_lexn_out_of_order();
     test_lexn_unknown_field_skipped();
-    test_lexn_unknown_field_in_order_skipped();
     test_lexn_unknown_field_in_order_skipped_at_end();
     test_lexn_two_sorted_runs();
     test_lexn_catchall_always_stops();
