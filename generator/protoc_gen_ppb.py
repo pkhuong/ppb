@@ -41,6 +41,23 @@ _WKT_TYPE_PREFIX = ".google.protobuf."
 
 _T = descriptor_pb2.FieldDescriptorProto
 
+# proto field type -> ppb base descriptor name (packable numeric scalars + enum).
+_SCALAR_BASE = {
+    _T.TYPE_INT32: "int32",
+    _T.TYPE_INT64: "int64",
+    _T.TYPE_UINT32: "uint32",
+    _T.TYPE_UINT64: "uint64",
+    _T.TYPE_SINT32: "sint32",
+    _T.TYPE_SINT64: "sint64",
+    _T.TYPE_BOOL: "boolean",
+    _T.TYPE_FIXED32: "fixed32",
+    _T.TYPE_SFIXED32: "sfixed32",
+    _T.TYPE_FLOAT: "f32",
+    _T.TYPE_FIXED64: "fixed64",
+    _T.TYPE_SFIXED64: "sfixed64",
+    _T.TYPE_DOUBLE: "f64",
+}
+
 # C++ keywords (and a few context-sensitive identifiers) that can't be used
 # verbatim as identifiers in generated code. Matches protobuf's cpp kKeywords
 # approach: a colliding identifier gets a single trailing underscore.
@@ -146,6 +163,91 @@ _CPP_KEYWORDS = frozenset(
 def cpp_ident(name):
     """Return a proto identifier as a valid C++ identifier (keyword -> name + '_')."""
     return name + "_" if name in _CPP_KEYWORDS else name
+
+
+def _is_proto3_zero_default(field, syntax):
+    """Determine whether a field is a proto3 scalar with zero-defaults.
+
+    Real oneof members need explicit presence (the oneof itself), so
+    zero-default dispatch must NOT fire for them: dispatching an absent member
+    would overwrite the oneof case that was set on the wire.
+    """
+    return syntax == "proto3" and not field.proto3_optional and not field.HasField("oneof_index")
+
+
+_ALWAYS_LEXN = "::ppb::field_semantics::always_lexn"
+_ERROR = "::ppb::field_semantics::error"
+
+
+def _is_real_oneof_member(field):
+    """Member of a user-declared oneof (not a proto3 `optional` synthetic oneof).
+
+    Only reachable under --ppb_opt=oneof_as_optional (real oneofs are otherwise
+    rejected during model-building).  Such members are emitted with always_lexn
+    semantics so that a present member forces a wire-order lexn pass.
+    """
+    return field.HasField("oneof_index") and not field.proto3_optional
+
+
+def _singular_scalar(field, syntax, key, merge=False):
+    base = _SCALAR_BASE[field.type]
+    if _is_real_oneof_member(field):
+        return [f"::ppb::{base}<{key}, {_ALWAYS_LEXN}>"]
+
+    # In merge mode, treat the field as last_write_wins (no proto3_ prefix) so
+    # absent scalars are NOT dispatched and do not clobber values written by a
+    # previous wire occurrence.
+    use_proto3 = _is_proto3_zero_default(field, syntax) and not merge
+    name = "proto3_" + base if use_proto3 else base
+    return [f"::ppb::{name}<{key}>"]
+
+
+def _singular_enum(field, syntax, key, symbols, merge=False):
+    enum_cpp = symbols.enum_cpp_name(field.type_name)
+    if _is_real_oneof_member(field):
+        return [f"::ppb::enumerated<{key}, {enum_cpp}, {_ALWAYS_LEXN}>"]
+
+    use_proto3 = _is_proto3_zero_default(field, syntax) and not merge
+    name = "proto3_enumerated" if use_proto3 else "enumerated"
+    return [f"::ppb::{name}<{key}, {enum_cpp}>"]
+
+
+def map_field(
+    field,
+    *,
+    syntax,
+    strict_repeated_encoding,
+    f_name,
+    symbols,
+    opaque=False,
+    merge=False,
+    detect_unknown=False,
+):
+    """Return the list of ppb descriptor strings for one proto field.
+
+    `syntax` is "proto2" or "proto3"; `strict_repeated_encoding` controls
+    whether unexpected repeated wire encodings fail closed (True) or force
+    a wire-order lexn pass (False); `f_name` is the resolved field-key enum
+    name; `symbols` resolves message/enum type names to fully-qualified C++
+    names.  When `opaque` is True and the field is TYPE_MESSAGE, the field
+    is rendered as a raw byte span (ppb::bytes / ppb::unpacked_bytes)
+    instead of a typed message descriptor; used for back-edges under
+    --ppb_opt=opaque_cycles.  When `merge` is True (used for generating
+    merge_schema), proto3 implicit-presence scalars use the non-proto3_
+    (last_write_wins) variant so absent scalars are NOT dispatched.
+    """
+    key = f"{f_name}::{cpp_ident(field.name)}"
+    repeated = field.label == _T.LABEL_REPEATED
+
+    if not repeated and field.type == _T.TYPE_ENUM:
+        return _singular_enum(field, syntax, key, symbols, merge=merge)
+
+    if not repeated and field.type in _SCALAR_BASE:
+        return _singular_scalar(field, syntax, key, merge=merge)
+
+    # Unreachable for valid input: groups and extensions are rejected during
+    # model-building, and every other proto type/label is handled above.
+    raise NotImplementedError(f"field {field.name!r} type/label not handled yet")
 
 
 def resolve_identifier(name, *, taken):
