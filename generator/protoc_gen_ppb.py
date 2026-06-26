@@ -890,3 +890,64 @@ def emit_message(
     out.append("}")
     out.append("")
     return "\n".join(out)
+
+
+@dataclasses.dataclass(frozen=True)
+class Options:
+    strict_repeated_encoding: bool
+    detect_unknown: bool
+    opaque_cycles: bool
+    oneof_as_optional: bool
+    drop_foreign_type_fields: bool
+    drop_group_extension_fields: bool
+
+
+def parse_options(parameter):
+    strict_repeated_encoding = True  # default lean
+    detect_unknown = False
+    opaque_cycles = False
+    oneof_as_optional = False
+    drop_foreign_type_fields = False
+    drop_group_extension_fields = False
+    for raw in parameter.split(","):
+        opt = raw.strip()
+        if not opt:
+            continue
+
+        if opt.startswith("mode="):
+            value = opt[len("mode=") :]
+            if value not in ("none", "lean", "full"):
+                raise GenError(f"unknown mode {value!r}")
+
+            if value == "lean":
+                strict_repeated_encoding = True
+                detect_unknown = False
+            elif value == "none":
+                strict_repeated_encoding = False
+                detect_unknown = False
+            elif value == "full":
+                strict_repeated_encoding = False
+                detect_unknown = True
+        elif opt == "detect_unknown":
+            detect_unknown = True
+        elif opt == "opaque_cycles":
+            opaque_cycles = True
+        elif opt == "oneof_as_optional":
+            oneof_as_optional = True
+        elif opt == "drop_foreign_type_fields":
+            drop_foreign_type_fields = True
+        elif opt == "drop_group_extension_fields":
+            drop_group_extension_fields = True
+        elif opt == "strict_repeated_encoding":
+            strict_repeated_encoding = True
+        else:
+            raise GenError(f"unknown option {opt!r}")
+
+    return Options(
+        strict_repeated_encoding=strict_repeated_encoding,
+        detect_unknown=detect_unknown,
+        opaque_cycles=opaque_cycles,
+        oneof_as_optional=oneof_as_optional,
+        drop_foreign_type_fields=drop_foreign_type_fields,
+        drop_group_extension_fields=drop_group_extension_fields,
+    )
