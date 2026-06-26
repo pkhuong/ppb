@@ -749,3 +749,144 @@ def compute_depths(model, *, opaque_fields):
         return best
 
     return {m.full_name: depth(m.full_name) for m in model.messages}
+
+
+def emit_enum(enum):
+    short_name = cpp_ident(enum.full_name.rsplit(".", 1)[1])
+    lines = [f"    enum class {short_name} : ::std::int32_t", "    {"]
+    for v in enum.values:
+        lines.append(f"        {cpp_ident(v.name)} = {v.number},")
+
+    lines.append("    };")
+    return "\n".join(lines)
+
+
+def emit_file_enum(enum):
+    """Emit a file-scope (top-level) enum wrapped in its package namespace."""
+    parent = enum.full_name.rsplit(".", 1)[0]  # ".demo.Color" -> ".demo"
+    namespace = _cpp_ns(parent)
+    body = emit_enum(enum)
+    return f"namespace {namespace}\n{{\n{body}\n}}\n"
+
+
+def emit_nested_enums(message):
+    """Emit a message's nested enum definitions in its own namespace block.
+
+    A nested enum depends on nothing, so these are emitted ahead of every schema
+    alias (see emit_file); that lets any message name another message's nested
+    enum regardless of where the two schemas land in emission order.  Returns ""
+    for a message with no nested enums.
+    """
+    if not message.enums:
+        return ""
+
+    body = "\n\n".join(emit_enum(e) for e in message.enums)
+    return f"namespace {message.namespace}\n{{\n{body}\n}}\n"
+
+
+def emit_message(
+    model,
+    message,
+    *,
+    strict_repeated_encoding,
+    detect_unknown,
+    opaque_fields,
+    depths=None,
+):
+    """Emit the C++ namespace block for one message.
+
+    Emits: field-key enum F (IDL order), max_depth constant, and the
+    auto_schema alias.  Nested enum *definitions* are emitted separately and
+    earlier by emit_nested_enums.
+    """
+    if depths is None:
+        depths = compute_depths(model, opaque_fields=opaque_fields)
+
+    ids = message.identifiers
+    out = []
+    out.append(f"namespace {message.namespace}")
+    out.append("{")
+
+    # Field-key enum (IDL order); auto_schema re-sorts internally.
+    out.append(f"    enum class {ids.f} : ::std::int32_t")
+    out.append("    {")
+    for f in message.fields:
+        out.append(f"        {cpp_ident(f.name)} = {f.number},")
+
+    out.append("    };")
+    out.append("")
+
+    out.append(f"    constexpr ::std::size_t {ids.max_depth} = {depths[message.full_name]};")
+    out.append("")
+
+    # Descriptor list (IDL order); auto_schema re-sorts.  Each field is
+    # prefixed with a hint comment naming its handler factory.
+    items = []
+    for f in message.fields:
+        opaque = (message.full_name, f.name) in opaque_fields
+        field_descs = map_field(
+            f,
+            syntax=message.syntax,
+            strict_repeated_encoding=strict_repeated_encoding,
+            f_name=ids.f,
+            symbols=model.symbols,
+            opaque=opaque,
+            detect_unknown=detect_unknown,
+        )
+        items.append(field_descs[0])
+        items.extend(field_descs[1:])
+
+    if detect_unknown or not message.fields:
+        items.append("// ppb::on_unknown<>(...)\n        ::ppb::detect_unknown_fields<>")
+
+    if not message.fields:
+        full_name = message.full_name.lstrip(".")
+        short_name = full_name.rsplit(".", 1)[-1]
+        out.append(f"""\
+    /*
+     * {full_name} declares no fields, so this schema registers only the
+     * unknown-field catch-all; a ppb::schema must hold at least one descriptor.
+     *
+     * If you only need to know whether {short_name} was present, do not pay to
+     * handle unknown fields here.  In the CONTAINING message, register
+     * ppb::on<F::that_field>(...) to receive this submessage's raw span: that is
+     * presence/absence detection without descending into it.  Handle unknown
+     * fields here only when you must inspect the (otherwise unknown) contents.
+     */""")
+
+    joined = ",\n        ".join(items)
+    out.append(f"    using {ids.schema} = ::ppb::auto_schema<\n        {joined}>;")
+
+    # merge_schema uses non-proto3_ (last_write_wins) variants for the
+    # message's scalars, and references inner merge_schema for nested
+    # message fields, so absent fields aren't dispatched when merging
+    # into an already-populated child.
+    merge_items = []
+    for f in message.fields:
+        opaque = (message.full_name, f.name) in opaque_fields
+        merge_descs = map_field(
+            f,
+            syntax=message.syntax,
+            strict_repeated_encoding=strict_repeated_encoding,
+            f_name=ids.f,
+            symbols=model.symbols,
+            opaque=opaque,
+            merge=True,
+            detect_unknown=detect_unknown,
+        )
+        merge_items.append(merge_descs[0])
+        merge_items.extend(merge_descs[1:])
+
+    if detect_unknown or not message.fields:
+        merge_items.append("// ppb::on_unknown<>(...)\n        ::ppb::detect_unknown_fields<>")
+
+    out.append("")
+    if merge_items == items:
+        out.append(f"    using {ids.merge_schema} = {ids.schema};")
+    else:
+        merge_joined = ",\n        ".join(merge_items)
+        out.append(f"    using {ids.merge_schema} = ::ppb::auto_schema<\n        {merge_joined}>;")
+
+    out.append("}")
+    out.append("")
+    return "\n".join(out)
