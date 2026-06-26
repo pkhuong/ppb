@@ -1,0 +1,38 @@
+[project]
+name = "protoc-gen-ppb"
+version = "0.1.0"
+description = "protoc plugin emitting ppb::schema headers"
+requires-python = ">=3.9"
+dependencies = ["protobuf>=4"]
+
+[project.scripts]
+protoc-gen-ppb = "protoc_gen_ppb:main"
+
+[dependency-groups]
+dev = ["pytest>=8", "ruff>=0.6", "pyrefly>=0.16"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+extend-select = [
+    "D200",   # One-line docstring should fit on one line
+    "D205",   # Blank line between summary and description
+    "D209",   # Multi-line closing quotes on separate line
+    "D400",   # First line should end with a period
+    "D401",   # First line should be in imperative mood
+]
+
+[tool.pyrefly]
+project-includes = ["protoc_gen_ppb.py", "tests"]
+
+[tool.setuptools]
+py-modules = ["protoc_gen_ppb"]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
