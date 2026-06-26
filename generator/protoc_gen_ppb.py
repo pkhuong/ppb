@@ -6,6 +6,7 @@
 """protoc-gen-ppb: emit ppb::schema headers from a .proto descriptor closure."""
 
 import dataclasses
+import heapq
 import os
 import sys
 
@@ -637,3 +638,114 @@ def build_model(
                 )
 
     return Model(messages=tuple(messages), symbols=symbols, file_enums=tuple(file_enums))
+
+
+def _message_field_targets(message):
+    """Yield (field_name, target_full_name) for each message-typed field."""
+    for f in message.fields:
+        if f.type == _T.TYPE_MESSAGE:
+            yield f.name, f.type_name
+
+
+def find_back_edges(model):
+    """Edges (message_full_name, field_name) that close a cycle.
+
+    DFS in declaration order; an edge to a grey (on-stack) node is a
+    back-edge. Forward/cross edges to finished nodes are excluded.
+    """
+    by_decl = sorted(model.messages, key=lambda m: m.decl_index)
+    color = {}  # full_name -> "grey" | "black"
+    back = set()
+
+    def visit(name):
+        color[name] = "grey"
+        msg = model.message(name)
+        for field_name, target in _message_field_targets(msg):
+            if target not in color:
+                visit(target)
+            elif color[target] == "grey":
+                back.add((name, field_name))
+
+        color[name] = "black"
+
+    for m in by_decl:
+        if m.full_name not in color:
+            visit(m.full_name)
+
+    return frozenset(back)
+
+
+def emission_order(model, *, opaque_recursion, back=None):
+    """Topological order of the message-reference DAG, closest to IDL order.
+
+    Among all valid topological orders we want the one that tracks proto
+    declaration order wherever the dependency graph allows it -- i.e. the
+    *lexicographically smallest* topological order keyed on declaration index.
+
+    Cycles are rejected unless `opaque_recursion` cuts their back-edges first.
+    `back` may be supplied by a caller that already ran the DFS (plan_emission)
+    to avoid a second pass; it is computed here when omitted.
+    """
+    if back is None:
+        back = find_back_edges(model)
+
+    cut = back
+    if cut and not opaque_recursion:
+        m, f = sorted(cut)[0]
+        raise GenError(
+            f"{m.lstrip('.')}.{f} forms a cycle; recursive schemas are unsupported. "
+            f"Use --ppb_opt=opaque_cycles to emit it as an opaque byte span."
+        )
+
+    decl = {m.full_name: m.decl_index for m in model.messages}
+
+    # An edge u -> target ("u depends on target") means target must precede u.
+    # Only message-typed fields create edges: a nested enum depends on nothing
+    # and is emitted ahead of every schema alias (see emit_file).
+    pending = {m.full_name: 0 for m in model.messages}
+    dependents = {m.full_name: [] for m in model.messages}
+    for m in model.messages:
+        for field_name, target in _message_field_targets(m):
+            if (m.full_name, field_name) in cut:
+                continue
+
+            pending[m.full_name] += 1
+            dependents[target].append(m.full_name)
+
+    heap = [(decl[n], n) for n, count in pending.items() if count == 0]
+    heapq.heapify(heap)
+    order = []
+    while heap:
+        _, n = heapq.heappop(heap)
+        order.append(n)
+        for dependent in dependents[n]:
+            pending[dependent] -= 1
+            if pending[dependent] == 0:
+                heapq.heappush(heap, (decl[dependent], dependent))
+
+    if len(order) != len(model.messages):
+        raise GenError("internal: residual cycle after cut")
+
+    return tuple(model.message(n) for n in order)
+
+
+def compute_depths(model, *, opaque_fields):
+    """max_depth per message over the cut graph (opaque fields don't recurse)."""
+    memo = {}
+
+    def depth(name):
+        if name in memo:
+            return memo[name]
+
+        memo[name] = 0  # break any residual self-reference safely
+        best = 0
+        for field_name, target in _message_field_targets(model.message(name)):
+            if (name, field_name) in opaque_fields:
+                continue
+
+            best = max(best, 1 + depth(target))
+
+        memo[name] = best
+        return best
+
+    return {m.full_name: depth(m.full_name) for m in model.messages}
