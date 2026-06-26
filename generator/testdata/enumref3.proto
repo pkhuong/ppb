@@ -1,0 +1,14 @@
+syntax = "proto3";
+package demo_enumref;
+
+// `Uses` is declared before `Defs` but references an enum nested in `Defs`.
+// The nested enum is emitted inside `Defs`'s namespace, so `Defs` must be
+// emitted first even though no message-typed field links the two.
+message Uses {
+  Defs.Color color = 1;
+}
+
+message Defs {
+  enum Color { UNSET = 0; RED = 1; }
+  int32 v = 1;
+}

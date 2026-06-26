@@ -1,0 +1,7 @@
+syntax = "proto3";
+
+package ppb;
+
+message M {
+    int32 x = 1;
+}

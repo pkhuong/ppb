@@ -5,10 +5,12 @@
 # ///
 """protoc-gen-ppb: emit ppb::schema headers from a .proto descriptor closure."""
 
+import argparse
 import dataclasses
 import heapq
 import os
 import sys
+import types
 
 # Force the pure python (instead of upb) protobuf runtime to enable parsing
 # heavily nested schemas: upb craps out on schemas that protoc will happily
@@ -17,6 +19,7 @@ import sys
 os.environ["PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION"] = "python"
 
 from google.protobuf import descriptor_pb2
+from google.protobuf.compiler import plugin_pb2
 from google.protobuf.internal import decoder as _pb_decoder
 
 # Request decode, build_model, emission_order, and compute_depths all
@@ -28,6 +31,8 @@ sys.setrecursionlimit(max(sys.getrecursionlimit(), 10_000))
 # pyrefly: ignore[missing-attribute]  # absent from the stubs, present at runtime
 if hasattr(_pb_decoder, "SetRecursionLimit"):
     _pb_decoder.SetRecursionLimit(2_000)
+
+PLUGIN_NAME = "protoc-gen-ppb"
 
 # Every generated message/enum namespace nests under this dedicated toplevel
 # namespace.  A proto `package pkg` with message `Msg` becomes
@@ -892,6 +897,113 @@ def emit_message(
     return "\n".join(out)
 
 
+def _header_name(proto_file_name):
+    # "sub/a.proto" -> "sub/a.ppb.hpp"
+    if not proto_file_name.endswith(".proto"):
+        raise GenError(f"expected a .proto file name, got {proto_file_name!r}")
+
+    return proto_file_name.removesuffix(".proto") + ".ppb.hpp"
+
+
+@dataclasses.dataclass(frozen=True)
+class EmissionPlan:
+    """Whole-closure emission data shared by every file in a request.
+
+    `order`, `opaque_fields`, and `depths` depend only on the model (derived from
+    the descriptors) and the opaque_recursion flag, so they are identical for every
+    generated file.  generate() computes one plan and threads it through, rather
+    than rebuilding the graph once per output header.
+    """
+
+    order: tuple  # messages in emission order
+    opaque_fields: frozenset
+    depths: types.MappingProxyType  # message full_name -> max_depth (read-only)
+
+
+def plan_emission(model, *, opaque_recursion):
+    back = find_back_edges(model)
+    opaque_fields = back if opaque_recursion else frozenset()
+    return EmissionPlan(
+        order=emission_order(model, opaque_recursion=opaque_recursion, back=back),
+        opaque_fields=opaque_fields,
+        depths=types.MappingProxyType(compute_depths(model, opaque_fields=opaque_fields)),
+    )
+
+
+def emit_file(
+    model,
+    file_proto,
+    *,
+    strict_repeated_encoding,
+    detect_unknown,
+    plan,
+):
+    own = {m.full_name for m in model.messages if m.source_file == file_proto.name}
+
+    out = ["#pragma once", "", "#include <ppb/ppb.hpp>", "", "// clang-format off"]
+    for dep in file_proto.dependency:
+        out.append(f'#include "{_header_name(dep)}"')
+
+    out.append("")
+
+    dropped = [
+        df
+        for message in model.messages
+        if message.source_file == file_proto.name
+        for df in message.dropped_fields
+    ]
+    ignored_ranges = [
+        (message.full_name, lo, hi)
+        for message in model.messages
+        if message.source_file == file_proto.name
+        for (lo, hi) in message.ignored_extension_ranges
+    ]
+    ignored_defs = [
+        full_name
+        for message in model.messages
+        if message.source_file == file_proto.name
+        for full_name in message.ignored_extension_defs
+    ]
+    if dropped or ignored_ranges or ignored_defs:
+        out.append("// Fields dropped / constructs ignored by protoc-gen-ppb")
+        out.append("// (not decoded; these fields/constructs are dropped from the schema):")
+        for df in dropped:
+            out.append(f"//   ppb-dropped: {df.full_name} ({df.reason})")
+        for owner, lo, hi in ignored_ranges:
+            out.append(f"//   ppb-extension-range-ignored: {lo}-{hi} (in {owner})")
+        for full_name in ignored_defs:
+            out.append(f"//   ppb-extension-def-ignored: {full_name}")
+        out.append("")
+
+    # File-scope enums first: messages in this file may reference them.
+    for enum in model.file_enums:
+        if enum.source_file == file_proto.name:
+            out.append(emit_file_enum(enum))
+
+    # Nested enum definitions next, all ahead of any schema alias. A nested enum
+    # depends on nothing, so emitting them up front (in declaration order) lets a
+    # message name another message's nested enum no matter where the two schemas
+    # land in emission order.
+    for message in model.messages:
+        if message.full_name in own and message.enums:
+            out.append(emit_nested_enums(message))
+
+    for message in plan.order:
+        if message.full_name in own:
+            out.append(
+                emit_message(
+                    model,
+                    message,
+                    strict_repeated_encoding=strict_repeated_encoding,
+                    detect_unknown=detect_unknown,
+                    opaque_fields=plan.opaque_fields,
+                    depths=plan.depths,
+                )
+            )
+
+    return "\n".join(out) + "\n"
+
+
 @dataclasses.dataclass(frozen=True)
 class Options:
     strict_repeated_encoding: bool
@@ -951,3 +1063,111 @@ def parse_options(parameter):
         drop_foreign_type_fields=drop_foreign_type_fields,
         drop_group_extension_fields=drop_group_extension_fields,
     )
+
+
+def generate(request):
+    response = plugin_pb2.CodeGeneratorResponse()
+    response.supported_features = plugin_pb2.CodeGeneratorResponse.FEATURE_PROTO3_OPTIONAL
+
+    try:
+        opts = parse_options(request.parameter)
+        detect = opts.detect_unknown
+        model = build_model(
+            list(request.proto_file),
+            allow_oneof=opts.oneof_as_optional,
+            skip_unsupported_fields=opts.drop_group_extension_fields,
+        )
+        plan = plan_emission(model, opaque_recursion=opts.opaque_cycles)
+        by_name = {fp.name: fp for fp in request.proto_file}
+        for name in request.file_to_generate:
+            fp = by_name[name]
+            content = emit_file(
+                model,
+                fp,
+                strict_repeated_encoding=opts.strict_repeated_encoding,
+                detect_unknown=detect,
+                plan=plan,
+            )
+            out = response.file.add()
+            out.name = _header_name(name)
+            out.content = content
+    except GenError as exc:
+        response.ClearField("file")
+        response.error = str(exc)
+    except Exception as exc:
+        # protoc would otherwise surface a bare "plugin crashed" with a Python
+        # traceback on its stderr; a structured response.error is friendlier.
+        response.ClearField("file")
+        response.error = f"internal error: {exc}"
+
+    return response
+
+
+def respond(data: bytes) -> plugin_pb2.CodeGeneratorResponse:
+    try:
+        request = plugin_pb2.CodeGeneratorRequest.FromString(data)
+    except Exception as exc:
+        # Catch-all: a structured error beats a traceback on protoc's
+        # stderr.
+        response = plugin_pb2.CodeGeneratorResponse()
+        response.error = f"cannot decode CodeGeneratorRequest: {exc}"
+        return response
+
+    return generate(request)
+
+
+def _request_from_descriptor_set(path, files_to_generate, parameter):
+    """Build a CodeGeneratorRequest from a serialized FileDescriptorSet."""
+    with open(path, "rb") as fh:
+        fds = descriptor_pb2.FileDescriptorSet.FromString(fh.read())
+
+    request = plugin_pb2.CodeGeneratorRequest()
+    request.proto_file.extend(fds.file)
+    request.file_to_generate.extend(files_to_generate)
+    request.parameter = parameter
+    return request
+
+
+def _write_response(response, out_dir):
+    """Write each response.file under out_dir (creating subdirs); 1 on error."""
+    if response.error:
+        sys.stderr.write(f"{PLUGIN_NAME}: {response.error}\n")
+        return 1
+
+    for f in response.file:
+        dest = os.path.join(out_dir, f.name)
+        os.makedirs(os.path.dirname(dest) or ".", exist_ok=True)
+        with open(dest, "w") as fh:
+            fh.write(f.content)
+
+    return 0
+
+
+def _run_standalone(argv):
+    parser = argparse.ArgumentParser(prog=PLUGIN_NAME)
+    parser.add_argument("--descriptor-set")
+    parser.add_argument("--opt", default="")
+    parser.add_argument("--out", default=".")
+    parser.add_argument("files", nargs="*")
+    args = parser.parse_args(argv)
+
+    if not args.descriptor_set:
+        parser.error("--descriptor-set is required")
+
+    request = _request_from_descriptor_set(args.descriptor_set, args.files, args.opt)
+    response = generate(request)
+    return _write_response(response, args.out)
+
+
+def main() -> int:
+    if len(sys.argv) > 1:
+        return _run_standalone(sys.argv[1:])
+
+    data = sys.stdin.buffer.read()
+    response = respond(data)
+    sys.stdout.buffer.write(response.SerializeToString())
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
