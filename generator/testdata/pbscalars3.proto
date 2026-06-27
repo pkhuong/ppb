@@ -1,0 +1,23 @@
+syntax = "proto3";
+package demo_pb;
+
+// Scalar proto3 coverage: every scalar shape, without enums (covered by
+// pbcomposite3).  proto3 implicit-presence scalars, explicit `optional`,
+// packed-repeated, and unpacked repeated string.
+message Scalars {
+  int32 i = 1;
+  int64 l = 2;
+  uint32 u = 3;
+  uint64 t = 4;
+  sint32 z = 5;
+  fixed32 f = 6;
+  sfixed64 g = 7;
+  float fl = 8;
+  double d = 9;
+  bool b = 10;
+  string s = 11;
+  bytes by = 12;
+  optional int32 maybe = 13;
+  repeated int32 packed_vals = 14;
+  repeated string names = 15;
+}

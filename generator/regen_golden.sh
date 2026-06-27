@@ -35,6 +35,7 @@ variant() {
 
 # Default (mode=lean) schema headers.
 base "" keywords3.proto
+base "" scalars3.proto
 base "" nested2.proto
 base "" nsclash3.proto
 base "" stdshadow3.proto
@@ -45,6 +46,9 @@ base "" empty3.proto
 base "" maps3.proto
 base "" enumref3.proto
 base "" leanrep3.proto
+base "" pbscalars3.proto
+base "" pbcomposite3.proto
+base "" pbcomposite2.proto
 # Both files in one invocation: exercises generate()'s multi-file loop and the
 # global emission order spanning a file boundary.
 base "" xfile_base3.proto xfile_main3.proto
@@ -58,10 +62,15 @@ base "opaque_cycles" pbrrec.proto
 # Real oneof decoded as independent last_write_wins fields.
 base "oneof_as_optional" oneof3.proto
 
+# detect_unknown on the default (lean) mode.
+variant "detect_unknown" "detect_unknown" scalars3.proto
+
 # Repeated-scalar/enum protos: none diverges from lean on the alt wire form,
 # full additionally detects unknowns.
-variant "mode=none" "none" leanrep3.proto
-variant "mode=full" "full" leanrep3.proto
+for proto in leanrep3 pbscalars3 pbcomposite3 pbcomposite2; do
+    variant "mode=none" "none" "$proto.proto"
+    variant "mode=full" "full" "$proto.proto"
+done
 
 # Message-bearing protos: full adds detect_unknown_fields<> to every message.
 variant "mode=full" "full" nested2.proto

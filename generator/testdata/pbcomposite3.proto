@@ -1,0 +1,37 @@
+syntax = "proto3";
+package demo_comp3;
+
+// Composite proto3 coverage: enums, repeated fixed-width (packed), repeated
+// message, and maps.
+
+enum Color {
+  UNSET = 0;
+  RED = 1;
+  GREEN = 2;
+}
+
+message Enums {
+  Color c = 1;
+  repeated Color cs = 2;          // proto3 -> packed
+}
+
+message Fixeds {
+  repeated fixed32 f32s = 1;      // proto3 -> packed
+  repeated sfixed64 s64s = 2;
+  repeated float fls = 3;
+  repeated double ds = 4;
+}
+
+message Item {
+  int32 id = 1;
+  string label = 2;
+}
+
+message Repeated {
+  repeated Item items = 1;
+}
+
+message Maps {
+  map<string, int32> counts = 1;
+  map<int64, string> names = 2;
+}
