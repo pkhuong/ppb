@@ -72,4 +72,9 @@ variant "mode=full,oneof_as_optional" "full" oneof3.proto
 # Drop-flag variants.
 # drop_foreign_type_fields: drops a field referencing an unsupported WKT (struct).
 variant "drop_foreign_type_fields" "drop_imports" foreigndrop2.proto
+# drop_group_extension_fields: drops a proto2 group field.
+protoc --plugin=protoc-gen-ppb="$plugin" --proto_path=testdata/invalid \
+       --ppb_opt=drop_group_extension_fields --ppb_out="$tmp" group.proto
+mv "$tmp/group.ppb.hpp" "$out/groupdrop2.ppb.hpp"
+
 echo "regenerated goldens in $out"

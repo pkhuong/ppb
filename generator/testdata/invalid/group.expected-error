@@ -1,0 +1,1 @@
+.demo.Foo.g: group field uses wire types 3/4, which PPB cannot decode; pass --ppb_opt=drop_group_extension_fields to drop it (payloads that exercise it will fail to parse)
