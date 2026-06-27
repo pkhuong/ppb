@@ -218,6 +218,43 @@ def _singular_enum(field, syntax, key, symbols, merge=False):
     return [f"::ppb::{name}<{key}, {enum_cpp}>"]
 
 
+def _field_is_packed(field, syntax):
+    if field.HasField("options") and field.options.HasField("packed"):
+        return field.options.packed
+
+    return syntax == "proto3"
+
+
+def _repeated_variants(base, key, args, *, strict_repeated_encoding, is_packed):
+    """`args` is "" for scalars or ", <Enum>" for enums.
+
+    Always emits both wire forms: the field's actual encoding is canonical
+    (repeated, prescan fast-path eligible).  The other (fallback) form's
+    semantics depend on `strict_repeated_encoding`:
+
+      - True: field_semantics::error, so any occurrence of the unexpected
+        encoding fails closed at parse()
+      - False: always_lexn, so its mere presence forces the order-preserving
+        lexn pass, so a both-forms message decodes in wire order (otherwise,
+        a field split across both forms with <= 1 occurrence each dispatches
+        in tag order, not wire order)
+    """
+    fallback_sem = _ERROR if strict_repeated_encoding else _ALWAYS_LEXN
+    packed = f"::ppb::packed_{base}<{key}{args}>"
+    unpacked = f"::ppb::unpacked_{base}<{key}{args}>"
+    if is_packed:
+        unpacked_fallback = f"::ppb::{base}<{key}{args}, {fallback_sem}>"
+        return [packed, unpacked_fallback]
+
+    if base == "enumerated":
+        enum = args[len(", ") :]
+        packed_fallback = f"::ppb::packed_enumerated<{key}, {enum}, {fallback_sem}>"
+    else:
+        packed_fallback = f"::ppb::packed_{base}<{key}, {fallback_sem}>"
+
+    return [unpacked, packed_fallback]
+
+
 def map_field(
     field,
     *,
@@ -250,6 +287,26 @@ def map_field(
 
     if not repeated and field.type in _SCALAR_BASE:
         return _singular_scalar(field, syntax, key, merge=merge)
+
+    if repeated and field.type == _T.TYPE_ENUM:
+        is_packed = _field_is_packed(field, syntax)
+        return _repeated_variants(
+            "enumerated",
+            key,
+            f", {symbols.enum_cpp_name(field.type_name)}",
+            strict_repeated_encoding=strict_repeated_encoding,
+            is_packed=is_packed,
+        )
+
+    if repeated and field.type in _SCALAR_BASE:
+        is_packed = _field_is_packed(field, syntax)
+        return _repeated_variants(
+            _SCALAR_BASE[field.type],
+            key,
+            "",
+            strict_repeated_encoding=strict_repeated_encoding,
+            is_packed=is_packed,
+        )
 
     if field.type == _T.TYPE_STRING:
         if repeated:

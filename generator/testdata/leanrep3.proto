@@ -1,0 +1,16 @@
+syntax = "proto3";
+package demo_lean;
+
+// Generated under --ppb_opt=lean so a golden exercises the
+// field_semantics::error fallback on a repeated scalar/enum: each repeated
+// field keeps its canonical (proto3-packed) descriptor plus an `error`-semantics
+// fallback for the unexpected wire form, which fails closed at parse().
+message Rep {
+  repeated int32 vals = 1;
+  repeated Color colors = 2;
+}
+
+enum Color {
+  UNSET = 0;
+  RED = 1;
+}
