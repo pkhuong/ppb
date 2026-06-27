@@ -1,0 +1,10 @@
+syntax = "proto3";
+
+package ppb;
+
+import "google/protobuf/timestamp.proto";
+
+message Event {
+    google.protobuf.Timestamp at = 1;
+    int32 seq = 2;
+}

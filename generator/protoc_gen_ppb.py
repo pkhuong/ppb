@@ -1644,6 +1644,33 @@ def _wkt_file_descriptor_proto(proto_name):
     return fdp
 
 
+def _inject_supported_wkt(request):
+    """Add any supported WKT FileDescriptorProto missing from the closure.
+
+    A copy already in the request wins (matches protoc's view).
+    """
+    present = {fp.name for fp in request.proto_file}
+    for proto_name in _WKT_SUPPORTED_FILES:
+        if proto_name not in present:
+            request.proto_file.append(_wkt_file_descriptor_proto(proto_name))
+
+
+def _missing_non_wkt_dependency(request):
+    """Find the first dependency referenced by the closure that is absent from it.
+
+    Returns None when the closure is self-contained. The missing dependency
+    must not be a supported WKT (which is injected separately). Protoc's
+    --include_imports normally guarantees a self-contained closure.
+    """
+    present = {fp.name for fp in request.proto_file}
+    for fp in request.proto_file:
+        for dep in fp.dependency:
+            if dep not in present and dep not in _WKT_SUPPORTED_FILES:
+                return dep
+
+    return None
+
+
 def _write_response(response, out_dir):
     """Write each response.file under out_dir (creating subdirs); 1 on error."""
     if response.error:
@@ -1725,6 +1752,15 @@ def _run_standalone(argv):
         parser.error("--descriptor-set is required (or use --emit-wkt-bundle)")
 
     request = _request_from_descriptor_set(args.descriptor_set, args.files, args.opt)
+    _inject_supported_wkt(request)
+    missing = _missing_non_wkt_dependency(request)
+    if missing is not None:
+        sys.stderr.write(
+            f"{PLUGIN_NAME}: dependency {missing!r} is missing from the descriptor "
+            f"set; regenerate it with protoc --include_imports\n"
+        )
+        return 1
+
     response = generate(request)
     return _write_response(response, args.out)
 
