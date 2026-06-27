@@ -1,0 +1,11 @@
+syntax = "proto2";
+package defwarn;
+
+message Foo {
+  optional int32 x = 1;
+  optional int32 y = 2 [default = 42];
+  optional string s = 3 [default = "hello"];
+  optional bool b = 4 [default = true];
+  optional int32 z = 5;
+  required int32 r = 6 [default = 99];
+}

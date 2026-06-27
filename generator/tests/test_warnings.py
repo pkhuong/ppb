@@ -115,6 +115,63 @@ def test_required_downgrade_warns(capsys):
     assert "bar" in err
 
 
+def test_default_value_warnings_lists_explicit_defaults():
+    m = d.DescriptorProto(name="Foo")
+    m.field.add(name="x", number=1, type=T.TYPE_INT32, label=T.LABEL_OPTIONAL)
+    y = d.FieldDescriptorProto(
+        name="y", number=2, type=T.TYPE_INT32, label=T.LABEL_OPTIONAL, default_value="42"
+    )
+    m.field.append(y)
+    s = d.FieldDescriptorProto(
+        name="s", number=3, type=T.TYPE_STRING, label=T.LABEL_OPTIONAL, default_value="hello"
+    )
+    m.field.append(s)
+    fp = d.FileDescriptorProto(name="a.proto", package="pkg", syntax="proto2")
+    fp.message_type.append(m)
+    warns = gen.default_value_warnings(gen.build_model([fp]))
+    assert len(warns) == 2
+    assert any("default = '42'" in w and ".pkg.Foo.y" in w for w in warns)
+    assert any("default = 'hello'" in w and ".pkg.Foo.s" in w for w in warns)
+    assert all(".pkg.Foo.x" not in w for w in warns)
+
+
+def test_default_value_warnings_labels_fields():
+    m = d.DescriptorProto(name="Foo")
+    m.field.add(name="r", number=1, type=T.TYPE_INT32, label=T.LABEL_REQUIRED, default_value="99")
+    fp = d.FileDescriptorProto(name="a.proto", package="pkg", syntax="proto2")
+    fp.message_type.append(m)
+    warns = gen.default_value_warnings(gen.build_model([fp]))
+    assert any("required" in w and "default = '99'" in w for w in warns)
+
+
+def test_default_value_warnings_skips_proto3():
+    m = d.DescriptorProto(name="Foo")
+    m.field.add(name="x", number=1, type=T.TYPE_INT32, label=T.LABEL_OPTIONAL, default_value="42")
+    fp = d.FileDescriptorProto(name="a.proto", package="pkg", syntax="proto3")
+    fp.message_type.append(m)
+    warns = gen.default_value_warnings(gen.build_model([fp]))
+    assert warns == ()
+
+
+def test_default_value_warns_stderr(capsys):
+    from google.protobuf.compiler import plugin_pb2 as p
+
+    req = p.CodeGeneratorRequest()
+    fp = req.proto_file.add(name="defwarn.proto", package="defwarn", syntax="proto2")
+    foo = fp.message_type.add(name="Foo")
+    foo.field.add(name="x", number=1, type=T.TYPE_INT32, label=T.LABEL_OPTIONAL)
+    foo.field.add(name="y", number=2, type=T.TYPE_INT32, label=T.LABEL_OPTIONAL, default_value="42")
+    req.file_to_generate.append("defwarn.proto")
+    resp = gen.generate(req)
+    assert resp.error == ""
+    err = capsys.readouterr().err
+    assert "default = '42'" in err
+    assert "defwarn" in err
+    assert "Foo" in err
+    assert "y" in err
+    assert "Foo.x: proto2" not in err
+
+
 def test_oneof_as_optional_warns(capsys):
     from google.protobuf.compiler import plugin_pb2 as p
 

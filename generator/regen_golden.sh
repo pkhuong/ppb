@@ -88,4 +88,7 @@ variant "mode=full" "full" wkt_user3.proto
 # Proto2 required-warning: exercises required-downgrade and default-value warnings.
 base "" reqwarn2.proto
 
+# Proto2 defaults: exercises default-value warning and hint comment augmentation.
+base "" default_warn.proto
+
 echo "regenerated goldens in $out"
