@@ -1,0 +1,5 @@
+protoc-gen-ppb: warning: .defwarn.Foo.r: proto2 required field downgraded to optional; required-presence is not enforced
+protoc-gen-ppb: warning: .defwarn.Foo.y: proto2 optional field has explicit default = '42'; PPB does not apply default values
+protoc-gen-ppb: warning: .defwarn.Foo.s: proto2 optional field has explicit default = 'hello'; PPB does not apply default values
+protoc-gen-ppb: warning: .defwarn.Foo.b: proto2 optional field has explicit default = 'true'; PPB does not apply default values
+protoc-gen-ppb: warning: .defwarn.Foo.r: proto2 required field has explicit default = '99'; PPB does not apply default values

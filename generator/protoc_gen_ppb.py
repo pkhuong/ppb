@@ -1042,13 +1042,20 @@ def _field_handler_hint(field, *, f_name, symbols, opaque, syntax, detect_unknow
             )
         return f"ppb::on_submessage<{key}, {inner}>(...)"
 
+    hint = None
     if repeated:
         if field.type in _SCALAR_BASE or field.type == _T.TYPE_ENUM:
             if _field_is_packed(field, syntax):
-                return f"ppb::on_bulk<{key}>(range_fn, elem_fn)"
-        return f"ppb::on_each<{key}>(...)"
+                hint = f"ppb::on_bulk<{key}>(range_fn, elem_fn)"
+        if hint is None:
+            hint = f"ppb::on_each<{key}>(...)"
+    else:
+        hint = f"ppb::on<{key}>(...)"
 
-    return f"ppb::on<{key}>(...)"
+    if field.HasField("default_value"):
+        hint += f"; default = {field.default_value!r}"
+
+    return hint
 
 
 def emit_enum(enum):
@@ -1491,6 +1498,29 @@ def oneof_as_optional_warnings(model):
     return tuple(out)
 
 
+def default_value_warnings(model):
+    """Return a warning for each proto2 field with an explicit default.
+
+    PPB is a lexer and does not apply defaults; the warning reports the value
+    so the caller can supply it when the field is absent on the wire.
+    """
+    out = []
+    for m in model.messages:
+        if m.syntax != "proto2":
+            continue
+
+        for f in m.fields:
+            if f.HasField("default_value"):
+                label = "required" if f.label == _T.LABEL_REQUIRED else "optional"
+                out.append(
+                    f"{PLUGIN_NAME}: warning: {m.full_name}.{f.name}: "
+                    f"proto2 {label} field has explicit default = {f.default_value!r}; "
+                    f"PPB does not apply default values"
+                )
+
+    return tuple(out)
+
+
 @dataclasses.dataclass(frozen=True)
 class Options:
     strict_repeated_encoding: bool
@@ -1579,6 +1609,9 @@ def generate(request):
             sys.stderr.write(w + "\n")
 
         for w in oneof_as_optional_warnings(model):
+            sys.stderr.write(w + "\n")
+
+        for w in default_value_warnings(model):
             sys.stderr.write(w + "\n")
 
         plan = plan_emission(model, opaque_recursion=opts.opaque_cycles)
