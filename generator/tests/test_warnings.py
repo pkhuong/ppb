@@ -99,6 +99,22 @@ def test_generate_writes_warnings_to_stderr(capsys):
     assert "C++ keyword 'int' emitted as 'int_'" in err
 
 
+def test_required_downgrade_warns(capsys):
+    from google.protobuf.compiler import plugin_pb2 as p
+
+    req = p.CodeGeneratorRequest()
+    fp = req.proto_file.add(name="reqwarn2.proto", package="reqwarn2", syntax="proto2")
+    foo = fp.message_type.add(name="Foo")
+    foo.field.add(name="bar", number=1, type=T.TYPE_INT32, label=T.LABEL_REQUIRED)
+    req.file_to_generate.append("reqwarn2.proto")
+    resp = gen.generate(req)
+    assert resp.error == ""
+    err = capsys.readouterr().err
+    assert "required" in err
+    assert "reqwarn2" in err
+    assert "bar" in err
+
+
 def test_oneof_as_optional_warns(capsys):
     from google.protobuf.compiler import plugin_pb2 as p
 

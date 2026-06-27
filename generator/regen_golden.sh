@@ -80,4 +80,7 @@ protoc --plugin=protoc-gen-ppb="$plugin" --proto_path=testdata/invalid \
        --ppb_opt=drop_group_extension_fields --ppb_out="$tmp" group.proto
 mv "$tmp/group.ppb.hpp" "$out/groupdrop2.ppb.hpp"
 
+# Proto2 required-warning: exercises required-downgrade and default-value warnings.
+base "" reqwarn2.proto
+
 echo "regenerated goldens in $out"
