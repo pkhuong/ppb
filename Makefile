@@ -20,7 +20,7 @@ SHARED_OBJS := $(SHARED_C_OBJS)
 
 PROTOSCOPE ?= protoscope
 
-.PHONY: all clean format unit unit_cpp test regen_test fuzz fuzz-corpus compile_fail analyze-clang analyze-gcc tysan fuzz_cpp fuzz_cpp_msan fuzz_cpp_tysan sweep sweep_cpp sweep-seeds FORCE
+.PHONY: all clean format unit unit_cpp test regen_test fuzz fuzz-corpus compile_fail analyze-clang analyze-gcc tysan fuzz_cpp fuzz_cpp_msan fuzz_cpp_tysan sweep sweep_cpp sweep-seeds generator_test FORCE
 
 all: build/libppb.a build/libppb.so build/picoscope build/ubench
 
@@ -30,7 +30,7 @@ clean:
 	rm -rf build/ wp.csv eva.csv
 
 format:
-	clang-format-20 -i include/ppb/ppb.h include/ppb/*.hpp src/*.[ch] examples/*.c tests/*.c tests/*.cc fuzz/*.c fuzz/*.cc
+	clang-format-20 -i include/ppb/ppb.h include/ppb/*.hpp src/*.[ch] examples/*.c tests/*.c tests/*.cc fuzz/*.c fuzz/*.cc generator/testdata/*.cc
 
 unit: build/test_ppb
 	build/test_ppb
@@ -217,6 +217,27 @@ tysan: build/tysan/test_ppb_cpp build/tysan/test_ppb_cpp_static
 	    fi; \
 	done; \
 	exit $$status
+
+generator_test:
+	@command -v protoc >/dev/null 2>&1 || { echo "generator_test: protoc not found, skipping"; exit 0; }
+	@command -v uv >/dev/null 2>&1 || { echo "generator_test: uv not found, skipping"; exit 0; }
+	$(MAKE) -C generator check
+	cd generator && ./regen_golden.sh
+	git diff --exit-code generator/testdata/golden || { echo "golden headers out of date; run generator/regen_golden.sh and commit"; exit 1; }
+	cd generator && ./regen_invalid.py
+	git diff --exit-code generator/testdata/invalid || { echo "invalid-input goldens out of date; run generator/regen_invalid.py and commit"; exit 1; }
+	mkdir -p build
+	cd generator && uv run python3 protoc_gen_ppb.py --emit-wkt-bundle ../build/ppb_wkt_check.hpp
+	diff -u include/ppb/wkt.ppb.hpp build/ppb_wkt_check.hpp || { echo "include/ppb/wkt.ppb.hpp out of date"; exit 1; }
+	for h in generator/testdata/golden/*.ppb.hpp; do \
+		$(CXX) $(CXXFLAGS) -fsyntax-only -Wno-pragma-once-outside-header "$$h" || exit 1; \
+	done
+	$(CXX) $(CXXFLAGS) -o build/ppb_gen_compile generator/testdata/test_compile.cc
+	$(CXX) $(CXXFLAGS) -fsyntax-only generator/testdata/test_compile_variants.cc
+	$(MAKE) build/libppb.a
+	$(CXX) $(CXXFLAGS) -Igenerator/testdata -o build/test_wkt_runtime generator/tests/test_wkt_runtime.cc build/libppb.a
+	./build/test_wkt_runtime && echo "test_wkt_runtime OK"
+	@echo "generator_test OK"
 
 FORCE:
 .SECONDARY:  # don't rm "temporary" (like our .o) output files at the end
