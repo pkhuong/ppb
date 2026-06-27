@@ -354,6 +354,9 @@ def map_field(
             repeated=repeated,
         )
 
+        if repeated:
+            return [f"::ppb::unpacked_message<{key}, {inner}>"]
+
         if _is_real_oneof_member(field):
             return [f"::ppb::message<{key}, {inner}, {_ALWAYS_LEXN}>"]
 

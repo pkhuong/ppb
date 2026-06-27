@@ -63,3 +63,14 @@ def test_singular_message_uses_merge_schema_and_singular_semantics():
     assert result == [
         "::ppb::message<F::m, ::pkg::Bar::merge_schema, ::ppb::field_semantics::singular>"
     ]
+
+
+def test_repeated_message_uses_normal_schema():
+    # A repeated TYPE_MESSAGE field always uses the plain schema: AddMessage
+    # creates a fresh element per occurrence, so proto3 zero-default dispatch
+    # is safe on a fresh child.
+    f = field("m", 1, T.TYPE_MESSAGE, label=T.LABEL_REPEATED, type_name=".pkg.Bar")
+    result = gen.map_field(
+        f, syntax="proto2", strict_repeated_encoding=True, f_name="F", symbols=FakeSymbols()
+    )
+    assert result == ["::ppb::unpacked_message<F::m, ::pkg::Bar::schema>"]

@@ -37,6 +37,7 @@ variant() {
 base "" nested2.proto
 base "" ppbshadow3.proto
 base "" empty3.proto
+base "" maps3.proto
 base "" enumref3.proto
 base "" leanrep3.proto
 
@@ -48,6 +49,7 @@ variant "mode=full" "full" leanrep3.proto
 
 # Message-bearing protos: full adds detect_unknown_fields<> to every message.
 variant "mode=full" "full" nested2.proto
+variant "mode=full" "full" maps3.proto
 variant "mode=full" "full" empty3.proto
 
 echo "regenerated goldens in $out"
