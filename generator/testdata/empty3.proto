@@ -1,0 +1,9 @@
+syntax = "proto3";
+
+package demo_empty;
+
+message Empty {}
+
+message HasEmpty {
+    Empty e = 1;
+}

@@ -49,3 +49,17 @@ def test_resolved_f_name_used_for_key():
 def test_proto2_required_scalar_is_last_write_wins():
     f = field("r", 1, T.TYPE_INT32, label=T.LABEL_REQUIRED)
     assert descr(f, "proto2") == ["::ppb::int32<F::r>"]
+
+
+def test_singular_message_uses_merge_schema_and_singular_semantics():
+    # A singular TYPE_MESSAGE field always uses merge_schema (repeated occurrences
+    # merge into one child, so absent proto3 scalars must not clobber) and
+    # field_semantics::singular (every occurrence dispatches, even if the
+    # same as a prior one).
+    f = field("m", 1, T.TYPE_MESSAGE, type_name=".pkg.Bar")
+    result = gen.map_field(
+        f, syntax="proto2", strict_repeated_encoding=True, f_name="F", symbols=FakeSymbols()
+    )
+    assert result == [
+        "::ppb::message<F::m, ::pkg::Bar::merge_schema, ::ppb::field_semantics::singular>"
+    ]

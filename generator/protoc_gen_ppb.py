@@ -255,6 +255,20 @@ def _repeated_variants(base, key, args, *, strict_repeated_encoding, is_packed):
     return [unpacked, packed_fallback]
 
 
+def _message_inner_alias(field, symbols, *, detect_unknown, repeated):
+    """Return the qualified inner-alias string for a non-opaque TYPE_MESSAGE field.
+
+    Shared by map_field (descriptor emission) and _field_handler_hint (hint
+    comment): picks merge_schema for singular fields (repeated occurrences merge
+    into one child, so absent proto3 scalars must not clobber existing values)
+    and schema for repeated (each occurrence gets a fresh element, so proto3
+    zero-default is safe).
+    """
+    if not repeated:
+        return symbols.message_merge_schema(field.type_name)
+    return symbols.message_schema(field.type_name)
+
+
 def map_field(
     field,
     *,
@@ -329,6 +343,21 @@ def map_field(
         use_proto3 = _is_proto3_zero_default(field, syntax) and not merge
         name = "proto3_bytes" if use_proto3 else "bytes"
         return [f"::ppb::{name}<{key}>"]
+
+    if field.type == _T.TYPE_MESSAGE:
+        # The `merge` kwarg controls this message's own scalar/enum/string/bytes
+        # semantics (see _message_inner_alias), not nested submessages.
+        inner = _message_inner_alias(
+            field,
+            symbols,
+            detect_unknown=detect_unknown,
+            repeated=repeated,
+        )
+
+        if _is_real_oneof_member(field):
+            return [f"::ppb::message<{key}, {inner}, {_ALWAYS_LEXN}>"]
+
+        return [f"::ppb::message<{key}, {inner}, ::ppb::field_semantics::singular>"]
 
     # Unreachable for valid input: groups and extensions are rejected during
     # model-building, and every other proto type/label is handled above.

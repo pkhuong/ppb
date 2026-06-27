@@ -1,0 +1,11 @@
+syntax = "proto2";
+package demo2;
+
+message Outer {
+  message Inner {
+    optional int32 a = 1;
+  }
+  optional Inner inner = 1;
+  repeated int32 unpacked_vals = 2;
+  repeated int32 packed_vals = 3 [packed = true];
+}

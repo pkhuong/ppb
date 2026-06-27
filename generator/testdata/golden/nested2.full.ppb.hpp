@@ -1,0 +1,46 @@
+#pragma once
+
+#include <ppb/ppb.hpp>
+
+// clang-format off
+
+namespace ppb_gen::demo2::Outer::Inner
+{
+    enum class F : ::std::int32_t
+    {
+        a = 1,
+    };
+
+    constexpr ::std::size_t max_depth = 0;
+
+    using schema = ::ppb::auto_schema<
+        ::ppb::int32<F::a>,
+        // ppb::on_unknown<>(...)
+        ::ppb::detect_unknown_fields<>>;
+
+    using merge_schema = schema;
+}
+
+namespace ppb_gen::demo2::Outer
+{
+    enum class F : ::std::int32_t
+    {
+        inner = 1,
+        unpacked_vals = 2,
+        packed_vals = 3,
+    };
+
+    constexpr ::std::size_t max_depth = 1;
+
+    using schema = ::ppb::auto_schema<
+        ::ppb::message<F::inner, ::ppb_gen::demo2::Outer::Inner::merge_schema, ::ppb::field_semantics::singular>,
+        ::ppb::unpacked_int32<F::unpacked_vals>,
+        ::ppb::packed_int32<F::unpacked_vals, ::ppb::field_semantics::always_lexn>,
+        ::ppb::packed_int32<F::packed_vals>,
+        ::ppb::int32<F::packed_vals, ::ppb::field_semantics::always_lexn>,
+        // ppb::on_unknown<>(...)
+        ::ppb::detect_unknown_fields<>>;
+
+    using merge_schema = schema;
+}
+
