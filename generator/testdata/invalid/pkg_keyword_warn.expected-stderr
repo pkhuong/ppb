@@ -1,0 +1,2 @@
+protoc-gen-ppb: warning: .new: C++ keyword 'new' emitted as 'new_'
+protoc-gen-ppb: warning: .new.delete: C++ keyword 'delete' emitted as 'delete_'
