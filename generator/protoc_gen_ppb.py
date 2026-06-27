@@ -251,6 +251,28 @@ def map_field(
     if not repeated and field.type in _SCALAR_BASE:
         return _singular_scalar(field, syntax, key, merge=merge)
 
+    if field.type == _T.TYPE_STRING:
+        if repeated:
+            return [f"::ppb::unpacked_utf8string<{key}>"]
+
+        if _is_real_oneof_member(field):
+            return [f"::ppb::utf8string<{key}, {_ALWAYS_LEXN}>"]
+
+        use_proto3 = _is_proto3_zero_default(field, syntax) and not merge
+        name = "proto3_utf8string" if use_proto3 else "utf8string"
+        return [f"::ppb::{name}<{key}>"]
+
+    if field.type == _T.TYPE_BYTES:
+        if repeated:
+            return [f"::ppb::unpacked_bytes<{key}>"]
+
+        if _is_real_oneof_member(field):
+            return [f"::ppb::bytes<{key}, ::std::byte, {_ALWAYS_LEXN}>"]
+
+        use_proto3 = _is_proto3_zero_default(field, syntax) and not merge
+        name = "proto3_bytes" if use_proto3 else "bytes"
+        return [f"::ppb::{name}<{key}>"]
+
     # Unreachable for valid input: groups and extensions are rejected during
     # model-building, and every other proto type/label is handled above.
     raise NotImplementedError(f"field {field.name!r} type/label not handled yet")
