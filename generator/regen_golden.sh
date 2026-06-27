@@ -69,4 +69,7 @@ variant "mode=full,opaque_cycles" "full" pbmrec.proto
 variant "mode=full,opaque_cycles" "full" pbrrec.proto
 variant "mode=full,oneof_as_optional" "full" oneof3.proto
 
+# Drop-flag variants.
+# drop_foreign_type_fields: drops a field referencing an unsupported WKT (struct).
+variant "drop_foreign_type_fields" "drop_imports" foreigndrop2.proto
 echo "regenerated goldens in $out"
