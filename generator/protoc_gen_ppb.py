@@ -303,6 +303,23 @@ def _repeated_variants(base, key, args, *, strict_repeated_encoding, is_packed):
     return [unpacked, packed_fallback]
 
 
+def _is_supported_wkt_with_fields(symbols, type_name):
+    """Determine whether a type is a WKT message with fields.
+
+    Unknown-field detection wraps such a schema in
+    ppb::auto_schema<..., ppb::detect_unknown_fields<>> at the use
+    site (on the schema-side message<> descriptor).
+
+    Not needed for the Empty WKT, since we always emit catch-alls
+    for empty schemas.
+    """
+    if not symbols.has_message(type_name):
+        return False
+
+    msg = symbols.message(type_name)
+    return msg.source_file in _WKT_SUPPORTED_FILES and bool(msg.fields)
+
+
 def _message_inner_alias(field, symbols, *, detect_unknown, repeated):
     """Return the qualified inner-alias string for a non-opaque TYPE_MESSAGE field.
 
@@ -311,10 +328,21 @@ def _message_inner_alias(field, symbols, *, detect_unknown, repeated):
     into one child, so absent proto3 scalars must not clobber existing values)
     and schema for repeated (each occurrence gets a fresh element, so proto3
     zero-default is safe).
+
+    Adds _with_unknowns for supported WKT, when `detect_unknown` is true.
     """
+    wkt_strict = detect_unknown and _is_supported_wkt_with_fields(symbols, field.type_name)
     if not repeated:
-        return symbols.message_merge_schema(field.type_name)
-    return symbols.message_schema(field.type_name)
+        return (
+            symbols.message_merge_schema_with_unknowns(field.type_name)
+            if wkt_strict
+            else symbols.message_merge_schema(field.type_name)
+        )
+    return (
+        symbols.message_schema_with_unknowns(field.type_name)
+        if wkt_strict
+        else symbols.message_schema(field.type_name)
+    )
 
 
 def map_field(
@@ -671,6 +699,36 @@ def _build_enum(ed, parent_full, source_file=""):
     )
 
 
+def _supported_wkt_type_names(proto_files):
+    """Return full proto names of messages/enums declared in supported WKT files.
+
+    Covers every supported WKT file present in the closure
+    (e.g. ".google.protobuf.Timestamp"). Used to tell whether a WKT field is
+    supported. Tries to handle nested types, though we don't support any for now.
+    """
+    names = set()
+
+    def walk(desc, parent_full):
+        full = f"{parent_full}.{desc.name}"
+        names.add(full)
+        for e in desc.enum_type:
+            names.add(f"{full}.{e.name}")
+        for nested in desc.nested_type:
+            walk(nested, full)
+
+    for fp in proto_files:
+        if fp.name not in _WKT_SUPPORTED_FILES:
+            continue
+
+        base = f".{fp.package}" if fp.package else ""
+        for e in fp.enum_type:
+            names.add(f"{base}.{e.name}")
+        for desc in fp.message_type:
+            walk(desc, base)
+
+    return frozenset(names)
+
+
 def build_model(
     proto_files,
     *,
@@ -680,7 +738,7 @@ def build_model(
     skip_unsupported_fields=False,
 ):
     _to_gen = set(files_to_generate)
-    supported_wkt_types = set()  # we don't support any WKT yet
+    supported_wkt_types = _supported_wkt_type_names(proto_files)
     symbols = SymbolTable()
     messages = []
     file_enums = []
@@ -710,8 +768,8 @@ def build_model(
         dropped = []
         for f in desc.field:
             # Only *unsupported* WKT types reject/drop now; supported
-            # ones (none for now) are kept in the model and resolve as
-            # ordinary cross-file message refs.
+            # ones are kept in the model and resolve as ordinary
+            # cross-file message refs.
             refs_wkt = (
                 f.type in (_T.TYPE_MESSAGE, _T.TYPE_ENUM)
                 and f.type_name.startswith(_WKT_TYPE_PREFIX)
@@ -1220,6 +1278,39 @@ def emit_file(
         out.append(f'#include "{_header_name(dep)}"')
 
     out.append("")
+
+    # Unknown-field detection retains unknown fields inside a supported WKT
+    # scope, but the schemas in <ppb/wkt.ppb.hpp> lack unknown-field
+    # catch-all.  For each WKT-with-fields type referenced in this file, splice
+    # the catch-all on here once via a named alias; the message<> descriptors
+    # reference it so the on_unknown handlers match.
+    if detect_unknown:
+        seen_wkt = set()
+        for message in model.messages:
+            if message.source_file != file_proto.name:
+                continue
+
+            for f in message.fields:
+                if (
+                    f.type == _T.TYPE_MESSAGE
+                    and f.type_name not in seen_wkt
+                    and _is_supported_wkt_with_fields(model.symbols, f.type_name)
+                ):
+                    seen_wkt.add(f.type_name)
+                    wkt = model.symbols.message(f.type_name)
+                    ids = wkt.identifiers
+                    out.append(f"namespace {wkt.namespace}")
+                    out.append("{")
+                    out.append(
+                        f"    using {ids.schema}_with_unknowns = "
+                        f"::ppb::auto_schema<{ids.schema}, ::ppb::detect_unknown_fields<>>;"
+                    )
+                    out.append(
+                        f"    using {ids.merge_schema}_with_unknowns = "
+                        f"::ppb::auto_schema<{ids.merge_schema}, ::ppb::detect_unknown_fields<>>;"
+                    )
+                    out.append("}")
+                    out.append("")
 
     dropped = [
         df
