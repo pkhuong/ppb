@@ -1,0 +1,10 @@
+syntax = "proto3";
+package demo_kw;
+
+enum Choice { default = 0; OK = 1; }
+
+message Class {
+  int32 int = 1;
+  string namespace = 2;
+  Choice case = 3;
+}
