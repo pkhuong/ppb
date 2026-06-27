@@ -15,11 +15,15 @@ namespace ppb_gen::demo_mrec::B
     constexpr ::std::size_t max_depth = 0;
 
     using schema = ::ppb::auto_schema<
+        // ppb::on<F::bv>(...)
         ::ppb::proto3_int32<F::bv>,
+        // ppb::on_submessage<F::a, ::ppb_gen::demo_mrec::A::merge_schema>(...)
         ::ppb::bytes<F::a, ::std::byte, ::ppb::field_semantics::singular> /* recursive: opaque */>;
 
     using merge_schema = ::ppb::auto_schema<
+        // ppb::on<F::bv>(...)
         ::ppb::int32<F::bv>,
+        // ppb::on_submessage<F::a, ::ppb_gen::demo_mrec::A::merge_schema>(...)
         ::ppb::bytes<F::a, ::std::byte, ::ppb::field_semantics::singular> /* recursive: opaque */>;
 }
 
@@ -34,11 +38,15 @@ namespace ppb_gen::demo_mrec::A
     constexpr ::std::size_t max_depth = 1;
 
     using schema = ::ppb::auto_schema<
+        // ppb::on<F::av>(...)
         ::ppb::proto3_int32<F::av>,
+        // ppb::on_submessage<F::b, ::ppb_gen::demo_mrec::B::merge_schema>(...)
         ::ppb::message<F::b, ::ppb_gen::demo_mrec::B::merge_schema, ::ppb::field_semantics::singular>>;
 
     using merge_schema = ::ppb::auto_schema<
+        // ppb::on<F::av>(...)
         ::ppb::int32<F::av>,
+        // ppb::on_submessage<F::b, ::ppb_gen::demo_mrec::B::merge_schema>(...)
         ::ppb::message<F::b, ::ppb_gen::demo_mrec::B::merge_schema, ::ppb::field_semantics::singular>>;
 }
 

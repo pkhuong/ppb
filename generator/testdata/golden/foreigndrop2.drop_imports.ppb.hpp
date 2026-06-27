@@ -18,6 +18,7 @@ namespace ppb_gen::demo2::WithStruct
     constexpr ::std::size_t max_depth = 0;
 
     using schema = ::ppb::auto_schema<
+        // ppb::on<F::id>(...)
         ::ppb::int32<F::id>>;
 
     using merge_schema = schema;

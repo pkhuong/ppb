@@ -39,6 +39,7 @@ namespace ppb_gen::demo_empty::HasEmpty
     constexpr ::std::size_t max_depth = 1;
 
     using schema = ::ppb::auto_schema<
+        // ppb::on_submessage<F::e, ::ppb_gen::demo_empty::Empty::merge_schema>(...)
         ::ppb::message<F::e, ::ppb_gen::demo_empty::Empty::merge_schema, ::ppb::field_semantics::singular>,
         // ppb::on_unknown<>(...)
         ::ppb::detect_unknown_fields<>>;
