@@ -33,4 +33,19 @@ def test_string_bytes_repeated_always_unpacked_both_modes():
     assert descr(rs, "proto3", True) == ["::ppb::unpacked_utf8string<F::s>"]
     assert descr(rs, "proto3", False) == ["::ppb::unpacked_utf8string<F::s>"]
     rb = f("b", 2, T.TYPE_BYTES, label=T.LABEL_REPEATED)
-    assert descr(rb, "proto2", "full") == ["::ppb::unpacked_bytes<F::b>"]
+    assert descr(rb, "proto2", False) == ["::ppb::unpacked_bytes<F::b>"]
+
+
+def test_message_singular_is_last_write_wins_even_in_proto3():
+    m = f("sub", 3, T.TYPE_MESSAGE, type_name=".pkg.Bar")
+    assert descr(m, "proto3") == [
+        "::ppb::message<F::sub, ::pkg::Bar::merge_schema, ::ppb::field_semantics::singular>"
+    ]
+    assert descr(m, "proto2") == [
+        "::ppb::message<F::sub, ::pkg::Bar::merge_schema, ::ppb::field_semantics::singular>"
+    ]
+
+
+def test_message_repeated_is_unpacked_message():
+    m = f("subs", 4, T.TYPE_MESSAGE, label=T.LABEL_REPEATED, type_name=".pkg.Bar")
+    assert descr(m, "proto3", True) == ["::ppb::unpacked_message<F::subs, ::pkg::Bar::schema>"]

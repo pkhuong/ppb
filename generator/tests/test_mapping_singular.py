@@ -51,6 +51,61 @@ def test_proto2_required_scalar_is_last_write_wins():
     assert descr(f, "proto2") == ["::ppb::int32<F::r>"]
 
 
+def test_proto3_real_oneof_member_is_always_lexn():
+    # A real oneof member (oneof_index set, proto3_optional=False) must NOT get
+    # the zero-default treatment even in proto3; oneof fields always have
+    # explicit presence.  It is emitted with always_lexn semantics so that any
+    # present member forces a wire-order lexn pass; under oneof_as_optional that
+    # makes last-occurrence semantics correct even when wire order disagrees with
+    # field-number order.
+    f_oneof = field("x", 1, T.TYPE_INT32, oneof_index=0)
+    assert descr(f_oneof, "proto3") == ["::ppb::int32<F::x, ::ppb::field_semantics::always_lexn>"]
+
+    f_plain = field("x", 1, T.TYPE_INT32)
+    assert descr(f_plain, "proto3") == ["::ppb::proto3_int32<F::x>"]
+
+
+def test_proto2_real_oneof_member_is_always_lexn():
+    # Same in proto2: a real oneof member gets always_lexn, not the plain
+    # last_write_wins of an ordinary proto2 optional scalar.
+    f_oneof = field("x", 1, T.TYPE_INT32, oneof_index=0)
+    assert descr(f_oneof, "proto2") == ["::ppb::int32<F::x, ::ppb::field_semantics::always_lexn>"]
+
+
+def test_oneof_member_enum_string_bytes_are_always_lexn():
+    enum_f = field("col", 3, T.TYPE_ENUM, type_name=".pkg.Color", oneof_index=0)
+    assert descr(enum_f, "proto3") == [
+        "::ppb::enumerated<F::col, ::pkg::Color, ::ppb::field_semantics::always_lexn>"
+    ]
+
+    str_f = field("text", 4, T.TYPE_STRING, oneof_index=0)
+    assert descr(str_f, "proto3") == [
+        "::ppb::utf8string<F::text, ::ppb::field_semantics::always_lexn>"
+    ]
+
+    bytes_f = field("blob", 5, T.TYPE_BYTES, oneof_index=0)
+    assert descr(bytes_f, "proto3") == [
+        "::ppb::bytes<F::blob, ::std::byte, ::ppb::field_semantics::always_lexn>"
+    ]
+
+
+def test_oneof_member_message_is_always_lexn():
+    # A singular message oneof member: always_lexn replaces the singular
+    # semantics it would otherwise have; the inner schema is always
+    # merge_schema for singular fields.
+    f = field("sub", 2, T.TYPE_MESSAGE, type_name=".pkg.Bar", oneof_index=0)
+    assert descr(f, "proto3") == [
+        "::ppb::message<F::sub, ::pkg::Bar::merge_schema, ::ppb::field_semantics::always_lexn>"
+    ]
+
+    merged = gen.map_field(
+        f, syntax="proto3", strict_repeated_encoding=True, f_name="F", symbols=FakeSymbols()
+    )
+    assert merged == [
+        "::ppb::message<F::sub, ::pkg::Bar::merge_schema, ::ppb::field_semantics::always_lexn>"
+    ]
+
+
 def test_singular_message_uses_merge_schema_and_singular_semantics():
     # A singular TYPE_MESSAGE field always uses merge_schema (repeated occurrences
     # merge into one child, so absent proto3 scalars must not clobber) and
@@ -66,9 +121,8 @@ def test_singular_message_uses_merge_schema_and_singular_semantics():
 
 
 def test_repeated_message_uses_normal_schema():
-    # A repeated TYPE_MESSAGE field always uses the plain schema: AddMessage
-    # creates a fresh element per occurrence, so proto3 zero-default dispatch
-    # is safe on a fresh child.
+    # A repeated TYPE_MESSAGE field always uses the plain schema: each occurrence
+    # is a fresh element, so proto3 zero-default dispatch is safe on a fresh child.
     f = field("m", 1, T.TYPE_MESSAGE, label=T.LABEL_REPEATED, type_name=".pkg.Bar")
     result = gen.map_field(
         f, syntax="proto2", strict_repeated_encoding=True, f_name="F", symbols=FakeSymbols()

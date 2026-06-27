@@ -1,0 +1,19 @@
+syntax = "proto2";
+package demo_comp2;
+
+// Composite proto2 coverage, unpacked variants: proto2 repeated enum/fixed
+// default to unpacked.
+
+enum Color {
+  UNSET = 0;
+  RED = 1;
+}
+
+message UEnums {
+  repeated Color cs = 1;          // proto2 default -> unpacked
+}
+
+message UFixeds {
+  repeated fixed32 f32s = 1;      // proto2 default -> unpacked
+  repeated double ds = 2;
+}
