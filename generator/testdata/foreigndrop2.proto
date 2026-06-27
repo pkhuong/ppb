@@ -1,0 +1,9 @@
+syntax = "proto2";
+package demo2;
+
+import "google/protobuf/struct.proto";
+
+message WithStruct {
+  optional int32 id = 1;
+  optional google.protobuf.Struct payload = 2;
+}

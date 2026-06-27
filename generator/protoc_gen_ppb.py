@@ -41,6 +41,13 @@ PLUGIN_NAME = "protoc-gen-ppb"
 # to introduce collisions.
 _GEN_NS = "ppb_gen"
 
+# Well-known types live under this import path. We don't generate headers for
+# them (they're not in file_to_generate), so a generated `#include` and any
+# `::google::protobuf::Foo::schema` reference would fail. Reject up front.
+#
+# TODO: support WKTs.
+_WKT_DEP_PREFIX = "google/protobuf/"
+
 # A field whose message/enum type lives under this proto package references a
 # well-known type. --ppb_opt=drop_foreign_type_fields drops such fields.
 _WKT_TYPE_PREFIX = ".google.protobuf."
@@ -627,8 +634,10 @@ def build_model(
     proto_files,
     *,
     allow_oneof=False,
+    skip_wkt=False,
     skip_unsupported_fields=False,
 ):
+    supported_wkt_types = set()  # we don't support any WKT yet
     symbols = SymbolTable()
     messages = []
     file_enums = []
@@ -657,8 +666,13 @@ def build_model(
         kept = []
         dropped = []
         for f in desc.field:
-            refs_wkt = f.type in (_T.TYPE_MESSAGE, _T.TYPE_ENUM) and f.type_name.startswith(
-                _WKT_TYPE_PREFIX
+            # Only *unsupported* WKT types reject/drop now; supported
+            # ones (none for now) are kept in the model and resolve as
+            # ordinary cross-file message refs.
+            refs_wkt = (
+                f.type in (_T.TYPE_MESSAGE, _T.TYPE_ENUM)
+                and f.type_name.startswith(_WKT_TYPE_PREFIX)
+                and f.type_name not in supported_wkt_types
             )
 
             if f.type == _T.TYPE_GROUP:
@@ -676,6 +690,15 @@ def build_model(
                         f"PPB cannot decode; pass --ppb_opt=drop_group_extension_fields "
                         f"to drop it (payloads that exercise it will fail to parse)"
                     )
+
+            elif refs_wkt and skip_wkt:
+                dropped.append(
+                    DroppedField(
+                        name=f.name,
+                        full_name=f"{full}.{f.name}",
+                        reason=f"references well-known type {f.type_name}",
+                    )
+                )
 
             elif refs_wkt:
                 raise GenError(
@@ -732,6 +755,9 @@ def build_model(
             walk_message(nested, full, syntax, source_file)
 
     for fp in proto_files:
+        if fp.name.startswith(_WKT_DEP_PREFIX):
+            continue
+
         syntax = _validate_syntax(fp)
         base = f".{fp.package}" if fp.package else ""
         scope = base or "<toplevel>"
@@ -1060,11 +1086,23 @@ def emit_file(
     strict_repeated_encoding,
     detect_unknown,
     plan,
+    skip_wkt=False,
 ):
     own = {m.full_name for m in model.messages if m.source_file == file_proto.name}
 
     out = ["#pragma once", "", "#include <ppb/ppb.hpp>", "", "// clang-format off"]
     for dep in file_proto.dependency:
+        if dep.startswith(_WKT_DEP_PREFIX):
+            if skip_wkt:
+                continue
+
+            raise GenError(
+                f"{file_proto.name!r} imports well-known type {dep!r}, which "
+                f"protoc-gen-ppb does not support; pass "
+                f"--ppb_opt=drop_foreign_type_fields to drop fields that "
+                f"reference it (those fields will not be decoded)"
+            )
+
         out.append(f'#include "{_header_name(dep)}"')
 
     out.append("")
@@ -1216,6 +1254,7 @@ def generate(request):
         model = build_model(
             list(request.proto_file),
             allow_oneof=opts.oneof_as_optional,
+            skip_wkt=opts.drop_foreign_type_fields,
             skip_unsupported_fields=opts.drop_group_extension_fields,
         )
         for w in oneof_as_optional_warnings(model):
@@ -1231,6 +1270,7 @@ def generate(request):
                 strict_repeated_encoding=opts.strict_repeated_encoding,
                 detect_unknown=detect,
                 plan=plan,
+                skip_wkt=opts.drop_foreign_type_fields,
             )
             out = response.file.add()
             out.name = _header_name(name)
