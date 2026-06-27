@@ -1,0 +1,20 @@
+syntax = "proto3";
+package pkg;
+
+message Inner {
+  int32 v = 1;
+}
+
+enum Color {
+  RED = 0;
+  GREEN = 1;
+}
+
+message HasOneof {
+  oneof choice {
+    int32 num = 1;
+    Inner sub = 2;
+    Color col = 3;
+    string text = 4;
+  }
+}
