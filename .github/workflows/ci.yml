@@ -63,6 +63,19 @@ jobs:
           files: "build/coverage/*.gc*"
           gcov_include: "src/*.[ch] include/ppb/*.hpp"
 
+  generator-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: install deps
+        run: |
+          sudo apt-get update && sudo apt-get install -y g++ protobuf-compiler
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - name: checkout
+        uses: actions/checkout@v4
+      - name: generator test
+        run: make CC=gcc CXX=g++ generator_test
+
   s390x-be:
     runs-on: ubuntu-latest
     steps:
