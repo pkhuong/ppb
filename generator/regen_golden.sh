@@ -24,7 +24,20 @@ base() {
     fi
 }
 
+# variant <opt> <suffix> <proto>: emit <base>.<suffix>.ppb.hpp into the corpus.
+variant() {
+    local opt="$1" suffix="$2" proto="$3"
+    local stem="${proto%.proto}"
+    protoc --plugin=protoc-gen-ppb="$plugin" --proto_path=testdata \
+           --ppb_opt="$opt" --ppb_out="$tmp" "$proto"
+    mv "$tmp/$stem.ppb.hpp" "$out/$stem.$suffix.ppb.hpp"
+}
+
 base "" ppbshadow3.proto
 base "" enumref3.proto
+base "" leanrep3.proto
+
+variant "mode=none" "none" leanrep3.proto
+variant "mode=full" "full" leanrep3.proto
 
 echo "regenerated goldens in $out"
