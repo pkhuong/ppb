@@ -1300,6 +1300,27 @@ def drop_warnings(model):
     return tuple(out)
 
 
+def required_downgrade_warnings(model):
+    """Return a warning for each proto2 `required` field.
+
+    PPB treats it as optional and does not enforce required-presence.
+    """
+    out = []
+    for m in model.messages:
+        if m.syntax != "proto2":
+            continue
+
+        for f in m.fields:
+            if f.label == _T.LABEL_REQUIRED:
+                out.append(
+                    f"{PLUGIN_NAME}: warning: {m.full_name}.{f.name}: "
+                    f"proto2 required field downgraded to optional; "
+                    f"required-presence is not enforced"
+                )
+
+    return tuple(out)
+
+
 def oneof_as_optional_warnings(model):
     """Return a warning for each real oneof expanded under oneof_as_optional.
 
@@ -1399,6 +1420,9 @@ def generate(request):
             sys.stderr.write(w + "\n")
 
         for w in drop_warnings(model):
+            sys.stderr.write(w + "\n")
+
+        for w in required_downgrade_warnings(model):
             sys.stderr.write(w + "\n")
 
         for w in oneof_as_optional_warnings(model):
