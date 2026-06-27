@@ -54,3 +54,21 @@ def test_standalone_matches_plugin_protocol(tmp_path):
     assert res.returncode == 0, res.stderr
     resp = plugin_pb2.CodeGeneratorResponse.FromString(res.stdout)
     assert resp.file and resp.file[0].name == "s.ppb.hpp"
+
+
+def test_emit_wkt_bundle_is_hermetic(tmp_path):
+    bundle = tmp_path / "wkt.ppb.hpp"
+    res = subprocess.run(
+        [sys.executable, str(PLUGIN), "--emit-wkt-bundle", str(bundle)],
+        capture_output=True,
+        text=True,
+        cwd=str(HERE.parent),
+    )
+    assert res.returncode == 0, res.stderr
+    text = bundle.read_text()
+    assert text.count("#pragma once") == 1
+    assert text.count("#include <ppb/ppb.hpp>") == 1
+    assert "// clang-format off" in text
+    assert "namespace ppb_gen::google::protobuf" in text
+    for name in ("Any", "Duration", "Empty", "FieldMask", "Timestamp", "BoolValue"):
+        assert name in text

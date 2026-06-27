@@ -44,13 +44,54 @@ _GEN_NS = "ppb_gen"
 # Well-known types live under this import path. We don't generate headers for
 # them (they're not in file_to_generate), so a generated `#include` and any
 # `::google::protobuf::Foo::schema` reference would fail. Reject up front.
-#
-# TODO: support WKTs.
 _WKT_DEP_PREFIX = "google/protobuf/"
 
 # A field whose message/enum type lives under this proto package references a
 # well-known type. --ppb_opt=drop_foreign_type_fields drops such fields.
 _WKT_TYPE_PREFIX = ".google.protobuf."
+
+# The trivial well-known types natively supported by protoc-gen-ppb.
+# Their schemas are prebuilt in <ppb/wkt.ppb.hpp> (generated with
+# --emit-wkt-bundle), so a field referencing one resolves like any
+# cross-file message and its import redirects to that single fused
+# header.
+#
+# Other WKTs, like struct/type/api/source_context/descriptor are
+# rejected.
+_WKT_SUPPORTED_FILES = frozenset(
+    {
+        "google/protobuf/any.proto",
+        "google/protobuf/duration.proto",
+        "google/protobuf/empty.proto",
+        "google/protobuf/field_mask.proto",
+        "google/protobuf/timestamp.proto",
+        "google/protobuf/wrappers.proto",
+    }
+)
+
+# Module import paths for the six supported WKT files' generated _pb2 modules,
+# keyed by proto file name.
+_WKT_PB2_MODULES = {
+    "google/protobuf/any.proto": "google.protobuf.any_pb2",
+    "google/protobuf/duration.proto": "google.protobuf.duration_pb2",
+    "google/protobuf/empty.proto": "google.protobuf.empty_pb2",
+    "google/protobuf/field_mask.proto": "google.protobuf.field_mask_pb2",
+    "google/protobuf/timestamp.proto": "google.protobuf.timestamp_pb2",
+    "google/protobuf/wrappers.proto": "google.protobuf.wrappers_pb2",
+}
+
+# Fixed alphabetical fusion order (the six files don't import
+# anything, so concatenation in any total order is valid; alphabetical
+# is stable).
+_WKT_BUNDLE_ORDER = (
+    "google/protobuf/any.proto",
+    "google/protobuf/duration.proto",
+    "google/protobuf/empty.proto",
+    "google/protobuf/field_mask.proto",
+    "google/protobuf/timestamp.proto",
+    "google/protobuf/wrappers.proto",
+)
+
 
 _T = descriptor_pb2.FieldDescriptorProto
 
@@ -635,8 +676,10 @@ def build_model(
     *,
     allow_oneof=False,
     skip_wkt=False,
+    files_to_generate=(),
     skip_unsupported_fields=False,
 ):
+    _to_gen = set(files_to_generate)
     supported_wkt_types = set()  # we don't support any WKT yet
     symbols = SymbolTable()
     messages = []
@@ -755,7 +798,15 @@ def build_model(
             walk_message(nested, full, syntax, source_file)
 
     for fp in proto_files:
-        if fp.name.startswith(_WKT_DEP_PREFIX):
+        # Skip only *unsupported* imported WKT files wholesale. Supported WKT
+        # files are walked so their messages enter the symbol table (fields
+        # referencing them resolve as cross-file refs). Never skip a file we
+        # were asked to generate (a user proto may live under google/protobuf/).
+        if (
+            fp.name.startswith(_WKT_DEP_PREFIX)
+            and fp.name not in _WKT_SUPPORTED_FILES
+            and fp.name not in _to_gen
+        ):
             continue
 
         syntax = _validate_syntax(fp)
@@ -1140,12 +1191,22 @@ def emit_file(
     detect_unknown,
     plan,
     skip_wkt=False,
+    files_to_generate=(),
 ):
     own = {m.full_name for m in model.messages if m.source_file == file_proto.name}
 
     out = ["#pragma once", "", "#include <ppb/ppb.hpp>", "", "// clang-format off"]
+    to_gen = set(files_to_generate)
+    wkt_redirected = False
     for dep in file_proto.dependency:
-        if dep.startswith(_WKT_DEP_PREFIX):
+        if dep.startswith(_WKT_DEP_PREFIX) and dep not in to_gen:
+            if dep in _WKT_SUPPORTED_FILES:
+                if not wkt_redirected:
+                    out.append("#include <ppb/wkt.ppb.hpp>")
+                    wkt_redirected = True
+
+                continue
+
             if skip_wkt:
                 continue
 
@@ -1411,6 +1472,7 @@ def generate(request):
             list(request.proto_file),
             allow_oneof=opts.oneof_as_optional,
             skip_wkt=opts.drop_foreign_type_fields,
+            files_to_generate=request.file_to_generate,
             skip_unsupported_fields=opts.drop_group_extension_fields,
         )
         for w in mangling_warnings(model):
@@ -1439,6 +1501,7 @@ def generate(request):
                 detect_unknown=detect,
                 plan=plan,
                 skip_wkt=opts.drop_foreign_type_fields,
+                files_to_generate=request.file_to_generate,
             )
             out = response.file.add()
             out.name = _header_name(name)
@@ -1480,6 +1543,16 @@ def _request_from_descriptor_set(path, files_to_generate, parameter):
     return request
 
 
+def _wkt_file_descriptor_proto(proto_name):
+    """Return the FileDescriptorProto for a supported WKT, from the Python runtime."""
+    import importlib
+
+    mod = importlib.import_module(_WKT_PB2_MODULES[proto_name])
+    fdp = descriptor_pb2.FileDescriptorProto()
+    mod.DESCRIPTOR.CopyToProto(fdp)
+    return fdp
+
+
 def _write_response(response, out_dir):
     """Write each response.file under out_dir (creating subdirs); 1 on error."""
     if response.error:
@@ -1495,16 +1568,70 @@ def _write_response(response, out_dir):
     return 0
 
 
+def _strip_generated_prologue(content):
+    """Drop a generated header's leading prologue and return the body.
+
+    The fused bundle emits one shared prologue instead of the per-header one.
+    """
+    lines = content.split("\n")
+    skip = {"#pragma once", "#include <ppb/ppb.hpp>", "// clang-format off", ""}
+    i = 0
+    while i < len(lines) and lines[i].strip() in skip:
+        i += 1
+
+    return "\n".join(lines[i:])
+
+
+def _emit_wkt_bundle(path):
+    import google.protobuf
+
+    request = plugin_pb2.CodeGeneratorRequest()
+    request.parameter = ""
+    for proto_name in _WKT_BUNDLE_ORDER:
+        request.proto_file.append(_wkt_file_descriptor_proto(proto_name))
+        request.file_to_generate.append(proto_name)
+
+    response = generate(request)
+    if response.error:
+        sys.stderr.write(f"{PLUGIN_NAME}: {response.error}\n")
+        return 1
+
+    by_name = {f.name: f.content for f in response.file}
+    bodies = [_strip_generated_prologue(by_name[_header_name(p)]) for p in _WKT_BUNDLE_ORDER]
+    # pyrefly: ignore[missing-attribute]  # absent from the stubs, present at runtime
+    banner = f"""\
+// Generated by protoc-gen-ppb --emit-wkt-bundle. DO NOT EDIT.
+// protobuf runtime: {google.protobuf.__version__}
+//
+// Fused schemas for the supported well-known types. none, lean, and full
+// are identical for these six files (the only repeated field,
+// FieldMask.paths, is a never-packed string), so one header serves all modes.
+"""
+    fused = (
+        "#pragma once\n\n"
+        "#include <ppb/ppb.hpp>\n\n" + banner + "\n// clang-format off\n" + "".join(bodies)
+    )
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    with open(path, "w") as fh:
+        fh.write(fused)
+
+    return 0
+
+
 def _run_standalone(argv):
     parser = argparse.ArgumentParser(prog=PLUGIN_NAME)
     parser.add_argument("--descriptor-set")
     parser.add_argument("--opt", default="")
     parser.add_argument("--out", default=".")
+    parser.add_argument("--emit-wkt-bundle")
     parser.add_argument("files", nargs="*")
     args = parser.parse_args(argv)
 
+    if args.emit_wkt_bundle is not None:
+        return _emit_wkt_bundle(args.emit_wkt_bundle)
+
     if not args.descriptor_set:
-        parser.error("--descriptor-set is required")
+        parser.error("--descriptor-set is required (or use --emit-wkt-bundle)")
 
     request = _request_from_descriptor_set(args.descriptor_set, args.files, args.opt)
     response = generate(request)
