@@ -33,11 +33,21 @@ variant() {
     mv "$tmp/$stem.ppb.hpp" "$out/$stem.$suffix.ppb.hpp"
 }
 
+# Default (mode=lean) schema headers.
+base "" nested2.proto
 base "" ppbshadow3.proto
+base "" empty3.proto
 base "" enumref3.proto
 base "" leanrep3.proto
 
+
+# Repeated-scalar/enum protos: none diverges from lean on the alt wire form,
+# full additionally detects unknowns.
 variant "mode=none" "none" leanrep3.proto
 variant "mode=full" "full" leanrep3.proto
+
+# Message-bearing protos: full adds detect_unknown_fields<> to every message.
+variant "mode=full" "full" nested2.proto
+variant "mode=full" "full" empty3.proto
 
 echo "regenerated goldens in $out"
