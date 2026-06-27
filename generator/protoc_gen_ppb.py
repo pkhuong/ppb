@@ -905,6 +905,43 @@ def compute_depths(model, *, opaque_fields):
     return {m.full_name: depth(m.full_name) for m in model.messages}
 
 
+def _field_handler_hint(field, *, f_name, symbols, opaque, syntax, detect_unknown):
+    """Return the ppb reader handler-factory call that matches this field.
+
+    Used as a `// hint` line comment before the first descriptor for each
+    field in an auto_schema<...> alias.
+    """
+    key = f"{f_name}::{cpp_ident(field.name)}"
+    repeated = field.label == _T.LABEL_REPEATED
+
+    if field.type == _T.TYPE_MESSAGE:
+        if opaque:
+            # Opaque back-edge: the descriptor is bytes<>, but refer to the cyclic
+            # target's schema so users know to decode the span recursively.
+            if repeated:
+                inner = symbols.message_schema(field.type_name)
+            else:
+                inner = symbols.message_merge_schema(field.type_name)
+        else:
+            # Mirror the exact inner alias the descriptor uses: merge_schema for
+            # singular message fields, schema for repeated.
+            inner = _message_inner_alias(
+                field,
+                symbols,
+                detect_unknown=detect_unknown,
+                repeated=repeated,
+            )
+        return f"ppb::on_submessage<{key}, {inner}>(...)"
+
+    if repeated:
+        if field.type in _SCALAR_BASE or field.type == _T.TYPE_ENUM:
+            if _field_is_packed(field, syntax):
+                return f"ppb::on_bulk<{key}>(range_fn, elem_fn)"
+        return f"ppb::on_each<{key}>(...)"
+
+    return f"ppb::on<{key}>(...)"
+
+
 def emit_enum(enum):
     short_name = cpp_ident(enum.full_name.rsplit(".", 1)[1])
     lines = [f"    enum class {short_name} : ::std::int32_t", "    {"]
@@ -987,7 +1024,15 @@ def emit_message(
             opaque=opaque,
             detect_unknown=detect_unknown,
         )
-        items.append(field_descs[0])
+        hint = _field_handler_hint(
+            f,
+            f_name=ids.f,
+            symbols=model.symbols,
+            opaque=opaque,
+            syntax=message.syntax,
+            detect_unknown=detect_unknown,
+        )
+        items.append(f"// {hint}\n        {field_descs[0]}")
         items.extend(field_descs[1:])
 
     if detect_unknown or not message.fields:
@@ -1028,7 +1073,15 @@ def emit_message(
             merge=True,
             detect_unknown=detect_unknown,
         )
-        merge_items.append(merge_descs[0])
+        hint = _field_handler_hint(
+            f,
+            f_name=ids.f,
+            symbols=model.symbols,
+            opaque=opaque,
+            syntax=message.syntax,
+            detect_unknown=detect_unknown,
+        )
+        merge_items.append(f"// {hint}\n        {merge_descs[0]}")
         merge_items.extend(merge_descs[1:])
 
     if detect_unknown or not message.fields:

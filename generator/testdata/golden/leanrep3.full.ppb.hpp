@@ -24,8 +24,10 @@ namespace ppb_gen::demo_lean::Rep
     constexpr ::std::size_t max_depth = 0;
 
     using schema = ::ppb::auto_schema<
+        // ppb::on_bulk<F::vals>(range_fn, elem_fn)
         ::ppb::packed_int32<F::vals>,
         ::ppb::int32<F::vals, ::ppb::field_semantics::always_lexn>,
+        // ppb::on_bulk<F::colors>(range_fn, elem_fn)
         ::ppb::packed_enumerated<F::colors, ::ppb_gen::demo_lean::Color>,
         ::ppb::enumerated<F::colors, ::ppb_gen::demo_lean::Color, ::ppb::field_semantics::always_lexn>,
         // ppb::on_unknown<>(...)

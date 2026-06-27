@@ -23,9 +23,11 @@ namespace ppb_gen::pkg::Inner
     constexpr ::std::size_t max_depth = 0;
 
     using schema = ::ppb::auto_schema<
+        // ppb::on<F::v>(...)
         ::ppb::proto3_int32<F::v>>;
 
     using merge_schema = ::ppb::auto_schema<
+        // ppb::on<F::v>(...)
         ::ppb::int32<F::v>>;
 }
 
@@ -42,9 +44,13 @@ namespace ppb_gen::pkg::HasOneof
     constexpr ::std::size_t max_depth = 1;
 
     using schema = ::ppb::auto_schema<
+        // ppb::on<F::num>(...)
         ::ppb::int32<F::num, ::ppb::field_semantics::always_lexn>,
+        // ppb::on_submessage<F::sub, ::ppb_gen::pkg::Inner::merge_schema>(...)
         ::ppb::message<F::sub, ::ppb_gen::pkg::Inner::merge_schema, ::ppb::field_semantics::always_lexn>,
+        // ppb::on<F::col>(...)
         ::ppb::enumerated<F::col, ::ppb_gen::pkg::Color, ::ppb::field_semantics::always_lexn>,
+        // ppb::on<F::text>(...)
         ::ppb::utf8string<F::text, ::ppb::field_semantics::always_lexn>>;
 
     using merge_schema = schema;
