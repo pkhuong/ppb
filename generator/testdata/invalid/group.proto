@@ -1,0 +1,7 @@
+syntax = "proto2";
+package demo;
+message Foo {
+    optional group G = 1 {
+        optional int32 a = 1;
+    }
+}

@@ -7,6 +7,13 @@ from tests.conftest import make_file_proto as file_with_message
 T = d.FieldDescriptorProto
 
 
+def test_reject_group_field():
+    m = d.DescriptorProto(name="Foo")
+    m.field.add(name="g", number=1, type=T.TYPE_GROUP, label=T.LABEL_OPTIONAL, type_name=".pkg.G")
+    with pytest.raises(gen.GenError, match="group"):
+        gen.build_model([file_with_message(m)])
+
+
 def test_reject_real_oneof_names_optin_flag():
     m = d.DescriptorProto(name="Foo")
     m.oneof_decl.add(name="choice")
@@ -48,6 +55,75 @@ def test_accept_proto3_optional_field_at_nonzero_position():
     fld.proto3_optional = True
     model = gen.build_model([file_with_message(m)])  # must not raise
     assert model.message(".pkg.Foo")
+
+
+def test_reject_extension_range():
+    m = d.DescriptorProto(name="Foo")
+    m.extension_range.add(start=100, end=200)
+    with pytest.raises(gen.GenError, match="extension"):
+        gen.build_model([file_with_message(m, syntax="proto2")])
+
+
+def test_parse_options_accepts_drop_group_extension_fields():
+    opts = gen.parse_options("mode=full,drop_group_extension_fields")
+    assert opts.drop_group_extension_fields is True
+
+
+def test_parse_options_drop_group_extension_fields_defaults_false():
+    opts = gen.parse_options("mode=full")
+    assert opts.drop_group_extension_fields is False
+
+
+def test_group_field_error_names_skip_flag():
+    m = d.DescriptorProto(name="Foo")
+    m.field.add(name="g", number=1, type=T.TYPE_GROUP, label=T.LABEL_OPTIONAL, type_name=".pkg.G")
+    with pytest.raises(gen.GenError, match="drop_group_extension_fields"):
+        gen.build_model([file_with_message(m)])
+
+
+def test_skip_unsupported_fields_drops_group_keeps_others():
+    m = d.DescriptorProto(name="Foo")
+    m.field.add(name="n", number=1, type=T.TYPE_INT32, label=T.LABEL_OPTIONAL)
+    m.field.add(name="g", number=2, type=T.TYPE_GROUP, label=T.LABEL_OPTIONAL, type_name=".pkg.G")
+    model = gen.build_model([file_with_message(m)], skip_unsupported_fields=True)
+    foo = model.message(".pkg.Foo")
+    assert [f.name for f in foo.fields] == ["n"]
+    assert any(df.name == "g" for df in foo.dropped_fields)
+
+
+def test_extension_range_default_rejects_naming_flag():
+    m = d.DescriptorProto(name="Foo")
+    m.field.add(name="n", number=1, type=T.TYPE_INT32, label=T.LABEL_OPTIONAL)
+    er = m.extension_range.add()
+    er.start = 120
+    er.end = 201  # protobuf end is exclusive
+    with pytest.raises(gen.GenError, match="drop_group_extension_fields"):
+        gen.build_model([file_with_message(m)])
+
+
+def test_skip_unsupported_fields_tolerates_extension_range():
+    m = d.DescriptorProto(name="Foo")
+    m.field.add(name="n", number=1, type=T.TYPE_INT32, label=T.LABEL_OPTIONAL)
+    er = m.extension_range.add()
+    er.start = 120
+    er.end = 201
+    model = gen.build_model([file_with_message(m)], skip_unsupported_fields=True)
+    foo = model.message(".pkg.Foo")
+    assert [f.name for f in foo.fields] == ["n"]
+    assert foo.ignored_extension_ranges == ((120, 200),)  # inclusive hi for display
+
+
+def test_extension_def_default_rejects_naming_skip_flag():
+    fp = d.FileDescriptorProto(name="a.proto", package="pkg", syntax="proto2")
+    other = fp.message_type.add(name="Other")
+    other.field.add(name="x", number=1, type=T.TYPE_INT32, label=T.LABEL_OPTIONAL)
+    foo = fp.message_type.add(name="Foo")
+    # extend Other { ... } nested inside Foo
+    foo.extension.add(
+        name="e", number=1000, type=T.TYPE_INT32, label=T.LABEL_OPTIONAL, extendee=".pkg.Other"
+    )
+    with pytest.raises(gen.GenError, match="drop_group_extension_fields"):
+        gen.build_model([fp])
 
 
 def test_reject_editions_via_edition_field():
@@ -150,3 +226,16 @@ def test_reject_oneof_index_out_of_range():
     m.field.add(name="a", number=1, type=T.TYPE_INT32, label=T.LABEL_OPTIONAL, oneof_index=2)
     with pytest.raises(gen.GenError, match="oneof index"):
         gen.build_model([file_with_message(m)], allow_oneof=True)
+
+
+def test_skip_unsupported_fields_records_extension_defs():
+    fp = d.FileDescriptorProto(name="a.proto", package="pkg", syntax="proto2")
+    other = fp.message_type.add(name="Other")
+    other.field.add(name="x", number=1, type=T.TYPE_INT32, label=T.LABEL_OPTIONAL)
+    foo = fp.message_type.add(name="Foo")
+    foo.extension.add(
+        name="e", number=1000, type=T.TYPE_INT32, label=T.LABEL_OPTIONAL, extendee=".pkg.Other"
+    )
+    model = gen.build_model([fp], skip_unsupported_fields=True)
+    foo_msg = model.message(".pkg.Foo")
+    assert foo_msg.ignored_extension_defs == (".pkg.Foo.e",)

@@ -1165,6 +1165,28 @@ def emit_file(
     return "\n".join(out) + "\n"
 
 
+def drop_warnings(model):
+    """Return human-readable warnings for dropped fields, extensions, and definitions.
+
+    Protoc surfaces them on stderr at generation time. The same drops are also
+    recorded as sidecar comments in the schema header.
+    """
+    out = []
+    for message in model.messages:
+        for df in message.dropped_fields:
+            out.append(f"{PLUGIN_NAME}: ppb-dropped: {df.full_name} ({df.reason})")
+
+        for lo, hi in message.ignored_extension_ranges:
+            out.append(
+                f"{PLUGIN_NAME}: ppb-extension-range-ignored: {lo}-{hi} (in {message.full_name})"
+            )
+
+        for full_name in message.ignored_extension_defs:
+            out.append(f"{PLUGIN_NAME}: ppb-extension-def-ignored: {full_name}")
+
+    return tuple(out)
+
+
 def oneof_as_optional_warnings(model):
     """Return a warning for each real oneof expanded under oneof_as_optional.
 
@@ -1257,6 +1279,9 @@ def generate(request):
             skip_wkt=opts.drop_foreign_type_fields,
             skip_unsupported_fields=opts.drop_group_extension_fields,
         )
+        for w in drop_warnings(model):
+            sys.stderr.write(w + "\n")
+
         for w in oneof_as_optional_warnings(model):
             sys.stderr.write(w + "\n")
 
