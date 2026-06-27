@@ -36,11 +36,17 @@ variant() {
 # Default (mode=lean) schema headers.
 base "" nested2.proto
 base "" ppbshadow3.proto
+base "opaque_cycles" stdshadow_rec3.proto
 base "" empty3.proto
 base "" maps3.proto
 base "" enumref3.proto
 base "" leanrep3.proto
 
+# Recursive graphs need opaque_cycles to cut back-edges.
+base "opaque_cycles" recursive3.proto
+base "opaque_cycles" pbrecursive.proto
+base "opaque_cycles" pbmrec.proto
+base "opaque_cycles" pbrrec.proto
 
 # Repeated-scalar/enum protos: none diverges from lean on the alt wire form,
 # full additionally detects unknowns.
@@ -51,5 +57,9 @@ variant "mode=full" "full" leanrep3.proto
 variant "mode=full" "full" nested2.proto
 variant "mode=full" "full" maps3.proto
 variant "mode=full" "full" empty3.proto
+variant "mode=full,opaque_cycles" "full" recursive3.proto
+variant "mode=full,opaque_cycles" "full" pbrecursive.proto
+variant "mode=full,opaque_cycles" "full" pbmrec.proto
+variant "mode=full,opaque_cycles" "full" pbrrec.proto
 
 echo "regenerated goldens in $out"

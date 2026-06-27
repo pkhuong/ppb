@@ -345,6 +345,18 @@ def map_field(
         return [f"::ppb::{name}<{key}>"]
 
     if field.type == _T.TYPE_MESSAGE:
+        if opaque:
+            if repeated:
+                return [f"::ppb::unpacked_bytes<{key}> /* recursive: opaque */"]
+
+            if _is_real_oneof_member(field):
+                return [f"::ppb::bytes<{key}, ::std::byte, {_ALWAYS_LEXN}> /* recursive: opaque */"]
+
+            # Opaque singular: occurrences merge into one child, so use singular semantics.
+            return [
+                f"::ppb::bytes<{key}, ::std::byte, ::ppb::field_semantics::singular> /* recursive: opaque */"
+            ]
+
         # The `merge` kwarg controls this message's own scalar/enum/string/bytes
         # semantics (see _message_inner_alias), not nested submessages.
         inner = _message_inner_alias(

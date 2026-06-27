@@ -1,0 +1,8 @@
+syntax = "proto3";
+
+package std;
+
+message Node {
+    int32 v = 1;
+    Node next = 2;
+}
