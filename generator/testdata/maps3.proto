@@ -1,0 +1,7 @@
+syntax = "proto3";
+package demo_map;
+
+message WithMap {
+  map<string, int32> counts = 1;
+  map<int64, string> names = 2;
+}
