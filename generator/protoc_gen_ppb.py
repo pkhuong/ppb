@@ -1127,6 +1127,24 @@ def emit_file(
     return "\n".join(out) + "\n"
 
 
+def oneof_as_optional_warnings(model):
+    """Return a warning for each real oneof expanded under oneof_as_optional.
+
+    The schema models each member independently, so oneof exclusivity is not
+    enforced.
+    """
+    out = []
+    for m in model.messages:
+        for name in m.real_oneof_names:
+            out.append(
+                f"{PLUGIN_NAME}: warning: {m.full_name}: "
+                f"oneof {name!r} expanded as optional fields; "
+                f"oneof exclusivity is not modelled"
+            )
+
+    return tuple(out)
+
+
 @dataclasses.dataclass(frozen=True)
 class Options:
     strict_repeated_encoding: bool
@@ -1200,6 +1218,9 @@ def generate(request):
             allow_oneof=opts.oneof_as_optional,
             skip_unsupported_fields=opts.drop_group_extension_fields,
         )
+        for w in oneof_as_optional_warnings(model):
+            sys.stderr.write(w + "\n")
+
         plan = plan_emission(model, opaque_recursion=opts.opaque_cycles)
         by_name = {fp.name: fp for fp in request.proto_file}
         for name in request.file_to_generate:

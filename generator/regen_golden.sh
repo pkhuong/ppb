@@ -51,6 +51,9 @@ base "opaque_cycles" pbrecursive.proto
 base "opaque_cycles" pbmrec.proto
 base "opaque_cycles" pbrrec.proto
 
+# Real oneof decoded as independent last_write_wins fields.
+base "oneof_as_optional" oneof3.proto
+
 # Repeated-scalar/enum protos: none diverges from lean on the alt wire form,
 # full additionally detects unknowns.
 variant "mode=none" "none" leanrep3.proto
@@ -64,5 +67,6 @@ variant "mode=full,opaque_cycles" "full" recursive3.proto
 variant "mode=full,opaque_cycles" "full" pbrecursive.proto
 variant "mode=full,opaque_cycles" "full" pbmrec.proto
 variant "mode=full,opaque_cycles" "full" pbrrec.proto
+variant "mode=full,oneof_as_optional" "full" oneof3.proto
 
 echo "regenerated goldens in $out"

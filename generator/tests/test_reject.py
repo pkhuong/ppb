@@ -7,6 +7,24 @@ from tests.conftest import make_file_proto as file_with_message
 T = d.FieldDescriptorProto
 
 
+def test_reject_real_oneof_names_optin_flag():
+    m = d.DescriptorProto(name="Foo")
+    m.oneof_decl.add(name="choice")
+    m.field.add(name="a", number=1, type=T.TYPE_INT32, label=T.LABEL_OPTIONAL, oneof_index=0)
+    m.field.add(name="b", number=2, type=T.TYPE_STRING, label=T.LABEL_OPTIONAL, oneof_index=0)
+    with pytest.raises(gen.GenError, match="oneof_as_optional"):
+        gen.build_model([file_with_message(m)])
+
+
+def test_oneof_as_optional_accepts_real_oneof():
+    m = d.DescriptorProto(name="Foo")
+    m.oneof_decl.add(name="choice")
+    m.field.add(name="a", number=1, type=T.TYPE_INT32, label=T.LABEL_OPTIONAL, oneof_index=0)
+    m.field.add(name="b", number=2, type=T.TYPE_STRING, label=T.LABEL_OPTIONAL, oneof_index=0)
+    model = gen.build_model([file_with_message(m)], allow_oneof=True)  # must not raise
+    assert model.message(".pkg.Foo")
+
+
 def test_accept_proto3_synthetic_optional_oneof():
     m = d.DescriptorProto(name="Foo")
     m.oneof_decl.add(name="_a")
