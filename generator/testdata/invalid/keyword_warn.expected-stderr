@@ -1,0 +1,1 @@
+protoc-gen-ppb: warning: .demo.Foo.int: C++ keyword 'int' emitted as 'int_'

@@ -1218,6 +1218,53 @@ def emit_file(
     return "\n".join(out) + "\n"
 
 
+def mangling_warnings(model):
+    """Return a tuple of warning strings for every identifier the generator had to mangle."""
+    out = []
+    seen_segments = set()
+
+    def note(context, name):
+        if cpp_ident(name) != name:
+            out.append(
+                f"{PLUGIN_NAME}: warning: {context}: C++ keyword {name!r} "
+                f"emitted as {cpp_ident(name)!r}"
+            )
+
+    def note_namespace(full_name):
+        # Every component of a proto qualified name becomes a C++
+        # namespace segment.  Warn on each distinct segment once, in
+        # first-seen order for determinism.
+        prefix = ""
+        for part in full_name.strip(".").split("."):
+            prefix = f"{prefix}.{part}"
+            if prefix not in seen_segments:
+                seen_segments.add(prefix)
+                note(prefix, part)
+
+    for m in model.messages:
+        note_namespace(m.full_name)
+
+    for e in model.file_enums:
+        note_namespace(e.full_name)
+
+    for m in model.messages:
+        for e in m.enums:
+            note_namespace(e.full_name)
+
+    for m in model.messages:
+        for f in m.fields:
+            note(f"{m.full_name}.{f.name}", f.name)
+        for e in m.enums:
+            for v in e.values:
+                note(f"{e.full_name}.{v.name}", v.name)
+
+    for e in model.file_enums:
+        for v in e.values:
+            note(f"{e.full_name}.{v.name}", v.name)
+
+    return tuple(out)
+
+
 def drop_warnings(model):
     """Return human-readable warnings for dropped fields, extensions, and definitions.
 
@@ -1332,6 +1379,9 @@ def generate(request):
             skip_wkt=opts.drop_foreign_type_fields,
             skip_unsupported_fields=opts.drop_group_extension_fields,
         )
+        for w in mangling_warnings(model):
+            sys.stderr.write(w + "\n")
+
         for w in drop_warnings(model):
             sys.stderr.write(w + "\n")
 
