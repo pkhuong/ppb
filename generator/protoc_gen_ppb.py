@@ -1265,6 +1265,19 @@ def mangling_warnings(model):
     return tuple(out)
 
 
+def empty_message_warnings(model):
+    """Return a tuple of warning strings, one per zero-field message."""
+    out = []
+    for m in model.messages:
+        if not m.fields:
+            out.append(
+                f"{PLUGIN_NAME}: warning: {m.full_name}: message has no fields; "
+                f"registering the unknown-field catch-all only (read via on_unknown<>)"
+            )
+
+    return tuple(out)
+
+
 def drop_warnings(model):
     """Return human-readable warnings for dropped fields, extensions, and definitions.
 
@@ -1380,6 +1393,9 @@ def generate(request):
             skip_unsupported_fields=opts.drop_group_extension_fields,
         )
         for w in mangling_warnings(model):
+            sys.stderr.write(w + "\n")
+
+        for w in empty_message_warnings(model):
             sys.stderr.write(w + "\n")
 
         for w in drop_warnings(model):

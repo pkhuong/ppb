@@ -41,6 +41,24 @@ def test_no_warnings_without_keywords():
     assert gen.mangling_warnings(gen.build_model([fp])) == ()
 
 
+def test_empty_message_warnings_one_per_empty_message():
+    empty = d.DescriptorProto(name="Empty")
+    fp = d.FileDescriptorProto(name="a.proto", package="pkg", syntax="proto3")
+    fp.message_type.append(empty)
+    warns = gen.empty_message_warnings(gen.build_model([fp]))
+    assert len(warns) == 1
+    assert "message has no fields" in warns[0]
+    assert ".pkg.Empty" in warns[0]
+
+
+def test_no_empty_message_warnings_when_all_have_fields():
+    foo = d.DescriptorProto(name="Foo")
+    foo.field.add(name="x", number=1, type=T.TYPE_INT32, label=T.LABEL_OPTIONAL)
+    fp = d.FileDescriptorProto(name="a.proto", package="pkg", syntax="proto3")
+    fp.message_type.append(foo)
+    assert gen.empty_message_warnings(gen.build_model([fp])) == ()
+
+
 def test_drop_warnings_lists_groups_and_extension_ranges():
     m = d.DescriptorProto(name="Foo")
     m.field.add(name="g", number=2, type=T.TYPE_GROUP, label=T.LABEL_OPTIONAL, type_name=".pkg.G")
