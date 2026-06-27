@@ -1,0 +1,11 @@
+syntax = "proto3";
+
+package a.b;
+
+message a {
+    int32 x = 1;
+}
+
+message Outer {
+    a ref = 1;
+}

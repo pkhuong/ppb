@@ -34,7 +34,10 @@ variant() {
 }
 
 # Default (mode=lean) schema headers.
+base "" keywords3.proto
 base "" nested2.proto
+base "" nsclash3.proto
+base "" stdshadow3.proto
 base "" ppbshadow3.proto
 base "opaque_cycles" stdshadow_rec3.proto
 base "" empty3.proto
