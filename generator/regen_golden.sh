@@ -40,6 +40,7 @@ base "" nsclash3.proto
 base "" stdshadow3.proto
 base "" ppbshadow3.proto
 base "opaque_cycles" stdshadow_rec3.proto
+base "mode=full" ppbwkt3.proto
 base "" empty3.proto
 base "" maps3.proto
 base "" enumref3.proto
@@ -79,6 +80,10 @@ variant "drop_foreign_type_fields" "drop_imports" foreigndrop2.proto
 protoc --plugin=protoc-gen-ppb="$plugin" --proto_path=testdata/invalid \
        --ppb_opt=drop_group_extension_fields --ppb_out="$tmp" group.proto
 mv "$tmp/group.ppb.hpp" "$out/groupdrop2.ppb.hpp"
+
+# WKT user proto: default (lean) + full variant.
+base "" wkt_user3.proto
+variant "mode=full" "full" wkt_user3.proto
 
 # Proto2 required-warning: exercises required-downgrade and default-value warnings.
 base "" reqwarn2.proto

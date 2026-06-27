@@ -56,6 +56,61 @@ def test_standalone_matches_plugin_protocol(tmp_path):
     assert resp.file and resp.file[0].name == "s.ppb.hpp"
 
 
+def test_missing_non_wkt_dep_reports_include_imports(tmp_path):
+    dep_user = _scalars_fp()
+    dep_user.dependency.append("other.proto")  # not in the set, not a WKT
+    ds = tmp_path / "set.pb"
+    ds.write_bytes(_descriptor_set(dep_user))
+    res = subprocess.run(
+        [
+            sys.executable,
+            str(PLUGIN),
+            "--descriptor-set",
+            str(ds),
+            "--out",
+            str(tmp_path / "o"),
+            "s.proto",
+        ],
+        capture_output=True,
+        text=True,
+        cwd=str(HERE.parent),
+    )
+    assert res.returncode != 0
+    assert "--include_imports" in res.stderr
+
+
+def test_wkt_descriptors_injected_when_missing(tmp_path):
+    m = d.DescriptorProto(name="E")
+    m.field.add(
+        name="at",
+        number=1,
+        type=T.TYPE_MESSAGE,
+        label=T.LABEL_OPTIONAL,
+        type_name=".google.protobuf.Timestamp",
+    )
+    fp = make_file_proto(m, name="e.proto", package="demo")
+    fp.dependency.append("google/protobuf/timestamp.proto")
+    ds = tmp_path / "set.pb"
+    ds.write_bytes(_descriptor_set(fp))
+    out = tmp_path / "o"
+    res = subprocess.run(
+        [
+            sys.executable,
+            str(PLUGIN),
+            "--descriptor-set",
+            str(ds),
+            "--out",
+            str(out),
+            "e.proto",
+        ],
+        capture_output=True,
+        text=True,
+        cwd=str(HERE.parent),
+    )
+    assert res.returncode == 0, res.stderr
+    assert "#include <ppb/wkt.ppb.hpp>" in (out / "e.ppb.hpp").read_text()
+
+
 def test_emit_wkt_bundle_is_hermetic(tmp_path):
     bundle = tmp_path / "wkt.ppb.hpp"
     res = subprocess.run(
