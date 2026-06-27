@@ -1,0 +1,18 @@
+syntax = "proto3";
+package xfile_base;
+
+// Imported by xfile_main3.proto; exercises cross-file references to a
+// file-scope enum, a message schema, and a message's nested enum.
+enum Shared {
+  S_UNSET = 0;
+  S_ON = 1;
+}
+
+message Leaf {
+  enum Kind {
+    K_NONE = 0;
+    K_A = 1;
+  }
+  int32 id = 1;
+  Kind kind = 2;
+}

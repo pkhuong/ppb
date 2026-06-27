@@ -41,6 +41,9 @@ base "" empty3.proto
 base "" maps3.proto
 base "" enumref3.proto
 base "" leanrep3.proto
+# Both files in one invocation: exercises generate()'s multi-file loop and the
+# global emission order spanning a file boundary.
+base "" xfile_base3.proto xfile_main3.proto
 
 # Recursive graphs need opaque_cycles to cut back-edges.
 base "opaque_cycles" recursive3.proto

@@ -1,0 +1,14 @@
+syntax = "proto3";
+package xfile_main;
+
+import "xfile_base3.proto";
+
+// References, across the file boundary: a message schema, a file-scope enum,
+// and a message's nested enum. `Leaf` lives in another file, so the global
+// emission order must place it (and its nested-enum definition) correctly even
+// though only this file's messages are emitted here.
+message Main {
+  xfile_base.Leaf leaf = 1;
+  xfile_base.Shared shared = 2;
+  xfile_base.Leaf.Kind kind = 3;
+}
