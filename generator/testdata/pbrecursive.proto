@@ -1,0 +1,7 @@
+syntax = "proto3";
+package demo_recp;
+
+message Node {
+  int32 value = 1;
+  Node next = 2;          // self-cycle; needs --ppb_opt=opaque_cycles
+}

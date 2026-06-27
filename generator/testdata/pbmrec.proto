@@ -1,0 +1,15 @@
+syntax = "proto3";
+package demo_mrec;
+
+// Mutual recursion: A references B and B references A.  One edge is cut as an
+// opaque back-edge under --ppb_opt=opaque_cycles and emitted as an opaque byte
+// span.
+message A {
+  int32 av = 1;
+  B b = 2;
+}
+
+message B {
+  int32 bv = 1;
+  A a = 2;
+}

@@ -1,0 +1,10 @@
+syntax = "proto3";
+package demo_rrec;
+
+// Repeated self-recursion: a node holds a repeated list of itself.  The
+// children edge is a cut back-edge under --ppb_opt=opaque_cycles, emitted as a
+// repeated opaque byte span.
+message Tree {
+  int32 value = 1;
+  repeated Tree children = 2;
+}

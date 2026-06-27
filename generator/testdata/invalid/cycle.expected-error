@@ -1,0 +1,1 @@
+demo.Node.next forms a cycle; recursive schemas are unsupported. Use --ppb_opt=opaque_cycles to emit it as an opaque byte span.
