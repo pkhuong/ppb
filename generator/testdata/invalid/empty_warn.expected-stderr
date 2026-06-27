@@ -1,0 +1,1 @@
+protoc-gen-ppb: warning: .demo.Empty: message has no fields; registering the unknown-field catch-all only (read via on_unknown<>)
