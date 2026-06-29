@@ -27,6 +27,11 @@ code generation fits your workflow
 when MSVC support matters.  See `README.md` for the decode-side
 comparison and encoding recommendations.
 
+If `.proto` files are your source of truth but you want this wrapper
+anyway, see [generator/README.md](generator/README.md): `protoc-gen-ppb`
+is a `protoc` plugin that generates the `ppb::schema` declarations shown
+below directly from `.proto` files.
+
 The wrapper itself never calls `operator new`: the reader's per-field
 state is a `std::array<ppb_field, N>`, handler tuples live on the
 stack, and submessage recursion uses stack frames.  When *your* code
