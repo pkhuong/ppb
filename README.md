@@ -51,6 +51,11 @@ underlying library works.  N.B., only the C side (ppb.h, ppb.c) is
 formally verified. The C++ side is merely unit tested and fuzzed (it's
 a lot of code, but almost all of it is consteval)
 
+For `.proto`-driven workflows, see
+[generator/README.md](generator/README.md): `protoc-gen-ppb` is a
+`protoc` plugin that generates the C++ wrapper's `ppb::schema` headers
+straight from your `.proto` files.
+
 This library is designed for applications that require predictable
 performance more than maximum average throughput, and reliability,
 even in the face of adversarially corrupt "protobuf" bytes, even at
