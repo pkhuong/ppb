@@ -1,0 +1,35 @@
+[project]
+name = "protoc-gen-ppb-reflect"
+version = "0.1.0"
+description = "protoc plugin emitting the libprotobuf reflection sink (differential testing)"
+requires-python = ">=3.9"
+dependencies = ["protobuf>=4"]
+
+[project.scripts]
+protoc-gen-ppb-reflect = "protoc_gen_ppb_reflect:main"
+
+[dependency-groups]
+dev = ["ruff>=0.6", "pyrefly>=0.16"]
+
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+extend-select = [
+    "D200",   # One-line docstring should fit on one line
+    "D205",   # Blank line between summary and description
+    "D209",   # Multi-line closing quotes on separate line
+    "D400",   # First line should end with a period
+    "D401",   # First line should be in imperative mood
+]
+
+[tool.pyrefly]
+project-includes = ["protoc_gen_ppb_reflect.py"]
+search-path = ["../generator"]
+
+[tool.setuptools]
+py-modules = ["protoc_gen_ppb_reflect"]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
