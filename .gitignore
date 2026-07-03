@@ -74,6 +74,7 @@
 !/differential/
 !/differential/Makefile
 !/differential/.gitignore
+!/differential/*.py
 !/differential/*.toml
 !/differential/*.hpp
 !/differential/*.cc
