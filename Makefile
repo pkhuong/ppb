@@ -30,7 +30,7 @@ clean:
 	rm -rf build/ wp.csv eva.csv
 
 format:
-	clang-format-20 -i include/ppb/ppb.h include/ppb/*.hpp src/*.[ch] examples/*.c tests/*.c tests/*.cc fuzz/*.c fuzz/*.cc generator/testdata/*.cc
+	clang-format-20 -i include/ppb/ppb.h include/ppb/*.hpp src/*.[ch] examples/*.c tests/*.c tests/*.cc fuzz/*.c fuzz/*.cc generator/testdata/*.cc differential/*.cc differential/*.hpp
 
 unit: build/test_ppb
 	build/test_ppb
