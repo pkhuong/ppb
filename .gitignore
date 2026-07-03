@@ -75,6 +75,8 @@
 !/differential/Makefile
 !/differential/.gitignore
 !/differential/*.toml
+!/differential/*.hpp
+!/differential/*.cc
 !/differential/uv.lock
 
 generator/.pytest_cache/
