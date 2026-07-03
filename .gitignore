@@ -71,6 +71,12 @@
 !/generator/testdata/invalid/*.expected-error
 !/generator/testdata/invalid/*.expected-stderr
 
+!/differential/
+!/differential/Makefile
+!/differential/.gitignore
+!/differential/*.toml
+!/differential/uv.lock
+
 generator/.pytest_cache/
 generator/.ruff_cache/
 generator/__pycache__/
