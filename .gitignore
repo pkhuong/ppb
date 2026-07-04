@@ -80,6 +80,7 @@
 !/differential/*.cc
 !/differential/uv.lock
 !/differential/fuzz/
+!/differential/fuzz/*.cc
 !/differential/fuzz/*.hpp
 
 generator/.pytest_cache/

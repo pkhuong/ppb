@@ -77,6 +77,44 @@ reflection-random-diff: reflection-diff
 	  echo "reflection-random-diff: libprotobuf not found, skipping"; \
 	fi
 
-# Deterministic subset run in CI (no Docker, no time-bounded fuzzing).
-ci: test-utf8 reflection-diff reflection-random-diff
+# Reflection-sink byte-fuzzer: pipe raw fuzzer bytes through both libprotobuf's
+# parser and the PPB sink, and assert they agree on validity and on parsed value.
+FUZZ_CXX ?= clang++
+FUZZ_SAN := -g -fsanitize=address,undefined -fno-sanitize-recover=all
+FUZZ_SINK_PROTOS := pbscalars3.proto pbcomposite3.proto
+FUZZ_SINK_OPT := mode=full,always_dispatch_strings
+REFL_STRICT := $(BUILD)/refl_strict
+FUZZ_CORPUS := $(BUILD)/fuzz_corpus
+
+$(BUILD)/fuzz_sink_bytes: fuzz/fuzz_sink_bytes.cc fuzz/reflection_differential.hpp $(PPB_ROOT)/build/libppb.a
+	@mkdir -p $(REFL_STRICT)
+	protoc --proto_path=$(PROTODATA) --cpp_out=$(REFL_STRICT) $(FUZZ_SINK_PROTOS)
+	protoc $(PROD_PLUGIN) --proto_path=$(PROTODATA) --ppb_opt=$(FUZZ_SINK_OPT) --ppb_out=$(REFL_STRICT) $(FUZZ_SINK_PROTOS)
+	protoc $(REFLECT_PLUGIN) --proto_path=$(PROTODATA) --ppb_opt=$(FUZZ_SINK_OPT) --ppb_out=$(REFL_STRICT) $(FUZZ_SINK_PROTOS)
+	$(FUZZ_CXX) $(CXXFLAGS) $(FUZZ_SAN) -fsanitize=fuzzer -I. -Ifuzz -I$(REFL_STRICT) -I$(PPB_ROOT)/include $(PB_CFLAGS) \
+	  -o $@ fuzz/fuzz_sink_bytes.cc $(REFL_STRICT)/pbscalars3.pb.cc $(REFL_STRICT)/pbcomposite3.pb.cc \
+	  $(PPB_ROOT)/build/libppb.a $(PB_LIBS)
+
+.PHONY: fuzz-sink-build fuzz-sink-replay fuzz-sink
+fuzz-sink-build:
+	@if pkg-config --exists protobuf 2>/dev/null; then $(MAKE) $(BUILD)/fuzz_sink_bytes; \
+	else echo "fuzz-sink-build: libprotobuf not found, skipping"; fi
+
+# Deterministic replay: generate the seed corpus with the shared, stdlib-only
+# gen_corpus.py, then execute every seed once and exit.
+fuzz-sink-replay: fuzz-sink-build
+	@if [ -x $(BUILD)/fuzz_sink_bytes ]; then \
+	  python3 $(PPB_ROOT)/fuzz/gen_corpus.py $(FUZZ_CORPUS) >/dev/null; \
+	  ./$(BUILD)/fuzz_sink_bytes -runs=0 $(FUZZ_CORPUS) && echo "fuzz_sink_bytes replay OK"; \
+	else \
+	  echo "fuzz-sink-replay: skipped"; \
+	fi
+
+# Local-only actual fuzzing (NOT in ci).
+FUZZ_TIME ?= 60
+fuzz-sink: fuzz-sink-build
+	@python3 $(PPB_ROOT)/fuzz/gen_corpus.py $(FUZZ_CORPUS) >/dev/null
+	./$(BUILD)/fuzz_sink_bytes -max_total_time=$(FUZZ_TIME) -max_len=1024 $(FUZZ_CORPUS)
+
+ci: test-utf8 reflection-diff reflection-random-diff fuzz-sink-replay
 	@echo "differential ci: deterministic subset OK"
