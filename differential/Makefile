@@ -62,6 +62,21 @@ reflection-diff: $(PPB_ROOT)/build/libppb.a
 	  echo "reflection-diff: libprotobuf not found, skipping"; \
 	fi
 
+.PHONY: reflection-random-diff
+# Randomized round-trip differential over the reflection sink.  Fixed per-message
+# seeds keep it deterministic for CI.  Reuses the headers reflection-diff put in
+# $(GENDIR).
+reflection-random-diff: reflection-diff
+	@if pkg-config --exists protobuf 2>/dev/null; then \
+	  set -e; \
+	  $(CXX) $(CXXFLAGS) -I. -I$(GENDIR) -I$(PPB_ROOT)/include $(PB_CFLAGS) -o $(BUILD)/reflection_random_diff \
+	    $(REFLECT_PB_CC) \
+	    reflection_random_diff.cc $(PPB_ROOT)/build/libppb.a $(PB_LIBS); \
+	  ./$(BUILD)/reflection_random_diff && echo "libprotobuf_random_diff OK"; \
+	else \
+	  echo "reflection-random-diff: libprotobuf not found, skipping"; \
+	fi
+
 # Deterministic subset run in CI (no Docker, no time-bounded fuzzing).
-ci: test-utf8 reflection-diff
+ci: test-utf8 reflection-diff reflection-random-diff
 	@echo "differential ci: deterministic subset OK"
