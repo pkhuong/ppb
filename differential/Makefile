@@ -116,5 +116,6 @@ fuzz-sink: fuzz-sink-build
 	@python3 $(PPB_ROOT)/fuzz/gen_corpus.py $(FUZZ_CORPUS) >/dev/null
 	./$(BUILD)/fuzz_sink_bytes -max_total_time=$(FUZZ_TIME) -max_len=1024 $(FUZZ_CORPUS)
 
+# Deterministic subset run in CI (no Docker, no time-bounded fuzzing).
 ci: test-utf8 reflection-diff reflection-random-diff fuzz-sink-replay
 	@echo "differential ci: deterministic subset OK"
