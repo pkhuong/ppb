@@ -79,6 +79,8 @@
 !/differential/*.hpp
 !/differential/*.cc
 !/differential/uv.lock
+!/differential/fuzz/
+!/differential/fuzz/*.hpp
 
 generator/.pytest_cache/
 generator/.ruff_cache/
