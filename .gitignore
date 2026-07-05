@@ -79,6 +79,7 @@
 !/differential/*.toml
 !/differential/*.hpp
 !/differential/*.cc
+!/differential/*.txt
 !/differential/*.sh
 !/differential/uv.lock
 !/differential/fuzz/

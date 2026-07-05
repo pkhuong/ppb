@@ -1,0 +1,17 @@
+# Conformance failures the PPB testee is expected to produce, for
+# protobuf_test_messages.proto3.TestAllTypesProto3 under PROTOBUF output.
+# Every entry is explained by a documented gap in GAPS.md; the
+# tags below map to the "Residual divergences" section there.
+#
+# Regenerate/triage: `make -C differential protobuf-prefix` once (builds the
+# pinned protobuf + conformance_test_runner into a sibling ../protobuf/_install),
+# then `make -C differential conformance`; or `make -C differential
+# conformance-docker` to run the whole suite in the image with no host checkout
+# at all. A `CONFORMANCE_RUNNER=<path>` override still works against your own
+# runner.
+#
+# All unlisted failures are unexpected, but could be triggered by new test cases.
+#
+# The proto3 full suite currently has no expected failures: every
+# PROTOBUF-output Required test that the testee runs passes. (JSON and
+# TEXT_FORMAT requests are skipped; see GAPS.md.)
