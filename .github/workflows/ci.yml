@@ -76,6 +76,30 @@ jobs:
       - name: generator test
         run: make CC=gcc CXX=g++ generator_test
 
+  differential:
+    runs-on: ubuntu-slim
+    steps:
+      - name: install deps
+        run: |
+          sudo apt-get update && sudo apt-get install -y g++ clang libclang-rt-dev cmake git pkg-config protobuf-compiler libprotobuf-dev python3
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - name: checkout
+        uses: actions/checkout@v4
+      # libprotobuf-mutator is not apt-packaged; build it from the same tag
+      # as differential/Makefile, against the apt libprotobuf.
+      - name: build libprotobuf-mutator (pinned tag)
+        run: |
+          git clone --depth 1 --branch v1.5 https://github.com/google/libprotobuf-mutator /tmp/lpm
+          cmake -S /tmp/lpm -B /tmp/lpm/build -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ -DCMAKE_CXX_STANDARD=17 \
+            -DLIB_PROTO_MUTATOR_DOWNLOAD_PROTOBUF=OFF -DLIB_PROTO_MUTATOR_TESTING=OFF -DLIB_PROTO_MUTATOR_EXAMPLES=OFF
+          cmake --build /tmp/lpm/build -j"$(nproc)"
+          sudo cmake --install /tmp/lpm/build
+      # Deterministic subset only, no conformance runner (don't try docker-in-docker).
+      - name: run differential (no Docker, no runner, no time-bounded fuzzing)
+        run: make CC=gcc CXX=g++ differential-ci
+
   s390x-be:
     runs-on: ubuntu-latest
     steps:
