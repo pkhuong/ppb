@@ -29,6 +29,11 @@ def test_renamed_flags():
     assert o.detect_unknown
 
 
+def test_always_dispatch_strings_flag():
+    assert parse_options("always_dispatch_strings").always_dispatch_strings is True
+    assert parse_options("").always_dispatch_strings is False
+
+
 def test_unknown_mode_rejected():
     with pytest.raises(GenError):
         parse_options("mode=bogus")

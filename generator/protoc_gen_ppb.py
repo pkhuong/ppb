@@ -231,6 +231,7 @@ def _is_proto3_zero_default(field, syntax):
 
 _ALWAYS_LEXN = "::ppb::field_semantics::always_lexn"
 _ERROR = "::ppb::field_semantics::error"
+_SINGULAR = "::ppb::field_semantics::singular"
 
 
 def _is_real_oneof_member(field):
@@ -355,19 +356,31 @@ def map_field(
     opaque=False,
     merge=False,
     detect_unknown=False,
+    always_dispatch_strings=False,
 ):
     """Return the list of ppb descriptor strings for one proto field.
 
-    `syntax` is "proto2" or "proto3"; `strict_repeated_encoding` controls
-    whether unexpected repeated wire encodings fail closed (True) or force
-    a wire-order lexn pass (False); `f_name` is the resolved field-key enum
-    name; `symbols` resolves message/enum type names to fully-qualified C++
-    names.  When `opaque` is True and the field is TYPE_MESSAGE, the field
+    `syntax` is "proto2" or "proto3";
+
+    `strict_repeated_encoding` controls whether unexpected repeated wire encodings
+    fail closed (True) or force a wire-order lexn pass (False);
+
+    `f_name` is the resolved field-key enum name;
+
+    `symbols` resolves message/enum type names to fully-qualified C++ names.
+
+    When `opaque` is True and the field is TYPE_MESSAGE, the field
     is rendered as a raw byte span (ppb::bytes / ppb::unpacked_bytes)
     instead of a typed message descriptor; used for back-edges under
-    --ppb_opt=opaque_cycles.  When `merge` is True (used for generating
-    merge_schema), proto3 implicit-presence scalars use the non-proto3_
-    (last_write_wins) variant so absent scalars are NOT dispatched.
+    --ppb_opt=opaque_cycles.
+
+    When `merge` is True (used for generating merge_schema), proto3 implicit-
+    presence scalars use the non-proto3_ (last_write_wins) variant so absent
+    scalars are NOT dispatched.
+
+    When `always_dispatch_strings` is True, singular string fields use
+    field_semantics::singular instead of (proto3_)utf8string, so every string
+    occurrence is dispatched to the handler (used for string validation).
     """
     key = f"{f_name}::{cpp_ident(field.name)}"
     repeated = field.label == _T.LABEL_REPEATED
@@ -404,6 +417,9 @@ def map_field(
 
         if _is_real_oneof_member(field):
             return [f"::ppb::utf8string<{key}, {_ALWAYS_LEXN}>"]
+
+        if always_dispatch_strings:
+            return [f"::ppb::utf8string<{key}, {_SINGULAR}>"]
 
         use_proto3 = _is_proto3_zero_default(field, syntax) and not merge
         name = "proto3_utf8string" if use_proto3 else "utf8string"
@@ -1099,6 +1115,7 @@ def emit_message(
     detect_unknown,
     opaque_fields,
     depths=None,
+    always_dispatch_strings=False,
 ):
     """Emit the C++ namespace block for one message.
 
@@ -1139,6 +1156,7 @@ def emit_message(
             symbols=model.symbols,
             opaque=opaque,
             detect_unknown=detect_unknown,
+            always_dispatch_strings=always_dispatch_strings,
         )
         hint = _field_handler_hint(
             f,
@@ -1188,6 +1206,7 @@ def emit_message(
             opaque=opaque,
             merge=True,
             detect_unknown=detect_unknown,
+            always_dispatch_strings=always_dispatch_strings,
         )
         hint = _field_handler_hint(
             f,
@@ -1257,6 +1276,7 @@ def emit_file(
     plan,
     skip_wkt=False,
     files_to_generate=(),
+    always_dispatch_strings=False,
 ):
     own = {m.full_name for m in model.messages if m.source_file == file_proto.name}
 
@@ -1371,6 +1391,7 @@ def emit_file(
                     detect_unknown=detect_unknown,
                     opaque_fields=plan.opaque_fields,
                     depths=plan.depths,
+                    always_dispatch_strings=always_dispatch_strings,
                 )
             )
 
@@ -1529,6 +1550,7 @@ class Options:
     oneof_as_optional: bool
     drop_foreign_type_fields: bool
     drop_group_extension_fields: bool
+    always_dispatch_strings: bool
 
 
 def parse_options(parameter):
@@ -1538,6 +1560,7 @@ def parse_options(parameter):
     oneof_as_optional = False
     drop_foreign_type_fields = False
     drop_group_extension_fields = False
+    always_dispatch_strings = False
     for raw in parameter.split(","):
         opt = raw.strip()
         if not opt:
@@ -1567,6 +1590,8 @@ def parse_options(parameter):
             drop_foreign_type_fields = True
         elif opt == "drop_group_extension_fields":
             drop_group_extension_fields = True
+        elif opt == "always_dispatch_strings":
+            always_dispatch_strings = True
         elif opt == "strict_repeated_encoding":
             strict_repeated_encoding = True
         else:
@@ -1579,6 +1604,7 @@ def parse_options(parameter):
         oneof_as_optional=oneof_as_optional,
         drop_foreign_type_fields=drop_foreign_type_fields,
         drop_group_extension_fields=drop_group_extension_fields,
+        always_dispatch_strings=always_dispatch_strings,
     )
 
 
@@ -1626,6 +1652,7 @@ def generate(request):
                 plan=plan,
                 skip_wkt=opts.drop_foreign_type_fields,
                 files_to_generate=request.file_to_generate,
+                always_dispatch_strings=opts.always_dispatch_strings,
             )
             out = response.file.add()
             out.name = _header_name(name)

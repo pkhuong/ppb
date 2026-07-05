@@ -6,13 +6,21 @@ from tests.conftest import FakeSymbols, make_field as field
 T = d.FieldDescriptorProto
 
 
-def descr(f, syntax, strict_repeated_encoding=True, f_name="F", symbols=None):
+def descr(
+    f,
+    syntax,
+    strict_repeated_encoding=True,
+    f_name="F",
+    symbols=None,
+    always_dispatch_strings=False,
+):
     return gen.map_field(
         f,
         syntax=syntax,
         strict_repeated_encoding=strict_repeated_encoding,
         f_name=f_name,
         symbols=symbols or FakeSymbols(),
+        always_dispatch_strings=always_dispatch_strings,
     )
 
 
@@ -128,3 +136,26 @@ def test_repeated_message_uses_normal_schema():
         f, syntax="proto2", strict_repeated_encoding=True, f_name="F", symbols=FakeSymbols()
     )
     assert result == ["::ppb::unpacked_message<F::m, ::pkg::Bar::schema>"]
+
+
+def test_always_dispatch_strings_forces_singular_on_strings():
+    f = field("s", 3, T.TYPE_STRING)
+    assert descr(f, "proto3", always_dispatch_strings=True) == [
+        "::ppb::utf8string<F::s, ::ppb::field_semantics::singular>"
+    ]
+    # same for proto2
+    assert descr(f, "proto2", always_dispatch_strings=True) == [
+        "::ppb::utf8string<F::s, ::ppb::field_semantics::singular>"
+    ]
+
+
+def test_always_dispatch_strings_leaves_repeated_untouched():
+    rep = field("s", 3, T.TYPE_STRING, label=T.LABEL_REPEATED)
+    assert descr(rep, "proto3", always_dispatch_strings=True) == [
+        "::ppb::unpacked_utf8string<F::s>"
+    ]
+
+
+def test_always_dispatch_strings_off_keeps_default():
+    assert descr(field("s", 3, T.TYPE_STRING), "proto3") == ["::ppb::proto3_utf8string<F::s>"]
+    assert descr(field("s", 3, T.TYPE_STRING), "proto2") == ["::ppb::utf8string<F::s>"]

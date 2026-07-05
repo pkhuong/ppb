@@ -41,6 +41,7 @@ options are standalone booleans (off by default unless noted).
 | `oneof_as_optional` | off | **Lossy, opt-in.** Decode each member of a real (user-declared) oneof as an independent `last_write_wins` field, losing oneof exclusivity at the schema level. Without this flag, any oneof is rejected with a diagnostic. |
 | `drop_foreign_type_fields` | off | **Lossy, opt-in.** Drop any field whose type comes from a well-known-type import (`google/protobuf/*`) that PPB does not support. Dropped fields are listed as `ppb-dropped:` comments at the top of the generated header and are not decoded. Without this flag, fields referencing unsupported well-known types are rejected with a diagnostic. |
 | `drop_group_extension_fields` | off | **Lossy, opt-in.** Drop field declarations whose wire type or feature is not supported by PPB (currently: proto2 `group` fields and proto2 extension ranges/definitions). Dropped group fields are listed as `ppb-dropped:` comments; extension ranges and definitions are logged as generator warnings and ignored. Without this flag the generator rejects unsupported declarations with a diagnostic. |
+| `always_dispatch_strings` | off | Dispatch every singular `string` field to its handler. Gives users one callback per value (useful for validation). |
 
 To compare wire policies, generate into separate directories and diff:
 
