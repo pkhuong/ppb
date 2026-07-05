@@ -74,14 +74,18 @@
 !/differential/
 !/differential/Makefile
 !/differential/.gitignore
+!/differential/Dockerfile
 !/differential/*.py
 !/differential/*.toml
 !/differential/*.hpp
 !/differential/*.cc
+!/differential/*.sh
 !/differential/uv.lock
 !/differential/fuzz/
 !/differential/fuzz/*.cc
 !/differential/fuzz/*.hpp
+!/differential/fuzz/*.proto
+!/differential/fuzz/*.sh
 
 generator/.pytest_cache/
 generator/.ruff_cache/
