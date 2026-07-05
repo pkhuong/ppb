@@ -80,6 +80,7 @@
 !/differential/*.hpp
 !/differential/*.cc
 !/differential/*.txt
+!/differential/*.md
 !/differential/*.sh
 !/differential/uv.lock
 !/differential/fuzz/
