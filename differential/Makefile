@@ -11,7 +11,14 @@ PROTOBUF_REF ?= v35.0
 
 .PHONY: help ci clean lib
 help:
-	@echo "differential targets: reflection-diff, fuzz-sink-replay, structured-replay, conformance*, ci"
+	@echo "Runnable targets (see README.md):"
+	@echo "  ci                                     deterministic subset run in CI"
+	@echo "  reflection-diff / reflection-random-diff  round-trip differentials"
+	@echo "  fuzz-sink-replay / structured-replay   deterministic corpus replay"
+	@echo "  fuzz-sink / fuzz-structured            local time-bounded fuzzing"
+	@echo "  conformance{,-proto2,-lean}            protobuf conformance suites"
+	@echo "  conformance-docker                     conformance in a pinned image"
+	@echo "  protobuf-prefix / image                one-time setup"
 
 # Build the PPB static library at the repo root.
 lib:
@@ -137,14 +144,12 @@ image:
 	  $(DOCKER) build --platform=$(DOCKER_PLATFORM) --build-arg LPM_TAG=$(LPM_TAG) --build-arg PROTOBUF_REF=$(PROTOBUF_REF) -t $(IMAGE_TAG) -f Dockerfile $(PPB_ROOT)
 
 # LPM (libprotobuf-mutator) is used from the system install by default, but a
-# sibling checkout built to $(LPM_PREFIX) overrides it when present -- so the
-# structured fuzzers run on the host without a system-wide install, symmetric to
-# the protobuf sibling layout.  The chosen source is logged.
+# sibling checkout built to $(LPM_PREFIX) overrides it when present.
 LPM_DIR ?= $(PPB_ROOT)/../libprotobuf-mutator
 LPM_PREFIX ?= $(LPM_DIR)/_install
 
 # Native deterministic replay.  Prefer a sibling LPM build, else the system
-# install, else a clean skip (CI builds LPM system-wide, so it runs there).
+# install, else a clean skip (CI builds LPM system-wide, so it's active there).
 structured-replay:
 	@if pkg-config --exists protobuf 2>/dev/null && [ -f $(LPM_PREFIX)/lib/libprotobuf-mutator.a ]; then \
 	  echo "structured-replay: using sibling LPM at $(abspath $(LPM_PREFIX))"; \
@@ -158,10 +163,123 @@ structured-replay:
 	  echo "structured-replay: libprotobuf-mutator not present (no sibling $(LPM_PREFIX), no system install), skipping (use 'make -C differential image' + fuzz-structured)"; \
 	fi
 
-# Local-only actual fuzzing through the image (NOT in ci).
+# randomized fuzzing through the image (NOT in ci).
 fuzz-structured: image
 	$(DOCKER) run --rm --platform=$(DOCKER_PLATFORM) -v "$(abspath $(PPB_ROOT)):/src:rw,Z" -w /src \
 	  -e MAX_TOTAL_TIME=$(STRUCTURED_FUZZ_SECONDS) $(IMAGE_TAG)
+
+# Runs the whole conformance suite inside a container.
+#
+# Host and in-image runs share the build/ tree; remember to `make clean`.
+.PHONY: conformance-docker
+conformance-docker: image
+	$(DOCKER) run --rm --platform=$(DOCKER_PLATFORM) -v "$(abspath $(PPB_ROOT)):/work/ppb:rw,Z" -w /work/ppb \
+	  $(IMAGE_TAG) \
+	  make -C differential conformance conformance-proto2 conformance-lean
+
+# Runs the proto3/proto2/lean conformance suites against the reflection sink,
+# in a reproducible image.
+#
+# Use `make conformance-docker` for a simple entry point.
+PROTOBUF_DIR ?= $(PPB_ROOT)/../protobuf
+PROTOBUF_PREFIX ?= $(PROTOBUF_DIR)/_install
+PROTOBUF_SRC ?= $(PROTOBUF_DIR)/src
+CONFORMANCE_PROTO_DIR ?= $(PROTOBUF_DIR)/conformance
+PROTOC ?= $(PROTOBUF_PREFIX)/bin/protoc
+CONFORMANCE_RUNNER ?= $(PROTOBUF_PREFIX)/bin/conformance_test_runner
+PROTOBUF_LIBDIR := $(abspath $(PROTOBUF_PREFIX))/lib:$(abspath $(PROTOBUF_PREFIX))/lib64
+
+CONF_PKGCONF := PKG_CONFIG_PATH="$(abspath $(PROTOBUF_PREFIX))/lib/pkgconfig:$(abspath $(PROTOBUF_PREFIX))/lib64/pkgconfig"
+CONF_PB_CFLAGS = $$($(CONF_PKGCONF) pkg-config --cflags protobuf)
+CONF_PB_LIBS = $$($(CONF_PKGCONF) pkg-config --libs protobuf) -Wl,-rpath,$(PROTOBUF_LIBDIR)
+
+# The full schema inlines every packed/unpacked descriptor of the whole
+# closure into one parse_into; on x86-64 the result is so large that it
+# needs -mcmodel=large.
+CONF_MCMODEL := $(if $(filter x86_64,$(shell uname -m)),-mcmodel=large)
+CONFORMANCE_CXXFLAGS := -std=c++20 -O2 $(CONF_MCMODEL)
+CONF_GEN := $(BUILD)/conf_gen
+CONF_GEN_PROTO2 := $(BUILD)/conf_gen_proto2
+CONF_GEN_LEAN := $(BUILD)/conf_gen_lean
+CONF_INC := -I. -I$(PPB_ROOT)/include
+
+# The --ppb_opt string for each conformance testing suite
+CONF_OPT := mode=full,opaque_cycles,oneof_as_optional,drop_foreign_type_fields,always_dispatch_strings
+CONF_OPT_PROTO2 := mode=full,opaque_cycles,oneof_as_optional,drop_group_extension_fields
+CONF_OPT_LEAN := mode=lean,opaque_cycles,oneof_as_optional,drop_foreign_type_fields,always_dispatch_strings
+
+have_conformance = [ -x "$(PROTOC)" ] && \
+	[ -f $(PROTOBUF_SRC)/google/protobuf/test_messages_proto3.proto ]
+
+.PHONY: protobuf-prefix
+protobuf-prefix:
+	sh setup_protobuf.sh $(PROTOBUF_DIR) $(PROTOBUF_PREFIX)
+
+.PHONY: conformance conformance-proto2 conformance-lean
+
+# proto3 full: both wire forms + always-on unknown-field
+# retention; singular strings routed through the UTF-8-validating sink setter
+# via the production always_dispatch_strings hook.
+conformance: $(PPB_ROOT)/build/libppb.a
+	@if $(have_conformance); then \
+	  set -e; mkdir -p $(CONF_GEN); \
+	  $(PROTOC) $(PROD_PLUGIN) --proto_path=$(PROTOBUF_SRC) --ppb_opt=$(CONF_OPT) --ppb_out=$(CONF_GEN) google/protobuf/test_messages_proto3.proto; \
+	  $(PROTOC) $(REFLECT_PLUGIN) --proto_path=$(PROTOBUF_SRC) --ppb_opt=$(CONF_OPT) --ppb_out=$(CONF_GEN) google/protobuf/test_messages_proto3.proto; \
+	  $(PROTOC) --proto_path=$(PROTOBUF_SRC) --cpp_out=$(CONF_GEN) google/protobuf/test_messages_proto3.proto; \
+	  $(PROTOC) --proto_path=$(dir $(CONFORMANCE_PROTO_DIR)) --cpp_out=$(CONF_GEN) conformance/conformance.proto; \
+	  $(CXX) $(CONFORMANCE_CXXFLAGS) $(CONF_INC) -I$(CONF_GEN) $(CONF_PB_CFLAGS) -o $(BUILD)/conformance_testee \
+	    conformance_testee.cc $(CONF_GEN)/google/protobuf/test_messages_proto3.pb.cc $(CONF_GEN)/conformance/conformance.pb.cc \
+	    $(PPB_ROOT)/build/libppb.a $(CONF_PB_LIBS); \
+	  if [ -x "$(CONFORMANCE_RUNNER)" ]; then \
+	    LD_LIBRARY_PATH="$(PROTOBUF_LIBDIR)" $(CONFORMANCE_RUNNER) --enforce_recommended --failure_list failure_list_proto3.txt $(BUILD)/conformance_testee; \
+	  else \
+	    echo "conformance_testee built; set CONFORMANCE_RUNNER=<path> to run the suite"; \
+	  fi; \
+	else \
+	  echo "conformance: protobuf prefix not built; run 'make -C differential protobuf-prefix' (or 'make conformance-docker'), skipping"; \
+	fi
+
+# proto2: same full sink; drops group/extension fields.
+conformance-proto2: $(PPB_ROOT)/build/libppb.a
+	@if $(have_conformance); then \
+	  set -e; mkdir -p $(CONF_GEN_PROTO2); \
+	  $(PROTOC) $(PROD_PLUGIN) --proto_path=$(PROTOBUF_SRC) --ppb_opt=$(CONF_OPT_PROTO2) --ppb_out=$(CONF_GEN_PROTO2) google/protobuf/test_messages_proto2.proto; \
+	  $(PROTOC) $(REFLECT_PLUGIN) --proto_path=$(PROTOBUF_SRC) --ppb_opt=$(CONF_OPT_PROTO2) --ppb_out=$(CONF_GEN_PROTO2) google/protobuf/test_messages_proto2.proto; \
+	  $(PROTOC) --proto_path=$(PROTOBUF_SRC) --cpp_out=$(CONF_GEN_PROTO2) google/protobuf/test_messages_proto2.proto; \
+	  $(PROTOC) --proto_path=$(dir $(CONFORMANCE_PROTO_DIR)) --cpp_out=$(CONF_GEN_PROTO2) conformance/conformance.proto; \
+	  $(CXX) -std=c++20 -O2 $(CONF_MCMODEL) -I$(CONF_GEN_PROTO2) $(CONF_PB_CFLAGS) -c $(CONF_GEN_PROTO2)/google/protobuf/test_messages_proto2.pb.cc -o $(CONF_GEN_PROTO2)/tm2.o; \
+	  $(CXX) $(CONFORMANCE_CXXFLAGS) $(CONF_INC) -I$(CONF_GEN_PROTO2) $(CONF_PB_CFLAGS) -c conformance_testee_proto2.cc -o $(CONF_GEN_PROTO2)/testee.o; \
+	  $(CXX) -std=c++20 -O2 $(CONF_MCMODEL) -I$(CONF_GEN_PROTO2) $(CONF_PB_CFLAGS) -c $(CONF_GEN_PROTO2)/conformance/conformance.pb.cc -o $(CONF_GEN_PROTO2)/conf.o; \
+	  $(CXX) $(CONF_MCMODEL) -o $(BUILD)/conformance_testee_proto2 $(CONF_GEN_PROTO2)/testee.o $(CONF_GEN_PROTO2)/tm2.o $(CONF_GEN_PROTO2)/conf.o $(PPB_ROOT)/build/libppb.a $(CONF_PB_LIBS); \
+	  if [ -x "$(CONFORMANCE_RUNNER)" ]; then \
+	    LD_LIBRARY_PATH="$(PROTOBUF_LIBDIR)" $(CONFORMANCE_RUNNER) --failure_list failure_list_proto2.txt $(BUILD)/conformance_testee_proto2; \
+	  else \
+	    echo "conformance_testee_proto2 built; set CONFORMANCE_RUNNER=<path> to run the suite"; \
+	  fi; \
+	else \
+	  echo "conformance-proto2: protobuf prefix not built; run 'make -C differential protobuf-prefix' (or 'make conformance-docker'), skipping"; \
+	fi
+
+# proto3 lean: both wire forms emitted, the non-canonical one marked
+# field_semantics::error (rejected at parse); no unknown-field retention.
+conformance-lean: $(PPB_ROOT)/build/libppb.a
+	@if $(have_conformance); then \
+	  set -e; mkdir -p $(CONF_GEN_LEAN); \
+	  $(PROTOC) $(PROD_PLUGIN) --proto_path=$(PROTOBUF_SRC) --ppb_opt=$(CONF_OPT_LEAN) --ppb_out=$(CONF_GEN_LEAN) google/protobuf/test_messages_proto3.proto; \
+	  $(PROTOC) $(REFLECT_PLUGIN) --proto_path=$(PROTOBUF_SRC) --ppb_opt=$(CONF_OPT_LEAN) --ppb_out=$(CONF_GEN_LEAN) google/protobuf/test_messages_proto3.proto; \
+	  $(PROTOC) --proto_path=$(PROTOBUF_SRC) --cpp_out=$(CONF_GEN_LEAN) google/protobuf/test_messages_proto3.proto; \
+	  $(PROTOC) --proto_path=$(dir $(CONFORMANCE_PROTO_DIR)) --cpp_out=$(CONF_GEN_LEAN) conformance/conformance.proto; \
+	  $(CXX) $(CONFORMANCE_CXXFLAGS) $(CONF_INC) -I$(CONF_GEN_LEAN) $(CONF_PB_CFLAGS) -o $(BUILD)/conformance_testee_lean \
+	    conformance_testee.cc $(CONF_GEN_LEAN)/google/protobuf/test_messages_proto3.pb.cc $(CONF_GEN_LEAN)/conformance/conformance.pb.cc \
+	    $(PPB_ROOT)/build/libppb.a $(CONF_PB_LIBS); \
+	  if [ -x "$(CONFORMANCE_RUNNER)" ]; then \
+	    LD_LIBRARY_PATH="$(PROTOBUF_LIBDIR)" $(CONFORMANCE_RUNNER) --enforce_recommended --failure_list failure_list_proto3_lean.txt $(BUILD)/conformance_testee_lean; \
+	  else \
+	    echo "conformance_testee_lean built; set CONFORMANCE_RUNNER=<path> to run the suite"; \
+	  fi; \
+	else \
+	  echo "conformance-lean: protobuf prefix not built; run 'make -C differential protobuf-prefix' (or 'make conformance-docker'), skipping"; \
+	fi
 
 # Deterministic subset run in CI (no Docker, no time-bounded fuzzing).
 ci: test-utf8 reflection-diff reflection-random-diff fuzz-sink-replay structured-replay

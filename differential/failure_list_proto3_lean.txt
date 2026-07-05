@@ -1,0 +1,85 @@
+# Conformance failures the PPB lean testee is expected to produce, for
+# protobuf_test_messages.proto3.TestAllTypesProto3 under PROTOBUF output.
+# Every entry is explained by a documented gap in GAPS.md; the
+# tags below map to the "Residual divergences" section there.
+#
+# Regenerate/triage: `make -C differential protobuf-prefix` once (builds the
+# pinned protobuf + conformance_test_runner into a sibling ../protobuf/_install),
+# then `make -C differential conformance-lean`; or `make -C differential
+# conformance-docker` to run the whole suite in the image with no host checkout
+# at all. A `CONFORMANCE_RUNNER=<path>` override still works against your own
+# runner.
+#
+# All unlisted failures are unexpected, but could be triggered by new test cases.
+
+# --- (merge) merge tests, rejected in lean for their unpacked repeated scalars ---
+Required.Proto3.ProtobufInput.RepeatedScalarMessageMerge.ProtobufOutput
+Required.Proto3.ProtobufInput.ValidDataMap.STRING.MESSAGE.MergeValue.ProtobufOutput
+
+# --- (unknown-retention) unknown fields not retained in lean mode ---
+Required.Proto3.ProtobufInput.UnknownOrdering.ProtobufOutput
+Required.Proto3.ProtobufInput.UnknownVarint.ProtobufOutput
+
+# --- (field-number-range) out-of-range field number not rejected ---
+Required.Proto3.ProtobufInput.BadTag_FieldNumberTooHigh
+Required.Proto3.ProtobufInput.BadTag_FieldNumberSlightlyTooHigh
+
+# --- (packing) non-canonical wire encoding for repeated fields, rejected in lean ---
+Required.Proto3.ProtobufInput.ValidDataRepeated.BOOL.UnpackedInput.ProtobufOutput
+Required.Proto3.ProtobufInput.ValidDataRepeated.DOUBLE.UnpackedInput.ProtobufOutput
+Required.Proto3.ProtobufInput.ValidDataRepeated.ENUM.UnpackedInput.ProtobufOutput
+Required.Proto3.ProtobufInput.ValidDataRepeated.FIXED32.UnpackedInput.ProtobufOutput
+Required.Proto3.ProtobufInput.ValidDataRepeated.FIXED64.UnpackedInput.ProtobufOutput
+Required.Proto3.ProtobufInput.ValidDataRepeated.FLOAT.UnpackedInput.ProtobufOutput
+Required.Proto3.ProtobufInput.ValidDataRepeated.INT32.UnpackedInput.ProtobufOutput
+Required.Proto3.ProtobufInput.ValidDataRepeated.INT64.UnpackedInput.ProtobufOutput
+Required.Proto3.ProtobufInput.ValidDataRepeated.SFIXED32.UnpackedInput.ProtobufOutput
+Required.Proto3.ProtobufInput.ValidDataRepeated.SFIXED64.UnpackedInput.ProtobufOutput
+Required.Proto3.ProtobufInput.ValidDataRepeated.SINT32.UnpackedInput.ProtobufOutput
+Required.Proto3.ProtobufInput.ValidDataRepeated.SINT64.UnpackedInput.ProtobufOutput
+Required.Proto3.ProtobufInput.ValidDataRepeated.UINT32.UnpackedInput.ProtobufOutput
+Required.Proto3.ProtobufInput.ValidDataRepeated.UINT64.UnpackedInput.ProtobufOutput
+
+# --- (packing, Recommended) cross-encoding repeated inputs (--enforce_recommended) ---
+Recommended.Proto3.ProtobufInput.ValidDataRepeated.BOOL.PackedInput.UnpackedOutput.ProtobufOutput
+Recommended.Proto3.ProtobufInput.ValidDataRepeated.BOOL.UnpackedInput.DefaultOutput.ProtobufOutput
+Recommended.Proto3.ProtobufInput.ValidDataRepeated.BOOL.UnpackedInput.PackedOutput.ProtobufOutput
+Recommended.Proto3.ProtobufInput.ValidDataRepeated.DOUBLE.PackedInput.UnpackedOutput.ProtobufOutput
+Recommended.Proto3.ProtobufInput.ValidDataRepeated.DOUBLE.UnpackedInput.DefaultOutput.ProtobufOutput
+Recommended.Proto3.ProtobufInput.ValidDataRepeated.DOUBLE.UnpackedInput.PackedOutput.ProtobufOutput
+Recommended.Proto3.ProtobufInput.ValidDataRepeated.ENUM.PackedInput.UnpackedOutput.ProtobufOutput
+Recommended.Proto3.ProtobufInput.ValidDataRepeated.ENUM.UnpackedInput.DefaultOutput.ProtobufOutput
+Recommended.Proto3.ProtobufInput.ValidDataRepeated.ENUM.UnpackedInput.PackedOutput.ProtobufOutput
+Recommended.Proto3.ProtobufInput.ValidDataRepeated.FIXED32.PackedInput.UnpackedOutput.ProtobufOutput
+Recommended.Proto3.ProtobufInput.ValidDataRepeated.FIXED32.UnpackedInput.DefaultOutput.ProtobufOutput
+Recommended.Proto3.ProtobufInput.ValidDataRepeated.FIXED32.UnpackedInput.PackedOutput.ProtobufOutput
+Recommended.Proto3.ProtobufInput.ValidDataRepeated.FIXED64.PackedInput.UnpackedOutput.ProtobufOutput
+Recommended.Proto3.ProtobufInput.ValidDataRepeated.FIXED64.UnpackedInput.DefaultOutput.ProtobufOutput
+Recommended.Proto3.ProtobufInput.ValidDataRepeated.FIXED64.UnpackedInput.PackedOutput.ProtobufOutput
+Recommended.Proto3.ProtobufInput.ValidDataRepeated.FLOAT.PackedInput.UnpackedOutput.ProtobufOutput
+Recommended.Proto3.ProtobufInput.ValidDataRepeated.FLOAT.UnpackedInput.DefaultOutput.ProtobufOutput
+Recommended.Proto3.ProtobufInput.ValidDataRepeated.FLOAT.UnpackedInput.PackedOutput.ProtobufOutput
+Recommended.Proto3.ProtobufInput.ValidDataRepeated.INT32.PackedInput.UnpackedOutput.ProtobufOutput
+Recommended.Proto3.ProtobufInput.ValidDataRepeated.INT32.UnpackedInput.DefaultOutput.ProtobufOutput
+Recommended.Proto3.ProtobufInput.ValidDataRepeated.INT32.UnpackedInput.PackedOutput.ProtobufOutput
+Recommended.Proto3.ProtobufInput.ValidDataRepeated.INT64.PackedInput.UnpackedOutput.ProtobufOutput
+Recommended.Proto3.ProtobufInput.ValidDataRepeated.INT64.UnpackedInput.DefaultOutput.ProtobufOutput
+Recommended.Proto3.ProtobufInput.ValidDataRepeated.INT64.UnpackedInput.PackedOutput.ProtobufOutput
+Recommended.Proto3.ProtobufInput.ValidDataRepeated.SFIXED32.PackedInput.UnpackedOutput.ProtobufOutput
+Recommended.Proto3.ProtobufInput.ValidDataRepeated.SFIXED32.UnpackedInput.DefaultOutput.ProtobufOutput
+Recommended.Proto3.ProtobufInput.ValidDataRepeated.SFIXED32.UnpackedInput.PackedOutput.ProtobufOutput
+Recommended.Proto3.ProtobufInput.ValidDataRepeated.SFIXED64.PackedInput.UnpackedOutput.ProtobufOutput
+Recommended.Proto3.ProtobufInput.ValidDataRepeated.SFIXED64.UnpackedInput.DefaultOutput.ProtobufOutput
+Recommended.Proto3.ProtobufInput.ValidDataRepeated.SFIXED64.UnpackedInput.PackedOutput.ProtobufOutput
+Recommended.Proto3.ProtobufInput.ValidDataRepeated.SINT32.PackedInput.UnpackedOutput.ProtobufOutput
+Recommended.Proto3.ProtobufInput.ValidDataRepeated.SINT32.UnpackedInput.DefaultOutput.ProtobufOutput
+Recommended.Proto3.ProtobufInput.ValidDataRepeated.SINT32.UnpackedInput.PackedOutput.ProtobufOutput
+Recommended.Proto3.ProtobufInput.ValidDataRepeated.SINT64.PackedInput.UnpackedOutput.ProtobufOutput
+Recommended.Proto3.ProtobufInput.ValidDataRepeated.SINT64.UnpackedInput.DefaultOutput.ProtobufOutput
+Recommended.Proto3.ProtobufInput.ValidDataRepeated.SINT64.UnpackedInput.PackedOutput.ProtobufOutput
+Recommended.Proto3.ProtobufInput.ValidDataRepeated.UINT32.PackedInput.UnpackedOutput.ProtobufOutput
+Recommended.Proto3.ProtobufInput.ValidDataRepeated.UINT32.UnpackedInput.DefaultOutput.ProtobufOutput
+Recommended.Proto3.ProtobufInput.ValidDataRepeated.UINT32.UnpackedInput.PackedOutput.ProtobufOutput
+Recommended.Proto3.ProtobufInput.ValidDataRepeated.UINT64.PackedInput.UnpackedOutput.ProtobufOutput
+Recommended.Proto3.ProtobufInput.ValidDataRepeated.UINT64.UnpackedInput.DefaultOutput.ProtobufOutput
+Recommended.Proto3.ProtobufInput.ValidDataRepeated.UINT64.UnpackedInput.PackedOutput.ProtobufOutput
