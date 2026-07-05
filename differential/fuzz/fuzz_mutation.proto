@@ -1,0 +1,27 @@
+syntax = "proto3";
+
+// Wrapper messages for the structured+byte corruption fuzzer
+// (fuzz_sink_mutate.cc): libprotobuf-mutator generates a valid typed target
+// plus a list of byte-ops, which the harness applies to the serialized target
+// before the differential oracle runs.  "mutation" here is libprotobuf-mutator's
+// own term; the byte-op engine it drives is the corruption engine.
+
+import "pbscalars3.proto";
+import "pbcomposite3.proto";
+
+package ppb_mut;
+
+message MutOp {
+  enum Kind {
+    CHANGE = 0;
+    INSERT = 1;
+    DELETE = 2;
+  }
+  Kind kind = 1;
+  uint32 position = 2;
+  uint32 value = 3;
+}
+
+message ScalarsCase  { demo_pb.Scalars     msg = 1; repeated MutOp ops = 2; }
+message MapsCase     { demo_comp3.Maps     msg = 1; repeated MutOp ops = 2; }
+message RepeatedCase { demo_comp3.Repeated msg = 1; repeated MutOp ops = 2; }

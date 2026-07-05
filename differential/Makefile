@@ -6,6 +6,8 @@ BUILD := build
 
 CXX ?= g++
 CXXFLAGS ?= -std=c++20 -O2 -Wall -Wextra
+LPM_TAG ?= v1.5
+PROTOBUF_REF ?= v35.0
 
 .PHONY: help ci clean lib
 help:
@@ -83,16 +85,16 @@ FUZZ_CXX ?= clang++
 FUZZ_SAN := -g -fsanitize=address,undefined -fno-sanitize-recover=all
 FUZZ_SINK_PROTOS := pbscalars3.proto pbcomposite3.proto
 FUZZ_SINK_OPT := mode=full,always_dispatch_strings
-REFL_STRICT := $(BUILD)/refl_strict
+REFL_FULL := $(BUILD)/refl_full
 FUZZ_CORPUS := $(BUILD)/fuzz_corpus
 
 $(BUILD)/fuzz_sink_bytes: fuzz/fuzz_sink_bytes.cc fuzz/reflection_differential.hpp $(PPB_ROOT)/build/libppb.a
-	@mkdir -p $(REFL_STRICT)
-	protoc --proto_path=$(PROTODATA) --cpp_out=$(REFL_STRICT) $(FUZZ_SINK_PROTOS)
-	protoc $(PROD_PLUGIN) --proto_path=$(PROTODATA) --ppb_opt=$(FUZZ_SINK_OPT) --ppb_out=$(REFL_STRICT) $(FUZZ_SINK_PROTOS)
-	protoc $(REFLECT_PLUGIN) --proto_path=$(PROTODATA) --ppb_opt=$(FUZZ_SINK_OPT) --ppb_out=$(REFL_STRICT) $(FUZZ_SINK_PROTOS)
-	$(FUZZ_CXX) $(CXXFLAGS) $(FUZZ_SAN) -fsanitize=fuzzer -I. -Ifuzz -I$(REFL_STRICT) -I$(PPB_ROOT)/include $(PB_CFLAGS) \
-	  -o $@ fuzz/fuzz_sink_bytes.cc $(REFL_STRICT)/pbscalars3.pb.cc $(REFL_STRICT)/pbcomposite3.pb.cc \
+	@mkdir -p $(REFL_FULL)
+	protoc --proto_path=$(PROTODATA) --cpp_out=$(REFL_FULL) $(FUZZ_SINK_PROTOS)
+	protoc $(PROD_PLUGIN) --proto_path=$(PROTODATA) --ppb_opt=$(FUZZ_SINK_OPT) --ppb_out=$(REFL_FULL) $(FUZZ_SINK_PROTOS)
+	protoc $(REFLECT_PLUGIN) --proto_path=$(PROTODATA) --ppb_opt=$(FUZZ_SINK_OPT) --ppb_out=$(REFL_FULL) $(FUZZ_SINK_PROTOS)
+	$(FUZZ_CXX) $(CXXFLAGS) $(FUZZ_SAN) -fsanitize=fuzzer -I. -Ifuzz -I$(REFL_FULL) -I$(PPB_ROOT)/include $(PB_CFLAGS) \
+	  -o $@ fuzz/fuzz_sink_bytes.cc $(REFL_FULL)/pbscalars3.pb.cc $(REFL_FULL)/pbcomposite3.pb.cc \
 	  $(PPB_ROOT)/build/libppb.a $(PB_LIBS)
 
 .PHONY: fuzz-sink-build fuzz-sink-replay fuzz-sink
@@ -116,6 +118,51 @@ fuzz-sink: fuzz-sink-build
 	@python3 $(PPB_ROOT)/fuzz/gen_corpus.py $(FUZZ_CORPUS) >/dev/null
 	./$(BUILD)/fuzz_sink_bytes -max_total_time=$(FUZZ_TIME) -max_len=1024 $(FUZZ_CORPUS)
 
+# LPM structure-aware fuzzers (fuzz_sink_structured / fuzz_sink_mutate).
+# libprotobuf-mutator is not apt-installable, so time-bounded fuzzing runs through the
+# pinned Docker image; CI (which builds LPM natively) gets a deterministic
+# corpus-replay via structured-replay.  See differential/fuzz/build_and_run.sh.
+DOCKER ?= docker
+IMAGE_TAG ?= ppb-differential
+STRUCTURED_FUZZ_SECONDS ?= 60
+
+# Build/run the image for the host architecture (arm64 on arm64, amd64 on
+# x86-64).  Some docker/podman setups otherwise resolve a foreign variant of
+# the base image and run it under qemu.
+DOCKER_PLATFORM ?= linux/$(shell uname -m | sed -e 's/aarch64/arm64/' -e 's/x86_64/amd64/')
+
+.PHONY: image structured-replay fuzz-structured
+image:
+	$(DOCKER) image inspect $(IMAGE_TAG) >/dev/null 2>&1 || \
+	  $(DOCKER) build --platform=$(DOCKER_PLATFORM) --build-arg LPM_TAG=$(LPM_TAG) --build-arg PROTOBUF_REF=$(PROTOBUF_REF) -t $(IMAGE_TAG) -f Dockerfile $(PPB_ROOT)
+
+# LPM (libprotobuf-mutator) is used from the system install by default, but a
+# sibling checkout built to $(LPM_PREFIX) overrides it when present -- so the
+# structured fuzzers run on the host without a system-wide install, symmetric to
+# the protobuf sibling layout.  The chosen source is logged.
+LPM_DIR ?= $(PPB_ROOT)/../libprotobuf-mutator
+LPM_PREFIX ?= $(LPM_DIR)/_install
+
+# Native deterministic replay.  Prefer a sibling LPM build, else the system
+# install, else a clean skip (CI builds LPM system-wide, so it runs there).
+structured-replay:
+	@if pkg-config --exists protobuf 2>/dev/null && [ -f $(LPM_PREFIX)/lib/libprotobuf-mutator.a ]; then \
+	  echo "structured-replay: using sibling LPM at $(abspath $(LPM_PREFIX))"; \
+	  REPLAY=1 LPM_INCLUDE="$(abspath $(LPM_PREFIX))/include/libprotobuf-mutator" LPM_LIBDIR="$(abspath $(LPM_PREFIX))/lib" \
+	    sh fuzz/build_and_run.sh && echo "structured replay OK"; \
+	elif pkg-config --exists protobuf 2>/dev/null && \
+	    { [ -f /usr/local/lib/libprotobuf-mutator.a ] || [ -f /usr/lib/libprotobuf-mutator.a ]; }; then \
+	  echo "structured-replay: using system LPM"; \
+	  REPLAY=1 sh fuzz/build_and_run.sh && echo "structured replay OK"; \
+	else \
+	  echo "structured-replay: libprotobuf-mutator not present (no sibling $(LPM_PREFIX), no system install), skipping (use 'make -C differential image' + fuzz-structured)"; \
+	fi
+
+# Local-only actual fuzzing through the image (NOT in ci).
+fuzz-structured: image
+	$(DOCKER) run --rm --platform=$(DOCKER_PLATFORM) -v "$(abspath $(PPB_ROOT)):/src:rw,Z" -w /src \
+	  -e MAX_TOTAL_TIME=$(STRUCTURED_FUZZ_SECONDS) $(IMAGE_TAG)
+
 # Deterministic subset run in CI (no Docker, no time-bounded fuzzing).
-ci: test-utf8 reflection-diff reflection-random-diff fuzz-sink-replay
+ci: test-utf8 reflection-diff reflection-random-diff fuzz-sink-replay structured-replay
 	@echo "differential ci: deterministic subset OK"

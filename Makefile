@@ -20,7 +20,7 @@ SHARED_OBJS := $(SHARED_C_OBJS)
 
 PROTOSCOPE ?= protoscope
 
-.PHONY: all clean format unit unit_cpp test regen_test fuzz fuzz-corpus compile_fail analyze-clang analyze-gcc tysan fuzz_cpp fuzz_cpp_msan fuzz_cpp_tysan sweep sweep_cpp sweep-seeds generator_test FORCE
+.PHONY: all clean format unit unit_cpp test regen_test fuzz fuzz-corpus compile_fail analyze-clang analyze-gcc tysan fuzz_cpp fuzz_cpp_msan fuzz_cpp_tysan sweep sweep_cpp sweep-seeds generator_test differential-ci differential-image FORCE
 
 all: build/libppb.a build/libppb.so build/picoscope build/ubench
 
@@ -241,3 +241,9 @@ generator_test:
 
 FORCE:
 .SECONDARY:  # don't rm "temporary" (like our .o) output files at the end
+
+differential-ci:
+	$(MAKE) -C differential ci
+
+differential-image:
+	$(MAKE) -C differential image
