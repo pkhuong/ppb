@@ -1,0 +1,13 @@
+syntax = "proto2";
+package enumclosed;
+
+enum Color {
+  UNSET = 0;
+  RED = 1;
+}
+
+message Foo {
+  optional Color c = 1;
+  repeated Color cs = 2;
+  optional int32 x = 3;
+}

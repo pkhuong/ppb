@@ -172,6 +172,70 @@ def test_default_value_warns_stderr(capsys):
     assert "Foo.x: proto2" not in err
 
 
+def _enum_field_model(syntax="proto2"):
+    fp = d.FileDescriptorProto(name="a.proto", package="pkg", syntax=syntax)
+    color = fp.enum_type.add(name="Color")
+    color.value.add(name="UNSET", number=0)
+    color.value.add(name="RED", number=1)
+    m = fp.message_type.add(name="Foo")
+    m.field.add(
+        name="c", number=1, type=T.TYPE_ENUM, type_name=".pkg.Color", label=T.LABEL_OPTIONAL
+    )
+    m.field.add(
+        name="cs", number=2, type=T.TYPE_ENUM, type_name=".pkg.Color", label=T.LABEL_REPEATED
+    )
+    m.field.add(name="x", number=3, type=T.TYPE_INT32, label=T.LABEL_OPTIONAL)
+    return gen.build_model([fp])
+
+
+def test_closed_enum_warnings_lists_proto2_enum_fields():
+    warns = gen.closed_enum_warnings(_enum_field_model("proto2"))
+    assert any(".pkg.Foo.c" in w and ".pkg.Color" in w for w in warns)
+    assert any(".pkg.Foo.cs" in w and ".pkg.Color" in w for w in warns)
+    assert all(".pkg.Foo.x" not in w for w in warns)
+
+
+def test_closed_enum_warnings_skips_proto3_open_enums():
+    assert gen.closed_enum_warnings(_enum_field_model("proto3")) == ()
+
+
+def test_closed_enum_warnings_follow_enum_syntax_not_message():
+    # A closed enum stays closed wherever it is used: a proto3 message that
+    # references a proto2 (closed) enum still diverges from PPB's open dispatch.
+    fp2 = d.FileDescriptorProto(name="e.proto", package="pkg", syntax="proto2")
+    color = fp2.enum_type.add(name="Color")
+    color.value.add(name="UNSET", number=0)
+    fp3 = d.FileDescriptorProto(name="m.proto", package="pkg", syntax="proto3")
+    fp3.dependency.append("e.proto")
+    m = fp3.message_type.add(name="Foo")
+    m.field.add(
+        name="c", number=1, type=T.TYPE_ENUM, type_name=".pkg.Color", label=T.LABEL_OPTIONAL
+    )
+    warns = gen.closed_enum_warnings(gen.build_model([fp2, fp3]))
+    assert any(".pkg.Foo.c" in w and ".pkg.Color" in w for w in warns)
+
+
+def test_closed_enum_warns_stderr(capsys):
+    from google.protobuf.compiler import plugin_pb2 as p
+
+    req = p.CodeGeneratorRequest()
+    fp = req.proto_file.add(name="enumwarn.proto", package="enumwarn", syntax="proto2")
+    color = fp.enum_type.add(name="Color")
+    color.value.add(name="UNSET", number=0)
+    foo = fp.message_type.add(name="Foo")
+    foo.field.add(
+        name="c", number=1, type=T.TYPE_ENUM, type_name=".enumwarn.Color", label=T.LABEL_OPTIONAL
+    )
+    foo.field.add(name="x", number=2, type=T.TYPE_INT32, label=T.LABEL_OPTIONAL)
+    req.file_to_generate.append("enumwarn.proto")
+    resp = gen.generate(req)
+    assert resp.error == ""
+    err = capsys.readouterr().err
+    assert "closed proto2 enum" in err
+    assert ".enumwarn.Foo.c" in err
+    assert ".enumwarn.Foo.x" not in err
+
+
 def test_oneof_as_optional_warns(capsys):
     from google.protobuf.compiler import plugin_pb2 as p
 

@@ -173,7 +173,11 @@ fields inside the empty message only when you must inspect its contents.
 singular scalars use the `proto3_*` (zero-default) aliases, while proto2 fields,
 proto3 explicit `optional`, and message fields use last-write-wins.
 - `enum`: `ppb::enumerated<K, Enum>` over a generated scoped `enum class`
-(`proto3_enumerated` for proto3 implicit presence).
+(`proto3_enumerated` for proto3 implicit presence). The generated descriptor
+always dispatches the raw wire value (open-enum semantics), so an out-of-range
+value on a closed (proto2) enum reaches the handler as its bit pattern rather
+than being diverted to the unknown field set; the generator warns per such
+field, and the caller must range-check the value if it needs closed semantics.
 - `string`/`bytes`: `utf8string`/`bytes` (with `proto3_*` variants for proto3 implicit presence).
 - `message`: `ppb::message<K, Inner::merge_schema, singular>` for
 a singular field, `ppb::unpacked_message<K, Inner::schema>` for a repeated one.
