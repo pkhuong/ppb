@@ -247,14 +247,17 @@ namespace packed_views
 
 enum class FB : uint32_t
 {
-    pv = 1,   // packed varint (int32)
-    p4 = 2,   // packed fixed32 -> span<le_packed<uint32_t>>
-    p8 = 3,   // packed sfixed64 -> span<le_packed<int64_t>>
-    by = 4,   // repeated (unpacked) bytes
+    pv = 1,     // packed varint (int32)
+    p4 = 2,     // packed fixed32 -> span<le_packed<uint32_t>>
+    p8 = 3,     // packed sfixed64 -> span<le_packed<int64_t>>
+    by = 4,     // repeated (unpacked) bytes
+    ps32 = 5,   // packed sint32 -> packed_varint_view<int32_t, zigzag_decode>
+    ps64 = 6,   // packed sint64 -> packed_varint_view<int64_t, zigzag_decode>
 };
 
-using SchemaB = ppb::auto_schema<ppb::packed_int32<FB::pv>, ppb::packed_fixed32<FB::p4>,
-    ppb::packed_sfixed64<FB::p8>, ppb::unpacked_bytes<FB::by>>;
+using SchemaB =
+    ppb::auto_schema<ppb::packed_int32<FB::pv>, ppb::packed_fixed32<FB::p4>, ppb::packed_sfixed64<FB::p8>,
+        ppb::unpacked_bytes<FB::by>, ppb::packed_sint32<FB::ps32>, ppb::packed_sint64<FB::ps64>>;
 
 void
 exercise_packed_views(std::span<const std::byte> input)
@@ -262,11 +265,14 @@ exercise_packed_views(std::span<const std::byte> input)
     std::vector<int32_t> pv;
     std::vector<uint32_t> p4;
     std::vector<int64_t> p8;
+    std::vector<int32_t> ps32;
+    std::vector<int64_t> ps64;
     size_t num_bytes_seen = 0;
     uint64_t byte_sink = 0;
 
     ppb::reader<SchemaB> r(input);
     (void)r.parse(ppb::push_back<FB::pv>(&pv), ppb::push_back<FB::p4>(&p4), ppb::push_back<FB::p8>(&p8),
+        ppb::push_back<FB::ps32>(&ps32), ppb::push_back<FB::ps64>(&ps64),
         ppb::on<FB::by>(
             [&](std::span<const std::byte> b) -> ppb_error
             {
@@ -281,7 +287,8 @@ exercise_packed_views(std::span<const std::byte> input)
                 return PPB_OK;
             }));
 
-    __asm__ volatile(" # force " ::"m"(pv), "m"(p4), "m"(p8), "m"(byte_sink) : "memory");
+    __asm__ volatile(" # force " ::"m"(pv), "m"(p4), "m"(p8), "m"(ps32), "m"(ps64), "m"(byte_sink)
+        : "memory");
     if (r.error() == PPB_OK)
     {
         /* At least one byte per varint. */
@@ -290,10 +297,53 @@ exercise_packed_views(std::span<const std::byte> input)
         POSTCOND(p4.size() == r.meta<FB::p4>().total_bytes / 4);
         POSTCOND(p8.size() == r.meta<FB::p8>().total_bytes / 8);
         POSTCOND(num_bytes_seen == r.meta<FB::by>().total_bytes);
+        /* Zigzag decode is one element per varint, same bound as plain packed. */
+        POSTCOND(ps32.size() <= r.meta<FB::ps32>().total_bytes);
+        POSTCOND(ps64.size() <= r.meta<FB::ps64>().total_bytes);
     }
 }
 
 }  // namespace packed_views
+
+/*
+ * Scalar sint32 / sint64.  Exercises the zigzag decode in
+ * sint32::extract_value (-> ppb_zag32, which truncates non-canonical
+ * encodings to 32 bits) and sint64::extract_value (-> ppb_zag).
+ */
+namespace scalar_sints
+{
+
+enum class FS : uint32_t
+{
+    s32 = 1,   // sint32 -> ppb_zag32
+    s64 = 2,   // sint64 -> ppb_zag
+};
+
+using SchemaS = ppb::auto_schema<ppb::sint32<FS::s32>, ppb::sint64<FS::s64>>;
+
+void
+exercise_scalar_sints(std::span<const std::byte> input)
+{
+    int64_t sink = 0;
+
+    ppb::reader<SchemaS> r(input);
+    (void)r.parse(ppb::on<FS::s32>(
+                      [&](int32_t v) -> ppb_error
+                      {
+                          sink += v;
+                          return PPB_OK;
+                      }),
+        ppb::on<FS::s64>(
+            [&](int64_t v) -> ppb_error
+            {
+                sink += v;
+                return PPB_OK;
+            }));
+
+    __asm__ volatile(" # force " ::"m"(sink) : "memory");
+}
+
+}  // namespace scalar_sints
 
 /*
  * Three-level submessage nesting; sweep max_depth to trigger the
@@ -747,6 +797,7 @@ LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
 
     proto3_scalars::exercise_proto3_scalars(input);
     packed_views::exercise_packed_views(input);
+    scalar_sints::exercise_scalar_sints(input);
     submessage_depth::exercise_submessage_depth(input);
     reader_reuse::exercise_reader_reuse(input);
     api_sequence::exercise_api_sequence(input);
