@@ -38,7 +38,7 @@ options are standalone booleans (off by default unless noted).
 | `strict_repeated_encoding` | on | Reject unexpected repeated wire encodings at parse time (fallback has `field_semantics::error`). When off, unexpected forms have `field_semantics::always_lexn` instead, forcing a wire-order lexn pass so messages with both packed and unpacked encodings decode in wire order. The flag can override a mode preset: `mode=none,strict_repeated_encoding` relaxes then re-asserts strictness. Already on by default, so passing it alone is idempotent. |
 | `detect_unknown` | off | Append `ppb::detect_unknown_fields<>` to every schema, so unknown fields can be reported rather than skipped (e.g. `mode=lean,detect_unknown` rejects alt wire forms *and* detects unknowns). Set by `mode=full`. |
 | `opaque_cycles` | off | Allow recursive (cyclic) message graphs by emitting the cycle's back-edge fields as opaque byte spans (see Limitations). |
-| `oneof_as_optional` | off | **Lossy, opt-in.** Decode each member of a real (user-declared) oneof as an independent `last_write_wins` field, losing oneof exclusivity at the schema level. Without this flag, any oneof is rejected with a diagnostic. |
+| `oneof_as_optional` | off | **Lossy, opt-in.** Decode each member of a user-declared oneof as an independent field with `always_lexn` semantics: every member occurrence dispatches, in wire order, so the caller can reconstruct which member won, but oneof exclusivity is not enforced at the schema level. Without this flag, any oneof is rejected with a diagnostic. |
 | `drop_foreign_type_fields` | off | **Lossy, opt-in.** Drop any field whose type comes from a well-known-type import (`google/protobuf/*`) that PPB does not support. Dropped fields are listed as `ppb-dropped:` comments at the top of the generated header and are not decoded. Without this flag, fields referencing unsupported well-known types are rejected with a diagnostic. |
 | `drop_group_extension_fields` | off | **Lossy, opt-in.** Drop field declarations whose wire type or feature is not supported by PPB (currently: proto2 `group` fields and proto2 extension ranges/definitions). Dropped group fields are listed as `ppb-dropped:` comments; extension ranges and definitions are logged as generator warnings and ignored. Without this flag the generator rejects unsupported declarations with a diagnostic. |
 | `always_dispatch_strings` | off | Dispatch every singular `string` field to its handler. Gives users one callback per value (useful for validation). |
@@ -101,6 +101,14 @@ The remaining well-known types are not decoded: `Struct`/`Value`/`ListValue`,
 field referencing any of these is rejected with a diagnostic naming the flag, or,
 with `--ppb_opt=drop_foreign_type_fields`, dropped (listed as `ppb-dropped:`
 comments at the top of the header and not decoded).
+
+Classification is by name, not by content: any field whose type lives under
+package `google.protobuf` -- including a user-defined message that merely
+declares that package -- is treated as a well-known-type reference, and
+rejected or dropped like the unsupported types above unless it comes from one
+of the six supported files. Similarly, imported files under the
+`google/protobuf/` path outside the supported list are skipped wholesale
+(files explicitly listed for generation are still generated).
 
 ## Generated layout
 
@@ -171,13 +179,13 @@ fields inside the empty message only when you must inspect its contents.
 
 - `int32/uint32/sint*/bool/...`: the matching `ppb` scalar; proto3 implicit-presence
 singular scalars use the `proto3_*` (zero-default) aliases, while proto2 fields,
-proto3 explicit `optional`, and message fields use last-write-wins.
+proto3 explicit `optional`, and message fields use last-write-wins. Proto2
+explicit `default = ...` values are never applied (see
+[Proto2 semantics](#proto2-semantics)).
 - `enum`: `ppb::enumerated<K, Enum>` over a generated scoped `enum class`
-(`proto3_enumerated` for proto3 implicit presence). The generated descriptor
-always dispatches the raw wire value (open-enum semantics), so an out-of-range
-value on a closed (proto2) enum reaches the handler as its bit pattern rather
-than being diverted to the unknown field set; the generator warns per such
-field, and the caller must range-check the value if it needs closed semantics.
+(`proto3_enumerated` for proto3 implicit presence). Decoding is always
+open-enum, even for closed proto2 enums (see
+[Proto2 semantics](#proto2-semantics)).
 - `string`/`bytes`: `utf8string`/`bytes` (with `proto3_*` variants for proto3 implicit presence).
 - `message`: `ppb::message<K, Inner::merge_schema, singular>` for
 a singular field, `ppb::unpacked_message<K, Inner::schema>` for a repeated one.
@@ -192,6 +200,26 @@ apply inside a proto3 entry).
 Repeated scalars/enums emit both wire forms per the `mode` rule above; repeated
 `string`/`bytes`/`message` are always `unpacked_*`.
 
+### Proto2 semantics
+
+Three proto2 behaviors are deliberately not reproduced. The generator prints a
+warning per affected field and otherwise decodes it like its proto3
+counterpart:
+
+- **Explicit defaults are not applied.** A field's `default = ...` value
+  never reaches the handler: an absent field simply doesn't dispatch, with or
+  without a declared default. Apply defaults yourself, e.g. by initializing
+  destination values before `parse()`; the warning reports each declared
+  default value.
+- **Closed enums decode as open.** The generated descriptor dispatches the
+  raw wire value, so an out-of-range value on a closed (proto2) enum reaches
+  the handler as its bit pattern instead of being routed to the unknown-field
+  set as the spec requires. Range-check in the handler if you need closed
+  semantics. Closedness follows the enum's defining file, so this also
+  applies to proto3 messages that reference a proto2 enum.
+- **`required` is not enforced.** Required fields decode like optional ones;
+  presence checking is left to the caller.
+
 ## Limitations (rejected with a diagnostic)
 
 - **Recursion**: proto message reference cycles can't be expressed as
@@ -202,8 +230,9 @@ Repeated scalars/enums emit both wire forms per the `mode` rule above; repeated
 - **Groups** (proto2 `group`): PPB rejects wire types 3/4.
 - **Extensions**: rejected.
 - **oneof**: oneofs are rejected by default. Use `--ppb_opt=oneof_as_optional` to opt in
-  to lossy decoding: each member is emitted as an independent `last_write_wins` field, losing
-  oneof exclusivity at the schema level but preserving wire order across members.
+  to lossy decoding: each member is emitted as an independent `always_lexn` field, so
+  handlers fire per occurrence in wire order (the last member dispatched is the one
+  that won), but oneof exclusivity is not enforced at the schema level.
 - **Editions**: only `proto2`/`proto3` syntax is supported.
 - **Nesting depth**: message declarations nested more than 2000 levels deep
   are rejected with a diagnostic (the plugin's protobuf runtime caps descriptor
