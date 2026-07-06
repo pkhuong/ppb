@@ -40,10 +40,13 @@ def main():
         cmd = cxx_argv + flags_argv + [f"-D{macro}", "-c", src, "-o", "/dev/null"]
         proc = subprocess.run(cmd, capture_output=True, text=True)
         out = proc.stderr
-        if re.search(regex, out):
+        if proc.returncode != 0 and re.search(regex, out):
             print("ok")
         else:
-            print(f"FAIL\n--- expected regex: {regex}\n--- got:\n{out}")
+            if proc.returncode == 0:
+                print(f"FAIL\n--- compilation succeeded, expected failure matching: {regex}")
+            else:
+                print(f"FAIL\n--- wrong error (expected regex: {regex})\n--- got:\n{out}")
             sys.exit(1)
 
     # Sanity: with no macro, the file must compile cleanly.
