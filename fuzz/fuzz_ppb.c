@@ -242,8 +242,13 @@ static void
 fuzz_zag(const uint8_t *data, size_t size)
 {
     uint64_t x = 0;
-    size_t n = size < sizeof(x) ? size : sizeof(x);
-    memcpy(&x, data, n);
+
+    /* avoid memcpy UB with NULL. */
+    if (size > 0)
+    {
+        size_t n = size < sizeof(x) ? size : sizeof(x);
+        memcpy(&x, data, n);
+    }
 
     for (size_t rep = 0; rep < 2; rep++)
     {
