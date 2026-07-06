@@ -346,6 +346,91 @@ exercise_scalar_sints(std::span<const std::byte> input)
 }  // namespace scalar_sints
 
 /*
+ * Enum fields and explicit-presence (last_write_wins) scalars.  Exercises
+ * enumerated::extract_value (cast to the enum's bit pattern, no range
+ * check), packed_enumerated via the enum_decode policy, and the
+ * explicit-presence dispatch: unlike proto3_zero_default, an absent field
+ * must never dispatch.
+ */
+namespace presence_enums
+{
+
+enum class Color : int32_t
+{
+    red = 0,
+    green = 1,
+    blue = 2,
+};
+
+enum class FE : uint32_t
+{
+    e = 1,    // scalar enum (explicit presence, last_write_wins)
+    pe = 2,   // packed enum -> packed_varint_view<Color, enum_decode>
+    i = 3,    // explicit-presence int32 (last_write_wins)
+};
+
+using SchemaE =
+    ppb::auto_schema<ppb::enumerated<FE::e, Color>, ppb::packed_enumerated<FE::pe, Color>, ppb::int32<FE::i>>;
+
+void
+exercise_presence_enums(std::span<const std::byte> input)
+{
+    size_t enum_calls = 0;
+    size_t int_calls = 0;
+    Color last_enum = Color::red;
+    int32_t last_int = 0;
+    std::vector<Color> packed;
+
+    ppb::reader<SchemaE> r(input);
+    ppb_error err = r.parse(ppb::on<FE::e>(
+                                [&](Color c) -> ppb_error
+                                {
+                                    last_enum = c;
+                                    enum_calls++;
+                                    return PPB_OK;
+                                }),
+        ppb::push_back<FE::pe>(&packed),
+        ppb::on<FE::i>(
+            [&](int32_t v) -> ppb_error
+            {
+                last_int = v;
+                int_calls++;
+                return PPB_OK;
+            }));
+
+    __asm__ volatile(" # force " ::"m"(last_enum), "m"(last_int), "m"(packed) : "memory");
+
+    if (err != PPB_OK)
+        return;
+
+    /*
+     * Explicit presence: an absent field never dispatches (the
+     * proto3_zero_default zero-widening does not apply); a present field
+     * fires once on the fast path or once per occurrence under a forced
+     * lexn pass.
+     */
+    auto check_presence = [](size_t calls, size_t num_occ)
+    {
+        if (num_occ == 0)
+        {
+            POSTCOND(calls == 0);
+        }
+        else
+        {
+            POSTCOND(calls == num_occ || calls == 1);
+        }
+    };
+
+    check_presence(enum_calls, r.meta<FE::e>().num_occurrences);
+    check_presence(int_calls, r.meta<FE::i>().num_occurrences);
+
+    /* Packed enum decode is one element per varint, same bound as plain packed. */
+    POSTCOND(packed.size() <= r.meta<FE::pe>().total_bytes);
+}
+
+}  // namespace presence_enums
+
+/*
  * Three-level submessage nesting; sweep max_depth to trigger the
  * DEPTH_EXCEEDED boundary and submessage handling.
  */
@@ -798,6 +883,7 @@ LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
     proto3_scalars::exercise_proto3_scalars(input);
     packed_views::exercise_packed_views(input);
     scalar_sints::exercise_scalar_sints(input);
+    presence_enums::exercise_presence_enums(input);
     submessage_depth::exercise_submessage_depth(input);
     reader_reuse::exercise_reader_reuse(input);
     api_sequence::exercise_api_sequence(input);
