@@ -85,6 +85,22 @@ check_tag_ordering(void)
     assert(ppb_validate_tags(/*num_fields=*/N_LARGE, LARGE_TAGS) == PPB_OK);
 }
 
+/*
+ * Allocates a fields[] array of exactly `num_fields` elements so
+ * ASan's heap redzones flag any write past the last field.  This is
+ * tighter that a fixed-size stack array, which could silently absorb
+ * off-by-ones with its unused tail, when oversized.
+ */
+static struct ppb_field *
+alloc_fields(size_t num_fields)
+{
+    struct ppb_field *fields = calloc(num_fields != 0 ? num_fields : 1, sizeof(*fields));
+    if (fields == NULL)
+        abort();
+
+    return fields;
+}
+
 static inline void
 check_buf_valid(struct ppb_buf buf, const uint8_t *data, size_t size)
 {
@@ -443,7 +459,7 @@ do_lexn_soft(struct ppb_buf *buf, size_t limit, size_t num_fields, const struct 
 static void
 fuzz_lexn_standalone(const uint8_t *data, size_t size, size_t num_fields, const struct ppb_encoded_tag *tags)
 {
-    struct ppb_field fields[MAX_FIELDS];
+    struct ppb_field *fields = alloc_fields(num_fields);
     struct ppb_buf buf;
 
     /* max_lexed_fields = 0: should not advance the buffer. */
@@ -479,6 +495,8 @@ fuzz_lexn_standalone(const uint8_t *data, size_t size, size_t num_fields, const 
         do_lexn_soft(&buf, /*limit=*/limits[li], num_fields, tags, fields,
             /*max_lexed_fields=*/SIZE_MAX, data, /*buf_size=*/size);
     }
+
+    free(fields);
 }
 
 static void
@@ -486,14 +504,18 @@ fuzz_prescan_then_lexn(const uint8_t *data, size_t size, size_t num_fields,
     const struct ppb_encoded_tag *tags)
 {
     struct ppb_buf buf;
-    struct ppb_field fields[MAX_FIELDS];
+    struct ppb_field *fields = alloc_fields(num_fields);
 
     buf = (struct ppb_buf) { data, size };
     memset(fields, 0, num_fields * sizeof(fields[0]));
 
     ptrdiff_t scan = ppb_prescan(buf, num_fields, tags, fields, /*max_lexed_fields=*/SIZE_MAX);
     if (scan < 0)
-        return; /* invalid input; no lexn */
+    {
+        /* invalid input; no lexn */
+        free(fields);
+        return;
+    }
 
     struct ppb_field_meta prescan_m[MAX_FIELDS];
     for (size_t i = 0; i < num_fields; i++)
@@ -527,7 +549,7 @@ fuzz_prescan_then_lexn(const uint8_t *data, size_t size, size_t num_fields,
     /* Cross-check hard vs soft limit lexn. */
     size_t half = (size / 2 > 0) ? size / 2 : 1;
 
-    struct ppb_field hard_fields[MAX_FIELDS];
+    struct ppb_field *hard_fields = alloc_fields(num_fields);
     memset(hard_fields, 0, num_fields * sizeof(hard_fields[0]));
     buf = (struct ppb_buf) { data, size };
     while (buf.size > 0)
@@ -539,7 +561,7 @@ fuzz_prescan_then_lexn(const uint8_t *data, size_t size, size_t num_fields,
     }
     size_t hard_remaining = buf.size;
 
-    struct ppb_field soft_fields[MAX_FIELDS];
+    struct ppb_field *soft_fields = alloc_fields(num_fields);
     memset(soft_fields, 0, num_fields * sizeof(soft_fields[0]));
     buf = (struct ppb_buf) { data, size };
     while (buf.size > 0)
@@ -588,6 +610,10 @@ fuzz_prescan_then_lexn(const uint8_t *data, size_t size, size_t num_fields,
     }
 
     POSTCOND(buf.size == 0);
+
+    free(soft_fields);
+    free(hard_fields);
+    free(fields);
 }
 
 /*
@@ -669,11 +695,13 @@ fuzz_invalid_tags(const uint8_t *data, size_t size)
 static void
 exercise_config(const uint8_t *data, size_t size, size_t num_fields, const struct ppb_encoded_tag *tags)
 {
-    struct ppb_field fields[MAX_FIELDS];
+    struct ppb_field *fields = alloc_fields(num_fields);
 
     do_prescan(data, size, num_fields, tags, fields);
     fuzz_lexn_standalone(data, size, num_fields, tags);
     fuzz_prescan_then_lexn(data, size, num_fields, tags);
+
+    free(fields);
 }
 
 int
