@@ -735,6 +735,8 @@ The test suite runs unit tests and comparisons against
     make format         # clang-format-20 on all sources
     ./coverage.sh       # report code (line and branch) coverage for `make test`
     make regen_test     # regenerate golden files (requires protoscope in PATH)
+    make differential-ci                     # libprotobuf differential suite, deterministic subset (see differential/)
+    make -C differential conformance-docker  # protobuf conformance suites in a pinned container image
 
 Picoscope-based tests are high value for little effort.  To add a test
 case for a valid protobuf message, generate protobuf bytes (e.g.,
