@@ -1,0 +1,2 @@
+protoc-gen-ppb: warning: .enumclosed.Foo.c: closed proto2 enum .enumclosed.Color; PPB uses open-enum semantics (out-of-range values are dispatched, not diverted to the unknown field set)
+protoc-gen-ppb: warning: .enumclosed.Foo.cs: closed proto2 enum .enumclosed.Color; PPB uses open-enum semantics (out-of-range values are dispatched, not diverted to the unknown field set)

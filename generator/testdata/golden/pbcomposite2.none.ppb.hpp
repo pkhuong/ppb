@@ -23,7 +23,7 @@ namespace ppb_gen::demo_comp2::UEnums
     constexpr ::std::size_t max_depth = 0;
 
     using schema = ::ppb::auto_schema<
-        // ppb::on_each<F::cs>(...)
+        // ppb::on_each<F::cs>(...); closed proto2 enum: out-of-range values are dispatched, not diverted to unknown fields
         ::ppb::unpacked_enumerated<F::cs, ::ppb_gen::demo_comp2::Color>,
         ::ppb::packed_enumerated<F::cs, ::ppb_gen::demo_comp2::Color, ::ppb::field_semantics::always_lexn>>;
 

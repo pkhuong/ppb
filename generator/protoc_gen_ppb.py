@@ -527,6 +527,11 @@ class Enum:
     cpp_name: str  # "::pkg::Foo::Color"
     values: tuple[EnumValue, ...]
     source_file: str = ""  # defining .proto; set for file-scope enums
+    # proto2 enums are closed: out-of-range values are diverted to the unknown
+    # field set. proto3 enums are open. PPB always dispatches the raw value, so
+    # a closed enum diverges (see closed_enum_warnings). Follows the enum's own
+    # defining syntax, not the referencing field's message.
+    closed: bool = False
 
 
 @dataclasses.dataclass(frozen=True)
@@ -572,6 +577,9 @@ class SymbolTable:
 
     def enum_cpp_name(self, proto_full_name):
         return self._enums[proto_full_name].cpp_name
+
+    def enum_is_closed(self, proto_full_name):
+        return self._enums[proto_full_name].closed
 
     def message_schema(self, proto_full_name):
         m = self._messages[proto_full_name]
@@ -705,13 +713,14 @@ def _validate_syntax(fp):
     return norm
 
 
-def _build_enum(ed, parent_full, source_file=""):
+def _build_enum(ed, parent_full, source_file="", *, closed=False):
     full = f"{parent_full}.{ed.name}"
     return Enum(
         full_name=full,
         cpp_name="::" + _cpp_ns(full),
         values=tuple(EnumValue(v.name, v.number) for v in ed.value),
         source_file=source_file,
+        closed=closed,
     )
 
 
@@ -775,7 +784,7 @@ def build_model(
         )
         _check_no_mangling_collisions(full, (f.name for f in desc.field))
         for ed in desc.enum_type:
-            e = _build_enum(ed, full)
+            e = _build_enum(ed, full, closed=(syntax == "proto2"))
             _check_no_mangling_collisions(e.full_name, (v.name for v in ed.value))
             nested_enums.append(e)
             symbols.add_enum(e)
@@ -893,7 +902,7 @@ def build_model(
             [desc.name for desc in fp.message_type] + [ed.name for ed in fp.enum_type]
         )
         for ed in fp.enum_type:
-            e = _build_enum(ed, base, fp.name)
+            e = _build_enum(ed, base, fp.name, closed=(syntax == "proto2"))
             _check_no_mangling_collisions(e.full_name, (v.name for v in ed.value))
             symbols.add_enum(e)
             file_enums.append(e)
@@ -1067,6 +1076,9 @@ def _field_handler_hint(field, *, f_name, symbols, opaque, syntax, detect_unknow
             hint = f"ppb::on_each<{key}>(...)"
     else:
         hint = f"ppb::on<{key}>(...)"
+
+    if field.type == _T.TYPE_ENUM and symbols.enum_is_closed(field.type_name):
+        hint += "; closed proto2 enum: out-of-range values are dispatched, not diverted to unknown fields"
 
     if field.HasField("default_value"):
         hint += f"; default = {field.default_value!r}"
@@ -1542,6 +1554,27 @@ def default_value_warnings(model):
     return tuple(out)
 
 
+def closed_enum_warnings(model):
+    """Return a warning for each field referencing a closed (proto2) enum.
+
+    Closedness follows the enum's own defining syntax, so a proto3 message that
+    references a proto2 enum warns too. PPB always dispatches the raw wire value
+    (open-enum semantics); a closed enum instead diverts out-of-range values to
+    the unknown field set, so the caller must range-check the value itself.
+    """
+    out = []
+    for m in model.messages:
+        for f in m.fields:
+            if f.type == _T.TYPE_ENUM and model.symbols.enum_is_closed(f.type_name):
+                out.append(
+                    f"{PLUGIN_NAME}: warning: {m.full_name}.{f.name}: "
+                    f"closed proto2 enum {f.type_name}; PPB uses open-enum semantics "
+                    f"(out-of-range values are dispatched, not diverted to the unknown field set)"
+                )
+
+    return tuple(out)
+
+
 @dataclasses.dataclass(frozen=True)
 class Options:
     strict_repeated_encoding: bool
@@ -1638,6 +1671,9 @@ def generate(request):
             sys.stderr.write(w + "\n")
 
         for w in default_value_warnings(model):
+            sys.stderr.write(w + "\n")
+
+        for w in closed_enum_warnings(model):
             sys.stderr.write(w + "\n")
 
         plan = plan_emission(model, opaque_recursion=opts.opaque_cycles)
