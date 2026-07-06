@@ -1,1 +1,1 @@
-.demo.Foo: oneof is unsupported; pass --ppb_opt=oneof_as_optional to decode each member as an independent last_write_wins field (this loses oneof exclusivity at the schema level)
+.demo.Foo: oneof is unsupported; pass --ppb_opt=oneof_as_optional to decode each member as an independent always_lexn field (every member occurrence dispatches, in wire order; oneof exclusivity is not enforced at the schema level)

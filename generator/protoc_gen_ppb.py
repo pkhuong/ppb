@@ -658,8 +658,9 @@ def _validate_message(desc, full, *, allow_oneof, skip_unsupported_fields=False)
     if (used - synthetic) and not allow_oneof:
         raise GenError(
             f"{full}: oneof is unsupported; pass --ppb_opt=oneof_as_optional to "
-            f"decode each member as an independent last_write_wins field (this "
-            f"loses oneof exclusivity at the schema level)"
+            f"decode each member as an independent always_lexn field (every "
+            f"member occurrence dispatches, in wire order; oneof exclusivity "
+            f"is not enforced at the schema level)"
         )
 
 
@@ -828,8 +829,10 @@ def build_model(
 
             elif refs_wkt:
                 raise GenError(
-                    f"{full}.{f.name} references well-known type {f.type_name}, "
-                    f"which protoc-gen-ppb does not support; pass "
+                    f"{full}.{f.name} references {f.type_name}, which "
+                    f"protoc-gen-ppb treats as an unsupported well-known type "
+                    f"(any type under package google.protobuf is classified "
+                    f"as a well-known type, including user-defined ones); pass "
                     f"--ppb_opt=drop_foreign_type_fields to drop fields that "
                     f"reference it (those fields will not be decoded)"
                 )
