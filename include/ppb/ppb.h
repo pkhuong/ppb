@@ -99,8 +99,9 @@ enum ppb_error
     PPB_ERROR_SENTINEL_FIELD_ARR =
         -2,  /* tags[].bits includes < 8 (field number 0 is forbidden by the protobuf spec) */
     PPB_ERROR_TRUNCATED_DATA = -3,  /* message cut short at the end of the `ppb_buf` */
-    PPB_ERROR_CORRUPT_VARINT = -4,  /* invalid varint encoding (overlong) */
-    PPB_ERROR_CORRUPT_TAG = -5,  /* invalid tag encoding (zero, overlong, or unsupported wire type) */
+    PPB_ERROR_CORRUPT_VARINT = -4,  /* invalid varint encoding (longer than 10 bytes) */
+    PPB_ERROR_CORRUPT_TAG =
+        -5,  /* invalid tag encoding (zero, longer than 8 bytes, or unsupported wire type) */
     PPB_ERROR_LIMIT_EXCEEDED = -6,  /* consumed bytes exceeded hard limit */
     PPB_ERROR_DEPTH_EXCEEDED = -7,  /* recursion depth budget exhausted (for ppb.hpp and client code) */
 
