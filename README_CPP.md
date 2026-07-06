@@ -616,6 +616,36 @@ ppb::on<Key, wire = wire_type::any>(callable)
   value.  Zero or ambiguous matches are compile errors.
 - Handlers return `ppb_error`.
 
+### Repeated-field helpers: `ppb::on_each<>()` and `ppb::on_bulk<>()`
+
+```cpp
+ppb::on_each<Key, wire = wire_type::any>(fn)
+ppb::on_bulk<Key, wire = wire_type::any>(range_fn, elem_fn)
+```
+
+`on_each` calls `fn` once per decoded element, whether the field
+arrived packed or unpacked; fixed-width `le_packed<T>` elements are
+normalized to `T`.  `fn` may return `ppb_error` or `void`; a negative
+return stops the occurrence's remaining elements and folds into the
+sticky error.  One `fn` sees both wire forms of the field as a single
+sequence, so a stateful handler accumulates across all elements even
+when a message mixes encodings.  `push_back` / `emplace_back` are
+built on `on_each`.
+
+`on_bulk` splits the two wire forms instead: a packed occurrence
+calls `range_fn` once with an iterable view over the whole run (no
+per-element short-circuit; stopping early is `range_fn`'s own
+responsibility), and an unpacked occurrence calls `elem_fn` with one
+decoded scalar.  The packed view's element type always converts
+implicitly to the scalar type, so a plain `for (T v : view)` loop
+works for both varint and fixed-width fields.  Use `on_bulk` when the
+packed run can be processed in bulk, e.g. a sized `insert` from a
+`std::span<const le_packed<T>>`.
+
+For both factories, a concrete `wire` restricts dispatch to that form
+and silently ignores the other; to reject the other form instead, add
+a separate handler for it that returns an error.
+
 ### Handler shortcuts
 
 Three factories cover the common destination patterns:
