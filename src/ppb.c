@@ -80,6 +80,11 @@ static_assert(PTRDIFF_MAX <= SIZE_MAX / 2,
   @*/
 static inline int64_t ppb_zag(uint64_t x);
 
+/*@ terminates \true;
+  @ assigns \result \from x;
+  @*/
+static inline int32_t ppb_zag32(uint32_t x);
+
 /*@ requires buf_valid_range(buf);
   @ requires buf.size ≤ (size_t)PTRDIFF_MAX;
   @ requires \valid_read(tags + (0..num_fields - 1));
