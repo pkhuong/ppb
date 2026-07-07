@@ -100,8 +100,13 @@ enum ppb_error
         -2,  /* tags[].bits includes < 8 (field number 0 is forbidden by the protobuf spec) */
     PPB_ERROR_TRUNCATED_DATA = -3,  /* message cut short at the end of the `ppb_buf` */
     PPB_ERROR_CORRUPT_VARINT = -4,  /* invalid varint encoding (longer than 10 bytes) */
-    PPB_ERROR_CORRUPT_TAG =
-        -5,  /* invalid tag encoding (zero, longer than 8 bytes, or unsupported wire type) */
+    /*
+     * invalid tag encoding (canonical zero, longer than 8 bytes, or unsupported wire type).
+     *
+     * In addition to these structural issues, prescan *but not lexn* also flags
+     * non-canonical (overlong) encodings of tags with field index 0.
+     */
+    PPB_ERROR_CORRUPT_TAG = -5,
     PPB_ERROR_LIMIT_EXCEEDED = -6,  /* consumed bytes exceeded hard limit */
     PPB_ERROR_DEPTH_EXCEEDED = -7,  /* recursion depth budget exhausted (for ppb.hpp and client code) */
 

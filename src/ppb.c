@@ -493,12 +493,22 @@ ppb_prescan_impl(const struct ppb_buf buf, const size_t num_fields,
 
         if (unlikely(field_idx >= num_fields)) /* -1UL for missing, so mutant-ok: '>=' -> '>' */
         {
-            /* tag < 8: field number 0 is invalid in protobuf. */
-            if (unlikely(tag < 8))
+            /*
+             * Field number 0 is invalid in protobuf.  The mask keeps the
+             * field-number bits of every tag byte (dropping the wire type
+             * and the continuation bits), so a zero result rejects the
+             * canonical `00` tag and every overlong encoding of it alike.
+             */
+            uint64_t tag_index_mask = (127UL * ((uint64_t)-1 / 255UL)) & ~(uint64_t)7;
+            if (unlikely((tag & tag_index_mask) == 0))
             {
                 error_set(&error, PPB_ERROR_CORRUPT_TAG);
                 return (ptrdiff_t)error;
             }
+
+            /*@ assert (tag & tag_index_mask) ≢ 0; */
+            /*@ assert (7 & tag_index_mask) ≡ 0; */
+            /*@ admit bitwise_to_int_transfer: tag > 7; */
 
             /* See if we want to dump this in a catch-all field (branch is an optimization). */
             if (has_catch_all) /* mutant-skip */
