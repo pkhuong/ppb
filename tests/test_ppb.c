@@ -2160,6 +2160,86 @@ test_lexn_zero_tag_after_valid(void)
 }
 
 /*
+ * prescan rejects every encoding of a field-0 tag, not only the canonical
+ * single byte `00`: the field-number mask sees through overlong encodings.
+ * A catch-all does not hide a field-0 tag, and another tag -- even overlong --
+ * is accepted.
+ *
+ * lexn implements a narrower, canonical-only guard: an overlong field-0 tag
+ * is treated as an unknown field (see README's decoding wuirks).
+ */
+static void
+test_prescan_field_zero_overlong(void)
+{
+    printf("test_prescan_field_zero_overlong\n");
+
+    struct ppb_encoded_tag tags[1] = { PPB_TAG(1, PPB_WIRE_VARINT) };
+    struct ppb_field fields[1];
+
+    /* Overlong field-0 varint tags, 2/3/8 bytes: all CORRUPT_TAG. */
+    {
+        static const uint8_t ov2[] = { 0x80, 0x00, 0x2a };
+        static const uint8_t ov3[] = { 0x80, 0x80, 0x00, 0x2a };
+        static const uint8_t ov8[] = { 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x00, 0x2a };
+
+        zero_fields(1, fields);
+        CHECK(ppb_prescan(make_buf(ov2, sizeof(ov2)), 1, tags, fields, 8) == PPB_ERROR_CORRUPT_TAG);
+
+        zero_fields(1, fields);
+        CHECK(ppb_prescan(make_buf(ov3, sizeof(ov3)), 1, tags, fields, 8) == PPB_ERROR_CORRUPT_TAG);
+
+        zero_fields(1, fields);
+        CHECK(ppb_prescan(make_buf(ov8, sizeof(ov8)), 1, tags, fields, 8) == PPB_ERROR_CORRUPT_TAG);
+    }
+
+    /* Overlong field 0 with a non-varint wire type (I64) is also CORRUPT_TAG. */
+    {
+        static const uint8_t ov_i64[] = { 0x81, 0x00, 0, 0, 0, 0, 0, 0, 0, 0 };
+
+        zero_fields(1, fields);
+        CHECK(ppb_prescan(make_buf(ov_i64, sizeof(ov_i64)), 1, tags, fields, 8) == PPB_ERROR_CORRUPT_TAG);
+    }
+
+    /* A varint catch-all does not rescue an overlong field-0 tag. */
+    {
+        struct ppb_encoded_tag catch_tags[2] = { PPB_TAG(1, PPB_WIRE_VARINT), PPB_TAG(-1, PPB_WIRE_VARINT) };
+        struct ppb_field catch_fields[2];
+        static const uint8_t ov2[] = { 0x80, 0x00, 0x2a };
+
+        zero_fields(2, catch_fields);
+        CHECK(
+            ppb_prescan(make_buf(ov2, sizeof(ov2)), 2, catch_tags, catch_fields, 8) == PPB_ERROR_CORRUPT_TAG);
+    }
+
+    /*
+     * Negative control: an overlong field-1 tag has a non-zero field number,
+     * so it is accepted (as an unknown field), not rejected.
+     */
+    {
+        static const uint8_t f1_overlong[] = { 0x88, 0x00, 0x01 }; /* field 1 varint, overlong tag */
+
+        zero_fields(1, fields);
+        CHECK(ppb_prescan(make_buf(f1_overlong, sizeof(f1_overlong)), 1, tags, fields, 8) ==
+            (ptrdiff_t)sizeof(f1_overlong));
+        CHECK(fields[0].m.num_occurrences == 0); /* not matched to field 1 (README quirk 1) */
+    }
+
+    /*
+     * Documented asymmetry: direct lexn treats the overlong field-0 tag as an
+     * unknown field rather than rejecting it (prescan is the validator).
+     */
+    {
+        static const uint8_t ov2[] = { 0x80, 0x00, 0x2a };
+        struct ppb_buf buf = make_buf(ov2, sizeof(ov2));
+
+        zero_fields(1, fields);
+        struct ppb_lexn_ret ret = ppb_lexn(&buf, 1, tags, fields, 8);
+        CHECK(ret.status == PPB_OK);
+        CHECK(ret.field_range == 0);
+    }
+}
+
+/*
  * Limit tests use four_field_wire (24 bytes total):
  *   bytes  0- 2: field 1 varint 150   (3 bytes)
  *   bytes  3-11: field 2 i64 1        (9 bytes)
@@ -3153,6 +3233,7 @@ main(void)
     test_prescan_unknown_fields();
     test_prescan_max_fields();
     test_prescan_zero_tag();
+    test_prescan_field_zero_overlong();
     test_prescan_corrupt_tag();
     test_prescan_truncated_tag();
 

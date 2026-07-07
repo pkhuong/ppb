@@ -907,11 +907,12 @@ has the details:
 4. Wire types 3/4 (legacy groups) and 6/7 (reserved) are rejected
    wherever they appear, even inside fields that would otherwise be
    skipped as unknown.
-5. Field number 0 is rejected in its canonical encoding only (an
-   overlong zero tag is an unknown field); field numbers above
-   protobuf's 2**29 - 1 maximum lex as unknown fields instead of
-   being rejected, and tag varints longer than 8 encoded bytes are
-   rejected.
+5. Field number 0 is rejected by `ppb_prescan` (which `reader::parse`
+   runs first) in every encoding, canonical `00` or overlong; a
+   standalone `ppb_lexn` still rejects only the canonical single-byte
+   form.  Field numbers above protobuf's 2**29 - 1 maximum lex as
+   unknown fields instead of being rejected, and tag varints longer
+   than 8 encoded bytes are rejected.
 6. sint32 zigzag decoding truncates the encoded value to 32 bits
    first, matching Google's C++ parser on non-canonical input; the
    `sint32` descriptors already do this.

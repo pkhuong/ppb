@@ -51,8 +51,12 @@ validate_unknown_field(const ppb_field &f, std::span<const std::byte> input)
 {
     uint64_t field_number = unknown_field_number(f, input);
 
-    /* field-number-range: out-of-range or zero field numbers are rejected. */
-    if (field_number > k_max_field_number || field_number == 0)
+    /*
+     * field-number-range: out-of-range field numbers are rejected.  Field 0
+     * (canonical or overlong) never reaches an unknown handler: ppb rejects
+     * it during the prescan pass that precedes dispatch.
+     */
+    if (field_number > k_max_field_number)
     {
         return PPB_ERROR_CORRUPT_TAG;
     }
@@ -66,8 +70,12 @@ retain_unknown_field(const ppb_field &f, ::google::protobuf::Message *msg, std::
 {
     uint64_t field_number = unknown_field_number(f, input);
 
-    /* field-number-range: out-of-range or zero field numbers are rejected. */
-    if (field_number > k_max_field_number || field_number == 0)
+    /*
+     * field-number-range: out-of-range field numbers are rejected.  Field 0
+     * (canonical or overlong) never reaches an unknown handler: ppb rejects
+     * it during the prescan pass that precedes dispatch.
+     */
+    if (field_number > k_max_field_number)
     {
         return PPB_ERROR_CORRUPT_TAG;
     }

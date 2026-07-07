@@ -429,8 +429,9 @@ def _retain_unknown_handlers_deferred(msg_expr, input_var):
 def _validate_unknown_handlers_deferred(input_var):
     """Emit validate-only unknown handlers for inlined map-entry scopes.
 
-    They reject invalid field numbers (zero, reachable through an overlong
-    tag encoding, or above 2^29-1).
+    They reject out-of-range field numbers (above 2^29-1).  Field 0, in any
+    encoding, is rejected earlier by ppb's prescan pass, so it never reaches
+    these handlers.
     """
     out = []
     for w in ("varint", "i64", "len", "i32"):
