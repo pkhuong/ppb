@@ -75,7 +75,11 @@
  * prescan-before-lexing structure: the statistics should suffice to
  * preallocate the current message, including its variable-length
  * members, in an arena before lexing the message and recursively
- * decoding submessages.
+ * decoding submessages.  Prescan is also the perfect place to for
+ * stringent, not strictly necessary, checks on the wire encoding:
+ * it's always safe to run `ppb_lexn` without prescan, but doing
+ * so may lead to accepting a wider set of messages that would be
+ * rejected or interpreted differently by other implementations.
  *
  * The `ppb_lexn` function gives the caller access to every single
  * field in the message... but, in the common case of a message that
@@ -101,10 +105,12 @@ enum ppb_error
     PPB_ERROR_TRUNCATED_DATA = -3,  /* message cut short at the end of the `ppb_buf` */
     PPB_ERROR_CORRUPT_VARINT = -4,  /* invalid varint encoding (longer than 10 bytes) */
     /*
-     * invalid tag encoding (canonical zero, longer than 8 bytes, or unsupported wire type).
+     * Invalid tag encoding (canonical zero, longer than 8 bytes, or unsupported wire type).
      *
      * In addition to these structural issues, prescan *but not lexn* also flags
-     * non-canonical (overlong) encodings of tags with field index 0.
+     * non-canonical (overlong) encodings of tags with field index 0, and encodings
+     * that exceed 5 bytes or that decode to more than UINT32_MAX: these are either
+     * rejected or misinterpreted (truncated to 32 bits) by google's libprotobuf.
      */
     PPB_ERROR_CORRUPT_TAG = -5,
     PPB_ERROR_LIMIT_EXCEEDED = -6,  /* consumed bytes exceeded hard limit */

@@ -2240,6 +2240,83 @@ test_prescan_field_zero_overlong(void)
 }
 
 /*
+ * prescan rejects an unmatched tag whose varint is longer than 5 bytes, or
+ * whose value exceeds UINT32_MAX (field number >= 2**29).  A valid protobuf
+ * tag fits in a uint32_t and in <= 5 bytes, so these can only be corrupt or
+ * out-of-range; libprotobuf rejects them too.
+ *
+ * This check, like overlong zeros, is prescan only because it's not necessary
+ * for PPB correctness on canonically encoded messages (and memory safety holds
+ * regardless of encoding).  However, the behavior of google's libprotobuf is
+ * interesting on non-canonical tags:
+ *
+ *  1. any varint that exceeds 5 bytes is rejected, even if it would decode to
+ *     a valid tag.
+ *  2. a 5-byte varint that decodes to more than UINT32_MAX is *silently truncated*
+ *     to 32 bits.
+ *
+ * Check that we reject both cases, to avoid cases where PPB and libprotobuf
+ * both accept the same bytes, but interpret them differently.
+ */
+static void
+test_prescan_tag_too_long_or_large(void)
+{
+    printf("test_prescan_tag_too_long_or_large\n");
+
+    struct ppb_encoded_tag tags[1] = { PPB_TAG(1, PPB_WIRE_VARINT) };
+    struct ppb_field fields[1];
+
+    /* Max valid field number 2**29 - 1, wire 0 (tag 0xFFFFFFF8, 5 bytes): accepted. */
+    {
+        static const uint8_t max_field[] = { 0xF8, 0xFF, 0xFF, 0xFF, 0x0F, 0x00 };
+
+        zero_fields(1, fields);
+        CHECK(ppb_prescan(make_buf(max_field, sizeof(max_field)), 1, tags, fields, 8) ==
+            (ptrdiff_t)sizeof(max_field));
+        CHECK(fields[0].m.num_occurrences == 0); /* unknown, not field 1 */
+    }
+
+    /* First out-of-range field number 2**29, wire 0 (tag 2**32, 5 bytes): CORRUPT_TAG. */
+    {
+        static const uint8_t over_field[] = { 0x80, 0x80, 0x80, 0x80, 0x10, 0x00 };
+
+        zero_fields(1, fields);
+        CHECK(ppb_prescan(make_buf(over_field, sizeof(over_field)), 1, tags, fields, 8) ==
+            PPB_ERROR_CORRUPT_TAG);
+    }
+
+    /* Six-byte overlong encoding of field 1 (tag value 8): CORRUPT_TAG (> 5 bytes). */
+    {
+        static const uint8_t overlong6[] = { 0x88, 0x80, 0x80, 0x80, 0x80, 0x00, 0x01 };
+
+        zero_fields(1, fields);
+        CHECK(
+            ppb_prescan(make_buf(overlong6, sizeof(overlong6)), 1, tags, fields, 8) == PPB_ERROR_CORRUPT_TAG);
+    }
+
+    /* Five-byte overlong encoding of field 1 stays an unknown field (<= 5 bytes). */
+    {
+        static const uint8_t overlong5[] = { 0x88, 0x80, 0x80, 0x80, 0x00, 0x01 };
+
+        zero_fields(1, fields);
+        CHECK(ppb_prescan(make_buf(overlong5, sizeof(overlong5)), 1, tags, fields, 8) ==
+            (ptrdiff_t)sizeof(overlong5));
+        CHECK(fields[0].m.num_occurrences == 0);
+    }
+
+    /* A varint catch-all does not rescue an out-of-range tag: rejected first. */
+    {
+        struct ppb_encoded_tag catch_tags[2] = { PPB_TAG(1, PPB_WIRE_VARINT), PPB_TAG(-1, PPB_WIRE_VARINT) };
+        struct ppb_field catch_fields[2];
+        static const uint8_t over_field[] = { 0x80, 0x80, 0x80, 0x80, 0x10, 0x00 };
+
+        zero_fields(2, catch_fields);
+        CHECK(ppb_prescan(make_buf(over_field, sizeof(over_field)), 2, catch_tags, catch_fields, 8) ==
+            PPB_ERROR_CORRUPT_TAG);
+    }
+}
+
+/*
  * Limit tests use four_field_wire (24 bytes total):
  *   bytes  0- 2: field 1 varint 150   (3 bytes)
  *   bytes  3-11: field 2 i64 1        (9 bytes)
@@ -3234,6 +3311,7 @@ main(void)
     test_prescan_max_fields();
     test_prescan_zero_tag();
     test_prescan_field_zero_overlong();
+    test_prescan_tag_too_long_or_large();
     test_prescan_corrupt_tag();
     test_prescan_truncated_tag();
 

@@ -494,13 +494,20 @@ ppb_prescan_impl(const struct ppb_buf buf, const size_t num_fields,
         if (unlikely(field_idx >= num_fields)) /* -1UL for missing, so mutant-ok: '>=' -> '>' */
         {
             /*
-             * Field number 0 is invalid in protobuf.  The mask keeps the
-             * field-number bits of every tag byte (dropping the wire type
-             * and the continuation bits), so a zero result rejects the
-             * canonical `00` tag and every overlong encoding of it alike.
+             * Two fatal wire-format checks on an unmatched tag, done here in
+             * prescan (a standalone ppb_lexn only looks for canonical zero):
+             *   - Field number 0 (canonical `0x00-0x07` or any overlong encoding):
+             *     the field-number mask keeps the field-number bits of every
+             *     tag byte, so a zero result means field number 0.
+             *   - A tag longer than 5 bytes, or one whose value exceeds
+             *     UINT32_MAX.  A valid protobuf tag encodes a field number
+             *     at most 2**29 - 1, so it fits in a uint32_t and in <= 5
+             *     varint bytes.  libprotobuf truncates <= 5-byte tags
+             *     to 32 bits; we reject instead of adopting that design.
              */
             uint64_t tag_index_mask = (127UL * ((uint64_t)-1 / 255UL)) & ~(uint64_t)7;
-            if (unlikely((tag & tag_index_mask) == 0))
+            uint64_t tag_range_mask = ~PPB_ENCODE_VARINT(UINT32_MAX);
+            if (unlikely(((tag & tag_index_mask) == 0) | ((tag & tag_range_mask) != 0)))
             {
                 error_set(&error, PPB_ERROR_CORRUPT_TAG);
                 return (ptrdiff_t)error;

@@ -20,10 +20,6 @@ Required.Proto3.ProtobufInput.ValidDataMap.STRING.MESSAGE.MergeValue.ProtobufOut
 Required.Proto3.ProtobufInput.UnknownOrdering.ProtobufOutput
 Required.Proto3.ProtobufInput.UnknownVarint.ProtobufOutput
 
-# --- (field-number-range) out-of-range field number not rejected ---
-Required.Proto3.ProtobufInput.BadTag_FieldNumberTooHigh
-Required.Proto3.ProtobufInput.BadTag_FieldNumberSlightlyTooHigh
-
 # --- (packing) non-canonical wire encoding for repeated fields, rejected in lean ---
 Required.Proto3.ProtobufInput.ValidDataRepeated.BOOL.UnpackedInput.ProtobufOutput
 Required.Proto3.ProtobufInput.ValidDataRepeated.DOUBLE.UnpackedInput.ProtobufOutput
