@@ -137,7 +137,6 @@ exercise_proto3_scalars(std::span<const std::byte> input)
 {
     size_t calls[5] = { 0, 0, 0, 0, 0 };
     size_t unknown_calls = 0;
-    bool saw_zero_unknown = false;
 
     ppb::reader<SchemaA> r(input);
     ppb_error err = r.parse(ppb::on<FA::i>(
@@ -171,21 +170,10 @@ exercise_proto3_scalars(std::span<const std::byte> input)
                 return PPB_OK;
             }),
         ppb::on_unknown<>(
-            [&](const ppb_field &field) -> ppb_error
+            [&](const ppb_field &) -> ppb_error
             {
-                ppb_error err = PPB_OK;
-                ppb_buf buf = {
-                    .buf = field.v.ptr,
-                    .size = size_t(
-                        input.data() + input.size() - reinterpret_cast<const std::byte *>(field.v.ptr)),
-                };
-
-                // need full decode to handle non-canonical encodings
-                uint64_t tag = ppb_decode_varint(&buf, &err);
-                saw_zero_unknown |= tag == 0;
-
                 unknown_calls++;
-                return err;
+                return PPB_OK;
             }));
 
     if (err != PPB_OK)
@@ -220,19 +208,16 @@ exercise_proto3_scalars(std::span<const std::byte> input)
     check_lww(calls[3], r.meta<FA::f>().num_occurrences);
     check_lww(calls[4], r.meta<FA::s>().num_occurrences);
 
-    /* If we saw a zero field, we definitely saw an unknown. */
-    POSTCOND(!saw_zero_unknown || unknown_calls > 0);
-
     /*
-     * A set unknown_field() implies at least one unknown handler fired.
-     *
-     * The converse does not hold: a non-canonical zero tag (e.g. 0x80
-     * 0x00) routes to the catch-all yet collides with unknown_field()'s
-     * 0 "unset" sentinel, so the handler can fire with no reported tag....
-     * but, in that case, we'll have `saw_zero_unknown`.
+     * "unknown_field() is set" and "an unknown handler fired" imply each
+     * other.  unknown_field() uses field number 0 as its "unset" sentinel;
+     * the only tag that decodes to field 0 is a field-0 tag, which
+     * `ppb_prescan` (run by `reader::parse` before dispatch) rejects in every
+     * encoding.  So a handler always sees a nonzero field number and sets
+     * unknown_field().
      */
     POSTCOND(!r.unknown_field().has_value() || unknown_calls > 0);
-    POSTCOND(unknown_calls == 0 || r.unknown_field().has_value() || saw_zero_unknown);
+    POSTCOND(unknown_calls == 0 || r.unknown_field().has_value());
 }
 
 }  // namespace proto3_scalars

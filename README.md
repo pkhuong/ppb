@@ -253,16 +253,21 @@ in README_CPP.md.
    skipped: a message that contains a group anywhere cannot be
    lexed.
 
-5. Field number 0 is rejected with `PPB_ERROR_CORRUPT_TAG`, but only
-   in its canonical single-byte encoding: tags are matched on their
-   encoded form, so an overlong encoding of tag zero passes the zero
-   check and lexes as an unknown field of its wire type.  Field
-   numbers *above* protobuf's 2**29 - 1 maximum are not rejected
-   either: they lex as unknown fields (and can land in catch-alls)
-   as long as the tag varint fits in 8 encoded bytes; longer tag
-   varints are rejected as corrupt.  (libprotobuf instead truncates
-   long tag varints to 32 bits before checking them, so the two
-   parsers disagree on such inputs.)
+5. Field number 0 is rejected with `PPB_ERROR_CORRUPT_TAG` in every
+   encoding by `ppb_prescan`: the check masks off the wire-type and
+   continuation bits and inspects the field-number bits, so the
+   canonical `00` and any overlong encoding of it (`80 00`, ...) are
+   rejected alike.  `ppb_lexn` called on its own, without a preceding
+   `ppb_prescan`, still rejects only the canonical single-byte
+   encoding; an overlong field-0 tag that does not end a monotonic
+   batch lexes as an unknown field.  Since prescan is the validator
+   (and the C++ `reader::parse` always prescans first), that residual
+   surfaces only for direct lexn-only callers.  Field numbers *above*
+   protobuf's 2**29 - 1 maximum are not rejected: they lex as unknown
+   fields (and can land in catch-alls) as long as the tag varint fits
+   in 8 encoded bytes; longer tag varints are rejected as corrupt.
+   (libprotobuf instead truncates long tag varints to 32 bits before
+   checking them, so the two parsers disagree on such inputs.)
 
 6. Remember to use `ppb_zag32` when zigzag-decoding sint32 values: it's
    important to truncate the encoded integer to 32 bits before decoding.

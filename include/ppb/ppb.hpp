@@ -1092,9 +1092,12 @@ private:
 
     std::span<const std::byte> m_input;
     ppb_error m_error = PPB_OK;
-    // Zero is a safe "unset" sentinel: a zero encoded tag is rejected
-    // at compile time for schema fields and at runtime as invalid wire
-    // encoding for unknown fields.  First non-zero write wins.
+    // Zero is a safe "unset" sentinel: an encoded tag of 0 is exactly a
+    // field-0, wire-0 tag.  Schema fields cannot encode field 0 (rejected
+    // at compile time); unknown fields reach `unknown_field()` only via
+    // `prescan`/`parse`, and `ppb_prescan` rejects field 0 in every
+    // encoding, canonical `00` or overlong (a standalone `ppb_lexn` does
+    // not).  So a real field never writes 0 here.  First non-zero write wins.
     //
     // `m_error_field` fits in uint32_t because schema-field tags are
     // bounded to < 2**29 at compile time; `m_unknown_field` is wider

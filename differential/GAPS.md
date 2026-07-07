@@ -156,10 +156,12 @@ three divergence categories; everything else traps.
 
 - **Overlong framing varints.** libprotobuf rejects tag and length varints
   longer than 5 encoded bytes; PPB decodes framing varints like any other (an
-  overlong tag becomes an unknown field, an overlong length is decoded
-  normally), so inputs whose framing varints span 6-10 bytes parse with PPB
-  and fail with libprotobuf. One fuzzer variant (`NO_OVERLONG`) avoids
-  generating such inputs and runs with this tolerance disabled.
+  overlong tag with a nonzero field number becomes an unknown field, an
+  overlong length is decoded normally), so inputs whose framing varints span
+  6-10 bytes parse with PPB and fail with libprotobuf. An overlong encoding of
+  field 0 is the exception: PPB rejects it during prescan, agreeing with
+  libprotobuf. One fuzzer variant (`NO_OVERLONG`) avoids generating such
+  inputs and runs with this tolerance disabled.
 - **Non-canonical encoding disagreements.** When both parsers accept the same
   bytes but decode different values, or PPB rejects bytes libprotobuf
   accepts, the divergence is tolerated only when PPB decodes libprotobuf's
