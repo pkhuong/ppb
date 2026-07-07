@@ -133,11 +133,13 @@ using S = ppb::schema<ppb::varint<1>, ppb::len<2>, ppb::i32<3>>;
 
 ### `ppb::auto_schema<...>`: flatten and sort
 
-`ppb::auto_schema<Ts...>` accepts field descriptors and/or (possibly
-nested) `std::tuple<...>`s of descriptors, flattens, sorts by
+`ppb::auto_schema<Ts...>` accepts field descriptors, (possibly
+nested) `std::tuple<...>`s of descriptors, and existing
+`ppb::schema<>`s; it flattens everything, sorts by
 `(field_number, wire_type)`, and yields the corresponding
 `ppb::schema<...>`.  Useful when composing a schema from reusable
-sub-tuples:
+sub-tuples, or when extending a schema (e.g. a generated one) at the
+use site:
 
 ```cpp
 using shared_fields = std::tuple<ppb::varint<3>, ppb::len<7>>;
@@ -146,6 +148,9 @@ using my_schema = ppb::auto_schema<
     shared_fields,
     ppb::i32<2>>;
 // == ppb::schema<ppb::varint<1>, ppb::i32<2>, ppb::varint<3>, ppb::len<7>>
+
+// A schema splices and re-sorts like a tuple:
+using extended = ppb::auto_schema<my_schema, ppb::detect_unknown_fields<>>;
 ```
 
 Duplicate `(field_number, wire_type)` pairs are still rejected.
