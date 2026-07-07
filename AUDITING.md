@@ -64,6 +64,14 @@ The sections below are the recipes referenced by the steps above.
 - Frama-C build: driven by `frama-c.mk`, runs in a Docker image
   built from `.docker/`. WP entry point `ppb_entry_point` lives in
   `src/ppb.c` under `#ifdef __FRAMAC__`.
+- Schema generator: `generator/protoc_gen_ppb.py`, a `protoc` plugin
+  that emits `ppb::schema` headers from `.proto` files; checked by
+  `make generator_test` (lint, type-check, pytest, golden headers,
+  compilation of the generated schemas).
+- Differential / conformance: `differential/` decodes through
+  generated schemas into libprotobuf messages and compares against
+  libprotobuf's own parser; see
+  [Generated schemas vs. libprotobuf](#generated-schemas-vs-libprotobuf).
 
 ## Verification recipes
 
@@ -166,6 +174,29 @@ properties not expressed in ACSL:
 
 Any regression traps immediately, regardless of sanitizers.
 
+### Generated schemas vs. libprotobuf
+
+The `protoc-gen-ppb` generator and the C++ wrapper sit outside the WP
+proofs; the claim that generated schemas decode like libprotobuf is
+empirical.  Unlike the recipes above, these need protoc, libprotobuf,
+and `uv`, and the containerized conformance run needs Docker; the
+targets print a skip message when a dependency is missing:
+
+```sh
+make differential-ci                     # deterministic subset, same as CI
+make -C differential conformance-docker  # conformance suites, in a container
+```
+
+`differential-ci` runs fixed-input and pseudorandom reflection
+differentials plus fuzz-corpus replays, with no Docker and no
+time-bounded fuzzing.  The conformance run drives Google's
+`conformance_test_runner` over three testees (proto3 full, proto2,
+proto3 lean) against the failure lists in `differential/`: expect
+zero unexpected failures, with the proto3 full list empty, the proto2
+list holding only the group-based `MessageSet` cases, and the lean
+list holding the deliberate strict-encoding rejections.  Every listed
+failure is tagged and explained in `differential/GAPS.md`.
+
 ## Frama-C coverage
 
 The Docker image is pinned to Frama-C 32.0 (codename
@@ -184,11 +215,25 @@ who is not a Frama-C user can read the makefile invocation end-to-end.
 | `-wp-status` | Reports an explicit per-goal status in the output. | Lets the post-run report classify exactly which goals were `Valid`, `Unknown`, `Invalid`. |
 | `-instantiate` | Enables ACSL `instantiate` directives. | Used implicitly by some lemmas; harmless for PPB. |
 | `-constfold` | Folds constants in preprocessed source before analysis. | Lets WP see the encoded values of macros like `PPB_TAG_BITS(1, ...)` literally. |
+| `-lib-entry` | Analyzes the file as a library: no `main`, and global state at entry is arbitrary. | Every annotated function is verified against its own contract; PPB has no mutable globals, so the arbitrary-globals part changes nothing. |
+| `-cpp-extra-args="-I include -isystem stubs-for-frama-c -std=c2x -DNDEBUG"` | Preprocessor setup for the analyzed translation unit. | `stubs-for-frama-c/` supplies the `immintrin.h` stub that selects the BMI2 fast path (see [Code paths actually proven](#code-paths-actually-proven)); `-DNDEBUG` compiles the `assert`s out, so the proof covers the assertion-free build. |
+| `-wp-split-conj` | Recursively splits conjunctions in generated goals into separate sub-goals. | Goal granularity only: more, smaller goals for the solvers; no change to what is claimed. |
+| `-wp-no-callee-precond` | Skips the extra hypothesis that a callee's preconditions held after a call returns; the obligations to *prove* those preconditions at each call site are generated either way. | Strictly fewer hypotheses: a sound restriction that keeps proof contexts small. |
+
+The remaining flags in `frama-c.mk` (`-session`, `-cache-size`,
+`-memory-footprint`, `-wp-session`, `-wp-cache`, `-wp-par`,
+`-wp-timeout`, `-wp-prover`) select the SMT-solver fleet and cache
+proof sessions; they affect wall-clock time, not what is proven.
+`WP_FCT` (forwarded as `-wp-fct`) restricts a run to named functions
+for quicker iteration and is empty for audit runs.  The trailing
+`-report-*` flags write the `wp.csv` report discussed below;
+`-report-no-proven` keeps `Valid` goals out of it.
 
 ### Expected `wp.csv` content
 
-`wp.csv` lists obligations the report run flagged as not `Valid`.  The
-repo's `wp.csv` (committed) records three rows:
+`make wp` finishes by writing a `wp.csv` report at the repo root
+(`make clean` deletes it); the report lists every obligation flagged
+as not `Valid`.  A run against this tree records exactly three rows:
 
 ```
 FRAMAC_SHARE/libc  __fc_gcc_builtins.h  131  __builtin_usubl_overflow  postcondition       Unknown  \false
@@ -200,10 +245,10 @@ These are not PPB obligations: they are the postcondition and
 termination clauses on Frama-C's stubs for two gcc builtins
 (`__builtin_usubl_overflow`, used in `src/sat_sub.h`;
 `__builtin_ctzll`, used in the varint / tag fast paths). The stubs
-have no body, so WP cannot discharge either; the contracts faithfully
-model the gcc semantics, so we trust them. A rerun should produce
-exactly these three rows. Any new rows are real PPB regressions and
-must be triaged.
+have no body, so WP cannot discharge either; the contracts match the
+documented gcc semantics, so we trust them. A rerun should produce
+exactly these three rows. Any other row is a PPB regression and must
+be triaged.
 
 ### Code paths actually proven
 
@@ -250,7 +295,7 @@ satisfy all of the following.
 - [ ] **Clamp `ppb_buf.size ≤ PTRDIFF_MAX`.** Larger objects
       introduce well-known UB in C
       ([Pascal Cuoq's writeup](https://www.trust-in-soft.com/resources/blogs/2016-05-20-objects-larger-than-ptrdiff_max-bytes)).
-      On 64-bit hosts this is rarely a real constraint, but it's
+      On 64-bit hosts this rarely constrains anything, but it's
       still good to validate.
 - [ ] **Call `ppb_validate_tags`** once at startup on every static
       `tags[]` array. Skipping this does not cause UB but can
@@ -276,14 +321,14 @@ grep -nEA2 'admit\b.*\b<name>\b' src/ppb.c src/varint.h
 
 | # | Name | Site | Property | Soundness sketch | Dynamic check |
 |---|------|------|----------|------------------|---------------|
-| 1 | `bitor_ge_l` | `src/ppb.c` | `(a \| b) ≥ a` | Bitwise OR can only set bits, never clear them; for unsigned integers this monotonicity gives the inequality. WP lacks a built-in axiom for this. | |
+| 1 | `bitor_ge_l` | `src/ppb.c` | `(a \| b) ≥ a` | Bitwise OR can only set bits, never clear them; for unsigned integers this monotonicity gives the inequality. WP lacks a built-in axiom for this. | None: an arithmetic identity with no runtime counterpart to check. |
 | 2 | `sint32_in_range` | `src/ppb.c` (`sint32` behavior of `ppb_zag`) | For `0 ≤ x < 2³²`, `ppb_zag(x) ∈ [-2³¹, 2³¹)` | `ppb_zag` is `(x >> 1) ^ -(x & 1)`. For `x < 2³²`, `x >> 1 < 2³¹`, and XOR with `-(x & 1) ∈ {0, -1}` either leaves the value or bit-inverts it; both stay in the signed-32-bit range. | `tests/test_ppb.c::test_zag` boundary cases; `fuzz/fuzz_ppb.c::fuzz_zag` re-checks the bound on every iteration. |
-| 3 | `tags_above_seven_induction` | `src/ppb.c` (`ppb_validate_tags`) | After the loop, `∀ j. 0 ≤ j < num_fields ⇒ tags[j].bits > 7` | `tags[0].bits ≥ 8` is checked before the loop, and the loop body rejects any `tags[i-1].bits ≥ tags[i].bits`. Strict ascending order plus a base case ≥ 8 implies every element is > 7. WP cannot fold this universally-quantified induction automatically. | |
+| 3 | `tags_above_seven_induction` | `src/ppb.c` (`ppb_validate_tags`) | After the loop, `∀ j. 0 ≤ j < num_fields ⇒ tags[j].bits > 7` | `tags[0].bits ≥ 8` is checked before the loop, and the loop body rejects any `tags[i-1].bits ≥ tags[i].bits`. Strict ascending order plus a base case ≥ 8 implies every element is > 7. WP cannot fold this universally-quantified induction automatically. | `tests/test_ppb.c::test_validate_tags` (and the sentinel variants) exercise both the base case and every rejection path the induction rests on. |
 | 4 | `pivot_dominates_suffix` | `src/ppb.c` (`find_tag`, `well_formed` clause) | At a binary-search pivot: `tags[lo+pivot].bits > tag ⇒ ∀ i ∈ [lo+pivot, num_fields). tags[i].bits > tag` | Sortedness: in a strictly ascending array, if the pivot exceeds `tag`, so does every element after it. WP's induction support cannot generalize from the pivot to the suffix. | The cross-validation in `fuzz/fuzz_ppb.c::cross_validate_meta` and the explicit prescan / lexn equivalence checks would surface a mis-routed tag (a tag landing on the wrong field). `tests/test_ppb.c::test_validate_tags` and the per-tag matching tests cover the search behavior. |
 | 5 | `zero_absent` | `src/ppb.c` (`well_formed` clause of `ppb_prescan_impl`) | `tag < 8 ⇒ field_idx ≥ num_fields` | `well_formed` assumes `∀ j. tags[j].bits > 7`. `find_tag`'s postcondition states `field_idx < num_fields ⇒ tags[field_idx].bits ≡ tag`. Contrapositive: if `tag < 8`, no `tags[j]` matches, so `field_idx ≥ num_fields`. | Implicit: the prescan loop returns `PPB_ERROR_CORRUPT_TAG` for `tag < 8`. Unit test `test_prescan_zero_tag` and golden master test `testdata/invalid/tag-zero.hex` confirm the detection. |
-| 6 | `tag_above_seven_after_match` | `src/ppb.c` (`well_formed` clause of `ppb_prescan_impl`) | `tag > 7` at the call to `handle_field` | The tags array only has values `> 7`; a hit can only be for a `tag > 7`. | |
+| 6 | `tag_above_seven_after_match` | `src/ppb.c` (`well_formed` clause of `ppb_prescan_impl`) | `tag > 7` at the call to `handle_field` | The tags array only has values `> 7`; a hit can only be for a `tag > 7`. | None of its own: implied by `tags_above_seven_induction` (all validated tags exceed 7) and `zero_absent` (`tag < 8` returns early), whose checks are listed above. |
 | 7 | `lexn_buf_valid_after_copy` | `src/ppb.c` (`ppb_lexn_impl` ensures) | After the function returns, `buf_valid(*buf)` holds | The loop invariant maintains `buf_valid(src)`. The final statement is `*buf = src;`. WP has trouble with the struct copy. | `fuzz/fuzz_ppb.c::check_buf_valid` re-checks the invariant after every `ppb_lexn*` call: `buf.size <= input_size` and `buf.buf + buf.size == input + input_size`. A regression would trap. |
-| 8 | `lexn_meta_unchanged_in_loop` | `src/ppb.c` (`ppb_lexn_impl` loop body) | `∀ j. fields[j].m ≡ \at(fields[j].m, Pre)` after `handle_field` with `update_metadata=false` | With `update_metadata=false`, `handle_field`'s `nometa` behavior assigns only `dst->v`, `*src`, and `*error` -- never any `fields[j].m`. WP has trouble carrying that exclusion through the `dst`-pointer indirection. | `fuzz/fuzz_ppb.c::do_lexn_call` (and the hard / soft variants) snapshots `fields[].m` before each call and re-checks equality after via `check_lexn_postconds`. |
+| 8 | `lexn_meta_unchanged_in_loop` | `src/ppb.c` (`ppb_lexn_impl` loop body) | `∀ j. fields[j].m ≡ \at(fields[j].m, Pre)` after `handle_field` with `update_metadata=false` | With `update_metadata=false`, `handle_field`'s `nometa` behavior assigns only `dst->v`, `*src`, and `*error`, never any `fields[j].m`. WP has trouble tracking that exclusion through the `dst`-pointer indirection. | `fuzz/fuzz_ppb.c::do_lexn_call` (and the hard / soft variants) snapshots `fields[].m` before each call and re-checks equality after via `check_lexn_postconds`. |
 | 9 | `lexn_meta_unchanged_in_loop_again` | `src/ppb.c` (`ppb_lexn_impl` loop body, error-break path) | Same property as #8, re-stated after the `dst->v = (struct ppb_field_value) { .ptr = NULL };` zero-fill on the error path | The zero-fill assigns through `dst->v` only; the `m` field of `*dst` (and every other `fields[j].m`) is untouched. Together with #8 this preserves the metadata invariant across the error `break`. WP cannot see that the struct-literal write to `dst->v` definitely doesn't bleed into any `.m` field, so the property must be re-admitted. | Covered by the same `fuzz/fuzz_ppb.c::do_lexn_call` snapshot/check as #8. Fuzzing exercises the error path whenever the input is malformed mid-buffer. |
 | 10 | `peek_tag_fits_63` | `src/varint.h` (`peek_tag` ensures) | On success, `*OUT_tag < 2⁶³` | The fast path reads ≤ 8 bytes with `limb_width = 8`. If there's no stop bit in the first 8 bytes, we return an error. Otherwise the worst case is only the eighth byte has its stop bit clear, so it contributes at most 7 bits in positions [62:56]. All 8 bytes together yield at most 63 bits. | `tests/test_ppb.c::test_peek_tag_range` checks the boundary case directly. |
 

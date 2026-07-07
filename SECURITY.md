@@ -76,17 +76,18 @@ checked in `fuzz_invalid_tags`.
 
 ## Memory-safety guarantees
 
-PPB carries pervasive ACSL annotations. `make wp` discharges every
+PPB has pervasive ACSL annotations. `make wp` discharges every
 memory-safety, termination, and behavioral goal except:
 
-- The `admit`ted properties listed below. Each is manually verified as
-  sound, and the spirit of every claim is dynamically asserted in the
-  libFuzzer harness.
+- The `admit`ted properties listed in the
+  [admit ledger](AUDITING.md#admit-ledger). Each is manually verified
+  as sound, and the spirit of every claim is dynamically asserted in
+  the libFuzzer harness.
 - Unknown goal status for `__builtin_usubl_overflow` and
-  `__builtin_ctzll` (see `wp.csv`). These are builtin postconditions
-  inherited from Frama-C that can't be discharged because the stubs
-  lack definitions.  We just have to trust that their contracts
-  correctly model gcc's interpretation.
+  `__builtin_ctzll` (see the `wp.csv` report written by `make wp`).
+  These are builtin postconditions inherited from Frama-C that can't
+  be discharged because the stubs lack definitions.  We just have to
+  trust that their contracts correctly model gcc's interpretation.
 
 For LEN fields, WP fully discharges
 `/*@ assert buf_valid_range(dst->v.payload); */` in `handle_field`:
@@ -104,9 +105,24 @@ the libFuzzer harness (`fuzz/fuzz_ppb.c`) and `picoscope`:
 - `payload.buf > field.v.ptr`: the payload starts strictly after
   the tag byte (the tag plus length-varint occupy at least 2 bytes).
 
-All unit, golden, and fuzz tests additionally run under ASan + UBSan
-in CI on gcc and clang, on x86-64 (with BMI2 fast path), aarch64, i686
-(`-m32`), and s390x (for big-endian coverage via QEMU, UBSan-only).
+All unit and golden tests additionally run under ASan + UBSan in CI
+with clang, on x86-64 (with BMI2 fast path), aarch64, i686 (`-m32`),
+and s390x (for big-endian coverage via QEMU, UBSan-only), plus MSan on
+x86-64 and aarch64; gcc builds run the same tests without sanitizers.
+Fuzzing is *not* part of CI: run `make fuzz` yourself (the target
+builds with ASan + UBSan) for as long as your risk budget allows; see
+the pinned-revision workflow in [AUDITING.md](AUDITING.md).
+
+The C++ wrapper (`ppb.hpp`) and the `protoc-gen-ppb` generator are
+excluded from the Frama-C proofs; their assurance is empirical.  Both
+are unit-tested, the wrapper is fuzzed under ASan + UBSan (with MSan
+and TySan variants), and the generated pipeline as a whole (generator,
+wrapper, C core) is compared against libprotobuf: Google's protobuf conformance suites
+pass with zero unexpected failures (the proto3 suite with zero
+expected failures), and the differential harnesses in `differential/`
+check PPB's decodings against libprotobuf's parser on fixed,
+pseudorandom, and fuzzer-generated inputs.  Deliberate divergences
+are documented in `differential/GAPS.md`.
 
 ## Caller responsibilities
 

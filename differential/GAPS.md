@@ -68,6 +68,29 @@ round-trip is still correct: the handlers write through libprotobuf reflection,
 which enforces oneof exclusivity (setting any member clears the rest), and
 last-occurrence across members matches the wire semantics.
 
+### proto3 string UTF-8 validation (sink-level only)
+
+Neither PPB nor the generated schemas validate UTF-8 (see the quirk lists in
+the toplevel README and README_CPP.md). The reflection sink guards its string
+setters with its own validator (`ppb_utf8.hpp`), rejecting invalid proto3
+`string` payloads with `PPB_ERROR_INVALID_UTF8`, so the proto3 conformance
+suite's required invalid-UTF-8 rejections pass because of sink-level code. A
+plain `ppb::reader` user must validate in their handlers; see
+`always_dispatch_strings` in generator/README.md for the dispatch-semantics
+side of that.
+
+### proto2 closed enums (sink-level only, corpus-untested)
+
+The generated descriptors dispatch raw wire values for every enum, closed
+proto2 enums included (see "Proto2 semantics" in generator/README.md). The
+sink writes enum fields through libprotobuf reflection
+(`SetEnumValue`/`AddEnumValue`), which itself routes out-of-range values on
+closed enums to the unknown-field set, so the testee matches spec behavior
+that a plain `ppb::reader` user does not get. Note that the binary
+conformance corpus only exercises in-range enum values, and the randomized
+differential deliberately draws enum values from the declared set, so neither
+suite would surface the divergence either way.
+
 ## Residual divergences
 
 All three suites pass with 0 unexpected failures:
@@ -123,3 +146,30 @@ proto2's remaining 3 are group-related, and lean's 62 are much more diverse.
   - **(merge) 2 failures.** Tagged as merge tests, but lean-only for the same
     packing reason: the merged messages contain unpacked repeated scalar
     fields, which lean rejects.
+
+## Divergences tolerated by the byte fuzzers
+
+The byte-level corruption fuzzers (`fuzz_sink_bytes`, `fuzz_sink_mutate`)
+compare the full-mode reflection sink against libprotobuf on arbitrary and
+corrupted bytes. Their oracle (`fuzz/reflection_differential.hpp`) tolerates
+three divergence categories; everything else traps.
+
+- **Overlong framing varints.** libprotobuf rejects tag and length varints
+  longer than 5 encoded bytes; PPB decodes framing varints like any other (an
+  overlong tag becomes an unknown field, an overlong length is decoded
+  normally), so inputs whose framing varints span 6-10 bytes parse with PPB
+  and fail with libprotobuf. One fuzzer variant (`NO_OVERLONG`) avoids
+  generating such inputs and runs with this tolerance disabled.
+- **Non-canonical encoding disagreements.** When both parsers accept the same
+  bytes but decode different values, or PPB rejects bytes libprotobuf
+  accepts, the divergence is tolerated only when PPB decodes libprotobuf's
+  canonical re-serialization back to the reference message; a misdecode of a
+  canonically encoded value would corrupt that round-trip and still trap.
+  Known instances: tag varints above 32 bits (libprotobuf truncates before
+  validating, the sink rejects the out-of-range field number) and groups
+  retained in libprotobuf's unknown-field set (PPB rejects wire types 3/4
+  outright).
+- **Reparse survival.** When PPB accepts bytes libprotobuf rejects, the
+  result is tolerated only when re-serializing PPB's decoding still fails
+  libprotobuf's parse: the malformed structure survived as-is instead of
+  being laundered into a different valid value.
