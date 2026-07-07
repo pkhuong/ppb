@@ -4,7 +4,8 @@
 header-only [`ppb::schema`](../include/ppb/ppb.hpp) declarations: one
 compile-time schema per message, plus a field-key enum and a static
 `max_depth`.  The schema also comes with C++ definitions for enums (nested
-or toplevel).
+or toplevel).  The generated decoding is validated against libprotobuf
+itself; see [Conformance and differential testing](#conformance-and-differential-testing).
 
 ## Requirements
 
@@ -35,13 +36,13 @@ options are standalone booleans (off by default unless noted).
 | Option | Default | Effect |
 |---|---|---|
 | `mode=none\|lean\|full` | `lean` | Shorthand preset that expands to the two independent flags below. `lean` sets `strict_repeated_encoding` (reject unexpected wire encodings, skip unknowns). `none` clears both (accept either wire form, skip unknowns). `full` is `none` plus `detect_unknown` (accept either wire form, detect unknowns). |
-| `strict_repeated_encoding` | on | Reject unexpected repeated wire encodings at parse time (fallback has `field_semantics::error`). When off, unexpected forms have `field_semantics::always_lexn` instead, forcing a wire-order lexn pass so messages with both packed and unpacked encodings decode in wire order. The flag can override a mode preset: `mode=none,strict_repeated_encoding` relaxes then re-asserts strictness. Already on by default, so passing it alone is idempotent. |
+| `strict_repeated_encoding` | on | Reject unexpected repeated wire encodings at parse time (fallback has `field_semantics::error`). When off, unexpected forms have `field_semantics::always_lexn` instead, forcing a wire-order lexn pass so messages with both packed and unpacked encodings decode in wire order. The flag can override a mode preset: `mode=none,strict_repeated_encoding` relaxes then re-asserts strictness. Already on by default, so passing it alone is redundant. |
 | `detect_unknown` | off | Append `ppb::detect_unknown_fields<>` to every schema, so unknown fields can be reported rather than skipped (e.g. `mode=lean,detect_unknown` rejects alt wire forms *and* detects unknowns). Set by `mode=full`. |
 | `opaque_cycles` | off | Allow recursive (cyclic) message graphs by emitting the cycle's back-edge fields as opaque byte spans (see Limitations). |
 | `oneof_as_optional` | off | **Lossy, opt-in.** Decode each member of a user-declared oneof as an independent field with `always_lexn` semantics: every member occurrence dispatches, in wire order, so the caller can reconstruct which member won, but oneof exclusivity is not enforced at the schema level. Without this flag, any oneof is rejected with a diagnostic. |
 | `drop_foreign_type_fields` | off | **Lossy, opt-in.** Drop any field whose type comes from a well-known-type import (`google/protobuf/*`) that PPB does not support. Dropped fields are listed as `ppb-dropped:` comments at the top of the generated header and are not decoded. Without this flag, fields referencing unsupported well-known types are rejected with a diagnostic. |
 | `drop_group_extension_fields` | off | **Lossy, opt-in.** Drop field declarations whose wire type or feature is not supported by PPB (currently: proto2 `group` fields and proto2 extension ranges/definitions). Dropped group fields are listed as `ppb-dropped:` comments; extension ranges and definitions are logged as generator warnings and ignored. Without this flag the generator rejects unsupported declarations with a diagnostic. |
-| `always_dispatch_strings` | off | Dispatch every singular `string` field to its handler. Gives users one callback per value (useful for validation). |
+| `always_dispatch_strings` | off | Dispatch every wire occurrence of a singular `string` field to its handler, one callback per value (via `field_semantics::singular`). Needed for handler-side UTF-8 validation: with plain last-write-wins dispatch a handler may only see the final occurrence, while proto3 conformance rejects a message when *any* occurrence is invalid. The proto3 conformance testees pass this flag. |
 
 To compare wire policies, generate into separate directories and diff:
 
@@ -103,8 +104,8 @@ with `--ppb_opt=drop_foreign_type_fields`, dropped (listed as `ppb-dropped:`
 comments at the top of the header and not decoded).
 
 Classification is by name, not by content: any field whose type lives under
-package `google.protobuf` -- including a user-defined message that merely
-declares that package -- is treated as a well-known-type reference, and
+package `google.protobuf` (including a user-defined message that merely
+declares that package) is treated as a well-known-type reference, and
 rejected or dropped like the unsupported types above unless it comes from one
 of the six supported files. Similarly, imported files under the
 `google/protobuf/` path outside the supported list are skipped wholesale
@@ -145,7 +146,7 @@ namespace ppb_gen::pkg::Foo
   nested inside it (a proto package named `schema`/`reader` would otherwise collide
   with `ppb::schema` / `ppb::reader`).
 - The field-key enum is `F`; descriptors look like `ppb::int32<F::x>`.
-- Nested message `Foo.Bar` become `namespace ppb_gen::pkg::Foo::Bar`, referenced as
+- A nested message `Foo.Bar` becomes `namespace ppb_gen::pkg::Foo::Bar`, referenced as
   `::ppb_gen::pkg::Foo::Bar::schema`. Toplevel enums are emitted in the package namespace;
   nested enums in their message's namespace.
 - `max_depth` is a static constant you can pass to `ppb::limit::max_depth`.
@@ -193,7 +194,7 @@ a singular field, `ppb::unpacked_message<K, Inner::schema>` for a repeated one.
 after the CamelCased field name plus `Entry` (e.g. `my_field` -> `MyFieldEntry`), with
 `key = 1` and `value = 2` fields, plus a repeated field referencing it. The generator
 emits this as an ordinary repeated message field
-(`ppb::unpacked_message<F::field, ::pkg::Foo::MyFieldEntry::schema>`) where the entry
+(`ppb::unpacked_message<F::field, ::ppb_gen::pkg::Foo::MyFieldEntry::schema>`) where the entry
 gets its own namespace with `key`/`value` typed normally (proto3 zero-default aliases
 apply inside a proto3 entry).
 
@@ -207,7 +208,7 @@ warning per affected field and otherwise decodes it like its proto3
 counterpart:
 
 - **Explicit defaults are not applied.** A field's `default = ...` value
-  never reaches the handler: an absent field simply doesn't dispatch, with or
+  never reaches the handler: an absent field doesn't dispatch, with or
   without a declared default. Apply defaults yourself, e.g. by initializing
   destination values before `parse()`; the warning reports each declared
   default value.
@@ -242,8 +243,8 @@ counterpart:
 ## Compile cost
 
 The generated headers trade C++ compile time for runtime dispatch: schemas are
-template metaprograms, so unusually wide or deep messages cost real compiler
-time and memory (measured with g++ 16 at `-O1`):
+template metaprograms, so unusually wide or deep messages cost substantial
+compiler time and memory (measured with g++ 16 at `-O1`):
 
 - **Fields per message**: up to ~1,000 fields per message compiles with stock
   compiler limits (a 1,000-field message takes >20 s and >1 GB). Cost grows
@@ -254,6 +255,38 @@ time and memory (measured with g++ 16 at `-O1`):
   levels deep exceeds g++'s default `-ftemplate-depth=900` (each nesting level
   costs roughly ten); raise the flag for deeper chains (a 100-level chain
   compiles in under 10 s with `-ftemplate-depth=1200`).
+
+## Conformance and differential testing
+
+Generated schemas are validated empirically, end to end (generator, C++
+wrapper, C core), against libprotobuf.  The [differential/](../differential/README.md)
+tree builds a reflection sink on top of this generator's output (decoded
+fields are written into libprotobuf `Message`s via reflection) and compares
+the result with the libprotobuf parser:
+
+- **Google's protobuf conformance suites** run against a version-locked
+  libprotobuf in three configurations, with zero unexpected failures: proto3
+  full mode (zero expected failures), proto2 (three expected failures, all
+  uses of the group-based `MessageSet` wire format, which PPB rejects by
+  design), and proto3 lean mode (expected rejections that follow from lean's
+  strict-encoding policy).  Every expected failure is tagged in the
+  `differential/failure_list_*.txt` files and explained in
+  [differential/GAPS.md](../differential/GAPS.md).  The suites cover binary
+  protobuf only; JSON and text-format requests are skipped.
+- **Reflection differentials** decode fixed, pseudorandom, and
+  fuzzer-generated inputs through both parsers and compare the resulting
+  messages.  The deterministic subset (fixed and pseudorandom differentials
+  plus fuzz-corpus replays) runs in CI via `make differential-ci` at the
+  repo root.
+- **Sink fuzzers** (a libprotobuf-mutator structured fuzzer and a byte-level
+  corruption fuzzer) are time-bounded and never run in CI.
+  `make -C differential fuzz-sink` runs natively, without a container;
+  `fuzz-structured` runs in the same container image as the conformance
+  suites.
+
+`make -C differential conformance-docker` runs the three conformance suites
+in the differential container image; [differential/README.md](../differential/README.md)
+describes the native alternative, built from a sibling protobuf checkout.
 
 ## Development
 

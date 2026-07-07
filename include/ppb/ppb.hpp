@@ -116,8 +116,9 @@ enum class wire_type : uint8_t
 //                   prefer `last_write_wins` if you want LEN repeats
 //                   silently dropped.
 //
-//   last_write_wins Only the last occurrence is dispatched.  Matches
-//                   proto2 default field semantics for scalars.
+//   last_write_wins At minimum, the last occurrence is dispatched.
+//                   With assignment-style handlers, matches proto2
+//                   default field semantics for scalars.
 //
 //   proto3_zero_default Like `last_write_wins`, plus: absent fields
 //                   *may be* dispatched with their zero value (0 / empty
@@ -129,6 +130,17 @@ enum class wire_type : uint8_t
 //                   and skip both `init` and handlers.  Only `parse()`
 //                   honors this; direct `prescan`/`lexn`/`dispatch`
 //                   calls do not flag `error`-semantics fields.
+//
+// Each policy sets the *minimum* dispatch for its field, plus whether
+// the field forces `parse()` off the prescan fast path onto a
+// wire-order lexn pass.  The path decision is global to the `parse()`
+// call: once any handled field forces the lexn pass, every matched
+// field dispatches once per occurrence, in wire order, including
+// `last_write_wins` / `singular` / `proto3_zero_default` fields.
+// Handlers must stay correct under per-occurrence dispatch (plain
+// assignment is the canonical example); the guarantee callers may
+// rely on is that a field's final dispatch delivers its last wire
+// value.
 //
 // N.B., there is no guarantee for `proto3_zero_default` that the
 // handler will or won't be invoked with a zero value for an absent
@@ -240,9 +252,9 @@ struct bytes;
 // the last.
 //
 // N.B., by default, the `limit::max_depth()` is set to 0, so
-// `on_submessage` always fails with `PPB_ERROR_DEPTH_EXCEEDED`; relax
-// that the recursion depth budget to a strictly positive value to
-// enable submessage parsing.
+// `on_submessage` always fails with `PPB_ERROR_DEPTH_EXCEEDED`; raise
+// the recursion depth budget to a strictly positive value to enable
+// submessage parsing.
 template <auto K, typename InnerSchema, field_semantics sem = field_semantics::singular> struct message;
 
 // Convenience aliases for `proto3_zero_default` semantics: same as
@@ -542,14 +554,14 @@ on(Fn &&handler)
     return detail::value_handler<Key, wire, std::decay_t<Fn>> { {}, std::forward<Fn>(handler) };
 }
 
-// Two-lambda repeated-field handler, with one for each wire forms of one key.
+// Two-lambda repeated-field handler, one callable per wire form of one key.
 // A packed occurrence calls `range_fn` once with an iterable view over the
 // whole run; an unpacked occurrence calls `elem_fn` with one decoded scalar T.
 //
 // The packed view's element type isn't necessarily normalized, but always
 // converts implicitly to T.  For varint fields it yields the decoded T; for
 // fixed-width fields it's a `std::span<const le_packed<T>>`, yielding
-// le_packed<T> -- a little-endian wrapper that converts to T and exposes
+// le_packed<T>, a little-endian wrapper that converts to T and exposes
 // `.value()`.  A plain `for (T v : view)` loop works the same either way; only
 // type-inspection or `auto` can reveal the difference.
 //
@@ -747,8 +759,9 @@ template <typename... Fs> struct reader<schema<Fs...>>
     using Schema = schema<Fs...>;
 
     // Default-constructs an empty reader (no input, no error).
-   // `parse()`/`lexn()`/etc. on an empty reader are valid no-ops;
-    // assign over it to start work.
+    // `parse()`/`lexn()`/etc. on an empty reader are valid and
+    // consume nothing (`parse()` still runs its `init` callback,
+    // as for any empty message); assign over it to start work.
     constexpr reader() noexcept = default;
 
     // Constructs a reader over `input`.  The reader does *not* own
@@ -800,8 +813,8 @@ template <typename... Fs> struct reader<schema<Fs...>>
     // return type matches `unknown_field()` for regularity.
     //
     // Special case: an `unknown<W, field_semantics::error>` catch-all
-    // has no real field number, so the reported value is a sentinel
-    // -- the catch-all's `field_number == uint64_t(-1)` truncated to
+    // has no actual field number, so the reported value is a sentinel:
+    // the catch-all's `field_number == uint64_t(-1)` truncated to
     // 32 bits and shifted, i.e. `0xFFFFFFF8u | uint32_t(W)`.  These
     // sentinels collide with a hypothetical schema field at
     // `field_number == 2**29 - 1`; in practice you only see them when
@@ -869,7 +882,7 @@ template <typename... Fs> struct reader<schema<Fs...>>
     //
     // `handlers...` may be empty when `init` is supplied:
     // `parse(init)` runs prescan + `init` (with `meta<>()` populated)
-    // and returns without dispatching any field handlers -- useful
+    // and returns without dispatching any field handlers; useful
     // for validation or sizing without decoding.
     //
     // Handler call order across a batch is *not* specified: don't
@@ -883,7 +896,7 @@ template <typename... Fs> struct reader<schema<Fs...>>
     //     input span is *not* advanced.
     //   - Empty input (prescan reporting zero bytes) is a valid empty
     //     message: `init` still runs (so a present-but-empty submessage
-    //     is materialised), but no field handlers fire and absent
+    //     is materialized), but no field handlers fire and absent
     //     `proto3_zero_default` fields do not dispatch.
     //
     // *Consumes* from the input span!
@@ -1132,9 +1145,9 @@ reader<schema<Fs...>>::parse_tuple(Init &&init, limit bounds, std::tuple<Hs...> 
         bool has_error = false;
         [&]<size_t... Is>(std::index_sequence<Is...>)
         {
-            // Compile-time check: does the handler pack carry a handler
+            // Compile-time check: does the handler pack include a handler
             // for this schema field?  We use this to skip the lexn-pass
-            // forcing logic for fields that wouldn't dispatch anyway --
+            // forcing logic for fields that wouldn't dispatch anyway:
             // forcing lexn only to silently drop every occurrence is pure
             // waste.  Always-on `field_semantics::error` checking is
             // independent and stays unconditional.

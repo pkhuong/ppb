@@ -6,70 +6,122 @@ PPB: Pico Protobuf
        src="https://scan.coverity.com/projects/33051/badge.svg"/>
 </a>
 
+PPB is a C11 lexer for binary protobuf data, built for decoding
+untrusted bytes under caller-controlled resource budgets.  A
+header-only C++20 wrapper, a `protoc` schema generator, and a
+libprotobuf differential/conformance suite layer a `.proto`-driven
+workflow on top of the same guarantees.
+
 When to use PPB
 ---------------
 
-**Reach for PPB when** you parse protobuf from an untrusted producer
+**Consider PPB when** you parse protobuf from an untrusted producer
 (adversarial bytes are a tested input), when you want to explicitly
 issue every heap allocation yourself, with enough information to
 right-size containers before any field is dispatched, when message
-shapes are stable and you're happy to declare them in code, or when
-"fast enough but predictable" beats "fastest on average."
+shapes are stable (declared directly in code, or generated from
+`.proto` files by the bundled `protoc-gen-ppb` plugin), or when
+"fast enough and predictable" beats "fastest on average."
 
-**Look elsewhere when** you also need to encode protobuf, when you
-need full protobuf features (groups, runtime descriptors, reflection,
-first-class maps), when `.proto` files are your source of truth and
-code generation fits your workflow (e.g.,
-[nanopb](https://github.com/nanopb/nanopb), Google's libprotobuf),
-when you can't get the message into a single contiguous read-only
-buffer, or when non-gcc/clang (e.g., MSVC) support matters.
+The trade-off, compared with a full implementation (Google's libprotobuf)
+or a compact encoder and decoder ([nanopb](https://github.com/nanopb/nanopb)):
+
+**You give up** encoding, groups, extensions, runtime descriptors,
+reflection, streaming input (the entire message must fit in one
+contiguous read-only buffer), and MSVC support (PPB requires gcc or
+clang).
+
+**You get** a decoder that never allocates and never recurses (your
+code is in charge of allocation and recursion); exact occurrence counts
+and payload-byte totals before any value is dispatched, so every
+container can be sized upfront; a few hundred bytes of stack, and
+runtime proportional to the toplevel field count rather than payload
+bytes; a C core whose memory safety, termination, and progress
+guarantees are formally verified on top of unit tests and fuzzing;
+and decoded results validated against google's libprotobuf parser.
+
+When the trade seems questionable, use nanopb or libprotobuf; PPB is
+deliberately a small lexer, not a full protobuf implementation.
 
 PPB itself never calls `malloc`; it only writes through the caller's
 `fields[]` array.  When *your* code needs to allocate output storage,
 `ppb_prescan` first aggregates per-field counts and payload-byte
 totals so you can size every container exactly once before any
 field-by-field dispatch runs.  PPB never decides when to allocate, and
-gives you the data to allocate the right amount when you do.  Your
-handlers must hold up their end: pre-`reserve()` your `std::vector`s,
-prefer `std::string_view` over `std::string`, and you'll contain the
-impact of protobuf parsing on heap state.
+hands you the information to allocate the right amount when you do.
+Minimizing allocations is up to your handlers: pre-`reserve()`
+`std::vector`s, prefer `std::string_view` over `std::string`, etc.,
+and you'll minimize the impact of protobuf parsing on the heap.
+
+Guarantees
+----------
+
+For the C core, the maximum stack footprint is < 400B on gcc 12/x86-64.
+Correctness of the lexing is tested: unit tests, golden tests against
+protoscope, and the libprotobuf differential and conformance suites.
+Safety (progress guarantees and lack of undefined behavior or
+out-of-bound accesses) is additionally fuzzed and verified with
+[Frama-C's WP](https://www.frama-c.com/fc-plugins/wp.html) plugin.
+
+The wire bytes are untrusted: any input buffer is safe to lex.  The
+other inputs are trusted, with two tiers of preconditions.  Correct
+output requires `fields[]` to be zero-initialized on allocation and
+tag arrays to be well formed (check once with `ppb_validate_tags`),
+but even invalid trusted inputs (an unsorted tag array,
+non-zero-initialized `fields[]`, etc.) cause *at worst* surprising
+results or, in builds with assertions enabled, assertion failures;
+never memory unsafety, undefined behavior, non-termination, or
+successful return without progress (for `lexn`).  WP discharges
+memory safety, termination, and progress regardless of the contents
+of input buffers and arrays (trusted or otherwise).
+
+[SECURITY.md](SECURITY.md) states the threat model, the full
+two-tier breakdown of trusted-input preconditions, and what's out of
+scope.  [AUDITING.md](AUDITING.md) pairs each claim (including the
+statically proven payload bounds and the stronger placement
+properties checked dynamically) with a recipe a skeptical reader can
+run independently.
 
 About PPB
 ---------
 
 PPB is an allocation-free non-recursive lexer for protobuf binary
-encoding (v2/v3, no groups); like [many protobuf implementations](https://github.com/protocolbuffers/protobuf/blob/a06e1d39528ef6e549153528b80365903ff12a3e/src/google/protobuf/varint_shuffle.h#L119-L122),
-it silently discards bits 1-6 of byte 10 in 10-byte varints (only bit
-0 of byte 10 reaches bit 63 of the result) and rejects longer varints
-with `PPB_ERROR_CORRUPT_VARINT`.  The PPB interface requires the
-entire serialized message to be in a contiguous read-only buffer, and
+encoding (v2/v3, no groups).  The PPB interface requires the entire
+serialized message to be in a contiguous read-only buffer, and
 decodes values to 64-bit values, or as subslices in that buffer.
+The lexer's wire-format edge cases are enumerated in
+[Gotchas, decoding quirks, and footguns](#gotchas-decoding-quirks-and-footguns).
 
 See [README_CPP.md](README_CPP.md) for a more convenient C++ wrapper;
 you should still read this document first to understand how the
 underlying library works.  N.B., only the C side (ppb.h, ppb.c) is
 formally verified. The C++ side is merely unit tested and fuzzed (it's
-a lot of code, but almost all of it is consteval)
+a lot of code, but almost all of it is consteval).
 
-For `.proto`-driven workflows, see
-[generator/README.md](generator/README.md): `protoc-gen-ppb` is a
-`protoc` plugin that generates the C++ wrapper's `ppb::schema` headers
-straight from your `.proto` files.
+For `.proto`-driven workflows, `protoc-gen-ppb` is a `protoc` plugin
+that generates the C++ wrapper's `ppb::schema` headers straight from
+your `.proto` files (requires `protoc` and
+[`uv`](https://docs.astral.sh/uv/)):
 
-This library is designed for applications that require predictable
-performance more than maximum average throughput, and reliability,
-even in the face of adversarially corrupt "protobuf" bytes, even at
-the expense of ease of use.  Maximum stack footprint is < 400B on
-gcc 12/x86-64.  While the correctness of the lexing is merely tested,
-the safety of the code (i.e., progress guarantees and lack of
-undefined behavior or out-of-bound accesses) is tested, fuzzed, and
-verified with [Frama-C's WP](https://www.frama-c.com/fc-plugins/wp.html)
-plugin.
-For LEN fields, WP also statically confirms that `field.v.payload` is
-a readable subrange of the input buffer.  Stronger properties
-(`field.v.ptr` and `field.v.payload` fall within the bytes consumed by
-the call, and `payload.buf` sits strictly after the tag byte) are
-checked dynamically by the fuzz harness and `picoscope`.
+    protoc --plugin=protoc-gen-ppb=generator/protoc_gen_ppb.py \
+           --proto_path=protos --ppb_out=gen my.proto
+
+This writes one `gen/my.ppb.hpp` header per input file, holding a
+compile-time schema, a field-key enum, and a recursion depth bound
+per message.  README_CPP.md's "Generating schemas from `.proto`
+files" section shows how the generated names plug into
+`ppb::reader`; [generator/README.md](generator/README.md) is the
+full reference (options, limitations, compile cost).
+
+The generated decoding pipeline (generator, wrapper, C core) is
+validated against libprotobuf:
+Google's protobuf conformance suites run against a version-locked
+libprotobuf with zero unexpected failures (the proto3 suite has zero
+*expected* failures, too), and the differential harnesses in
+[differential/](differential/README.md) compare PPB's decodings with
+libprotobuf's parser on fixed, pseudorandom, and fuzzer-generated
+inputs.  Deliberate divergences are documented in
+[differential/GAPS.md](differential/GAPS.md).
 
 For encoding, Google's protobuf libraries are the obvious choice.
 When the producer also cares about allocations and copies,
@@ -78,21 +130,6 @@ at <https://github.com/google/perfetto/tree/main/include/perfetto/protozero>,
 not to be confused with the
 [mapbox project of the same name](https://github.com/mapbox/protozero/))
 pairs well with PPB.
-
-Other inputs to the library must be zero-initialized on allocations,
-except for the `ppb_encoded_tag` arrays, which are assumed to be
-constructed correctly (check with `ppb_validate_tags`).  Even invalid
-trusted inputs (an unsorted tag array, non-zero-initialized
-`fields[]`, etc.) cause *at worst* surprising results or, in builds
-with assertions enabled, assertion failures; never memory unsafety,
-undefined behavior, non-termination, or successful return without
-progress (for `lexn`).  [Frama-C's WP](https://www.frama-c.com/fc-plugins/wp.html)
-discharges memory safety, termination, and progress regardless of the
-contents of input buffers and arrays (trusted or otherwise).  See
-[SECURITY.md](SECURITY.md) for the full two-tier breakdown of
-trusted-input preconditions and what's considered out of scope, and
-[AUDITING.md](AUDITING.md) for the verification recipes a skeptical
-reader can run against each claim independently.
 
 The core pattern is: call `ppb_validate_tags` to confirm the array of
 tags to parse has a valid structure, call `ppb_prescan` once to
@@ -172,7 +209,7 @@ recover the lost data.  The flag is never set for LEN fields, since
 length-prefixed payloads aren't tracked through `v.u64`.  Catch-all
 entries (`PPB_TAG(-1, ...)`) aggregate every unknown field of a given
 wire type into one bucket, so the flag fires whenever any two such
-fields had distinct `v.u64` bits -- e.g., one VARINT at field 12 and
+fields had distinct `v.u64` bits: e.g., one VARINT at field 12 and
 one VARINT at field 99 with different values will set it even though
 neither field number repeats.  The flag is useless for catch-alls.
 
@@ -181,27 +218,71 @@ Gotchas, decoding quirks, and footguns
 
 As a lexer, PPB exposes users to the subtle diversity in protobuf wire
 encoding; that's added flexibility when you want to do something specific,
-but can lead to surprise.  Here are a few things to keep in mind.
+but can lead to surprise.  The list below is meant to cover every
+decoding quirk in the C core (a missing entry is a doc bug); the C++
+wrapper and the schema generator add their own quirks on top, listed
+in README_CPP.md.
 
 1. Tags are only matched when encoded canonically (minimally) on the
-   wire.  It's unknown if any protobuf encoder violates that
+   wire; a non-canonically encoded tag is treated as an unknown
+   field.  It's unknown if any protobuf encoder violates that
    assumption, but the assumption is deep in PPB's design.  This is
    only an issue for tags; some encoders like to use overlong
    encodings for field lengths, and that's supported.
 
-2. Remember to use `ppb_zag32` when zigzag-decoding sint32 values: it's
+2. Value and length varints may span up to 10 bytes, redundant
+   (overlong) encodings included.  Like
+   [many protobuf implementations](https://github.com/protocolbuffers/protobuf/blob/a06e1d39528ef6e549153528b80365903ff12a3e/src/google/protobuf/varint_shuffle.h#L119-L122),
+   PPB silently discards bits 1-6 of the 10th byte, so only bit 0 of
+   byte 10 reaches bit 63 of the result.  Varints longer than 10
+   bytes are rejected with `PPB_ERROR_CORRUPT_VARINT`.  One
+   divergence to be aware of: libprotobuf rejects *tag and length*
+   varints longer than 5 encoded bytes, while PPB decodes them (an
+   overlong tag as an unknown field, an overlong length as usual),
+   so the two parsers disagree on accept/reject for such inputs.
+
+3. Length prefixes are decoded as full 64-bit unsigned values and
+   checked only against the remaining input, so payloads and
+   messages larger than 2 GiB decode fine (libprotobuf, for one,
+   caps messages at 2 GiB).  The only size cap is the input buffer's
+   `PTRDIFF_MAX` maximum.
+
+4. Wire types 3 and 4 (legacy groups) and the reserved wire types 6
+   and 7 are rejected with `PPB_ERROR_CORRUPT_TAG` wherever they
+   appear, including in unknown fields that would otherwise be
+   skipped: a message that contains a group anywhere cannot be
+   lexed.
+
+5. Field number 0 is rejected with `PPB_ERROR_CORRUPT_TAG`, but only
+   in its canonical single-byte encoding: tags are matched on their
+   encoded form, so an overlong encoding of tag zero passes the zero
+   check and lexes as an unknown field of its wire type.  Field
+   numbers *above* protobuf's 2**29 - 1 maximum are not rejected
+   either: they lex as unknown fields (and can land in catch-alls)
+   as long as the tag varint fits in 8 encoded bytes; longer tag
+   varints are rejected as corrupt.  (libprotobuf instead truncates
+   long tag varints to 32 bits before checking them, so the two
+   parsers disagree on such inputs.)
+
+6. Remember to use `ppb_zag32` when zigzag-decoding sint32 values: it's
    important to truncate the encoded integer to 32 bits before decoding.
    This only matters for non-canonical inputs and matches what Google's
    C++ parser does on such inputs.
 
-3. The library does not validate that strings are encoded as utf-8.
+7. The library does not validate that strings are encoded as utf-8.
    In fact, there's no difference between a bytes and a string field
    (or submessage or packed repeated) at the wire encoding level.
    If you care about that, consider a library like [simdutf](https://github.com/simdutf/simdutf),
    but you might also want to pay attention to unicode normalization.
-   Either way, that's out of scope for PPB.
+   Either way, that's out of scope for PPB.  Validation also interacts
+   with last-write-wins: when a singular string field appears several
+   times on the wire, `ppb_prescan` retains only the last payload, but
+   a conforming proto3 parser must reject the message when *any*
+   occurrence is invalid UTF-8, even one overwritten by a later occurrence.
+   If you want to match that, for a `ppb_lexn` walk (e.g., with `singular`
+   field semantics in the C++ wrapper).
 
-4. There's no explicit support for oneof, but you can make it happen
+8. There's no explicit support for oneof, but you can make it happen
    by populating fields in wire order, and clearing the other types in
    a oneof when you populate a new one.  That only works if you always
    use `ppb_lexn` (`ppb::field_semantics::always_lexn` semantics in
@@ -209,42 +290,45 @@ but can lead to surprise.  Here are a few things to keep in mind.
    present: the prescan metadata may suffice to tell you what value
    each member took, but you can't recover the order.
 
-5. "Last write wins" for submessages actually recurses in the
+9. "Last write wins" for submessages actually recurses in the
    submessage's constituent fields.  That is, in order to match the
    way Google protobuf handles repeated values for a non-repeated
    submessage field, we have to keep parsing into (i.e., like
    `MergeFrom`) the submessage and mutate that submessage (and its
    submessages) in place when we encounter a new value for that
    message.  This means proto3 semantics only work for the fields in a
-   message at the toplevel.  In the C++ wrapper, we want to apply
-   `ppb::field_semantics::singular` for non-repeated submessages, and
-   regular non-proto3 last-write-wins semantics for these submessages'
-   own fields (and repeated submessages count as toplevel).
+   message at the toplevel.  In the C++ wrapper, `ppb::message<>`
+   already defaults to `ppb::field_semantics::singular` for this
+   reason; give these submessages' own fields regular non-proto3
+   last-write-wins semantics (repeated submessages count as
+   toplevel).  See README_CPP.md's "Embedded sub-messages" section
+   for the merge-vs-replace details.
 
-6. Packed and unpacked repeated fields have separate tags.  It's a
-   different wire type, so different entry.  In practice, you may
-   prefer to only support packed encoding when it's available, or
-   at least support only the encoding you expect to see.  If you
-   want to support both, you'll have to force a lexn pass even when
-   prescan has all the metadata, because, again, prescan doesn't
-   tell you the order (well, it does, since you could look at the
-   tag pointer, but that's complicated).  In the C++ wrapper, that
-   probably means setting `ppb::field_semantics::always_lexn` on
-   the encoding you *don't* expect to see.
+10. Packed and unpacked repeated fields have separate tags.  It's a
+    different wire type, so different entry.  In practice, you may
+    prefer to only support packed encoding when it's available, or
+    at least support only the encoding you expect to see.  If you
+    want to support both, you'll have to force a lexn pass even when
+    prescan has all the metadata, because, again, prescan doesn't
+    tell you the order (well, it does, since you could look at the
+    tag pointer, but that's complicated).  In the C++ wrapper, that
+    probably means setting `ppb::field_semantics::always_lexn` on
+    the encoding you *don't* expect to see.
 
-7. Unexpected encodings are treated like unknown tags (same issue as
-   packed / unpacked repeated, except generalised to, e.g., receiving
-   a LEN value instead of a varint).
+11. Unexpected encodings are treated like unknown tags (same issue as
+    packed / unpacked repeated, except generalized to, e.g., receiving
+    a LEN value instead of a varint).  Other protobuf implementations
+    tned to reject the message as ill-encoded.
 
-8. Handling unknown tags is opt-in, with catch-all entries for each
-   wire type... and decoding the actual tag for a catch-all entry is
-   tricky.  In order to decode the tag, you must take the tag `ptr`
-   from the `ppb_field_value` struct, and construct a `ppb_buf` from
-   that ptr to the end of the varint... but you can't know the
-   varint's length without decoding the varint.  Instead pad to the
-   end of the original input buffer (we know the varint is valid and
-   in bounds, otherwise prescan/lexn would have rejected it).
-   And at last, you may pass that `ppb_buf` to `ppb_decode_varint`.
+12. Handling unknown tags is opt-in, with catch-all entries for each
+    wire type... and decoding the actual tag for a catch-all entry is
+    tricky.  In order to decode the tag, you must take the tag `ptr`
+    from the `ppb_field_value` struct, and construct a `ppb_buf` from
+    that ptr to the end of the varint... but you can't know the
+    varint's length without decoding the varint.  Instead pad to the
+    end of the original input buffer (we know the varint is valid and
+    in bounds, otherwise prescan/lexn would have rejected it).
+    And at last, you may pass that `ppb_buf` to `ppb_decode_varint`.
 
 API (include/ppb/ppb.h)
 -----------------------
@@ -254,7 +338,7 @@ have a bounded runtime (asymptotically constant).  The `ppb_prescan`
 and `ppb_lexn` function families run in constant space and Θ(n log m)
 time, where n is the number of toplevel fields consumed and m is
 `num_fields`.  Runtime does *not* scale with payload sizes of
-length-prefixed fields -- that's what makes recursive descent on
+length-prefixed fields; that's what makes recursive descent on
 nested submessages practical.
 
 ```c
@@ -554,11 +638,13 @@ int decode_msg(struct ppb_buf buf, size_t max_depth)
 }
 ```
 
-**Repeated fields**: `ppb_lexn` stops as soon as a tag is
-non-monotonic (repeated or lower than the previous tag), so each call
-yields at most one occurrence of any given field.  `field.v` holds the
-value decoded in this call; the outer loop naturally delivers each
-occurrence in the encoded order.
+**Repeated fields**: `ppb_lexn` stops as soon as a tag fails to be
+strictly greater than the last *matched* tag, so each call yields at
+most one occurrence of any given field.  (Skipped unknown fields
+neither end the batch nor take part in that ordering check; install
+catch-alls when batch boundaries must reflect every field on the
+wire.)  `field.v` holds the value decoded in this call; the outer
+loop naturally delivers each occurrence in the encoded order.
 
 **Catch-all entries**: use `PPB_TAG(-1, wire_type)` to match any field
 of a given wire type that wasn't matched by a specific entry.
@@ -655,8 +741,8 @@ than as a single wholesale check after prescan: any populated
 `F_CATCH_*` slot ends the parse early, and `field.v.ptr` points at
 the offending tag byte, so the caller can re-decode the field number
 and decide case by case whether to treat it as an unknown field
-(forward compatibility) or a wire-type mismatch on a known number (a
-real schema violation).
+(forward compatibility) or a wire-type mismatch on a known number
+(an actual schema violation).
 
 The prescan hack above is simpler when we must look for unexpected
 wire types and giving up forward compatibility is acceptable.
@@ -725,7 +811,12 @@ binary protobuf file to text, similarly to
 with `make`, then:
 
     ./build/picoscope file.pb
-    ./build/picoscope -p file.pb   # protoscope-compatible output
+    ./build/picoscope -p file.pb   # protoscope-style output
+
+The `-p` mode matches protoscope's output on the golden test corpus
+(that is what `make test` checks); on arbitrary inputs it lacks some
+of protoscope's rendering heuristics, such as hex and float value
+guesses, `long-form:N` annotations, and line wrapping.
 
 Development and validation
 --------------------------
@@ -736,6 +827,7 @@ The test suite runs unit tests and comparisons against
     make                # build/libppb.a, build/libppb.so, build/picoscope, build/ubench
     make test           # run unit tests + golden tests
     make unit           # unit tests only (build/test_ppb)
+    make unit_cpp       # C++ wrapper tests (see README_CPP.md)
     make test EXTRA_FLAGS='-fsanitize=undefined,address'  # same with ubsan & asan
     make fuzz           # quick libfuzzer-based run (requires clang)
     make wp             # Frama-C WP verification (requires Docker)
@@ -743,6 +835,7 @@ The test suite runs unit tests and comparisons against
     make format         # clang-format-20 on all sources
     ./coverage.sh       # report code (line and branch) coverage for `make test`
     make regen_test     # regenerate golden files (requires protoscope in PATH)
+    make generator_test # protoc-gen-ppb checks (requires protoc and uv; see generator/)
     make differential-ci                     # libprotobuf differential suite, deterministic subset (see differential/)
     make -C differential conformance-docker  # protobuf conformance suites in a pinned container image
 

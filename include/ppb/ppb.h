@@ -59,7 +59,7 @@
  * library on any `ppb_buf` inputs; the other (trusted) inputs may
  * also be invalid (e.g., an unsorted tag array or non-zero-initialized
  * `fields[]`) and at worst result in surprising results or, in builds
- * with assertions enabled, assertion failures -- never memory
+ * with assertions enabled, assertion failures; never memory
  * unsafety, undefined behavior, non-termination, or successful return
  * without progress (for `lexn`).  Frama-C's WP discharges memory
  * safety, termination, and progress (`ppb_lexn` always consumes at
@@ -461,12 +461,15 @@ struct ppb_lexn_ret
  * unlimited behavior of `ppb_lexn`.
  *
  * This function may decode multiple fields at a time, but only in
- * strictly ascending order, and always stops before a non-monotonic
- * (repeated or decreasing) tag or after a catch-all field.  This
- * guarantees that we can always recover the order of the fields on
- * the wire, and that we always see every field value.  Call
- * `ppb_lexn*` in a loop to process all fields in a message, in
- * batches of strictly monotonically increasing fields.
+ * strictly ascending order: it stops before any tag that is not
+ * strictly greater than the last *matched* tag, and after a
+ * catch-all match.  Each call thus decodes at most one occurrence of
+ * any matched field, and the wire order of matched fields is always
+ * recoverable.  Skipped unknown fields neither end the batch nor
+ * take part in the ordering check; install catch-alls to make every
+ * field participate.  Call `ppb_lexn*` in a loop to process all
+ * fields in a message, in batches of strictly monotonically
+ * increasing matched fields.
  *
  * Updates `fields[].v` in place, and sets `ptr` to the decoded
  * field's first byte in `buf` (i.e., where the tag varint begins);

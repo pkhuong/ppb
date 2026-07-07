@@ -19,18 +19,21 @@ any field is dispatched, when you have several message types and want
 the compiler help you keep track of which you're parsing, and when
 you're already on a modern (GCC/clang, C++20) toolchain.
 
-**Look elsewhere when** you also need to encode protobuf, when you
-need full protobuf features (groups, runtime descriptors, reflection,
-first-class maps), when `.proto` files are your source of truth and
-code generation fits your workflow
-([nanopb](https://github.com/nanopb/nanopb), Google's libprotobuf), or
-when MSVC support matters.  See `README.md` for the decode-side
-comparison and encoding recommendations.
+**Look elsewhere when** you also need to encode protobuf
+([nanopb](https://github.com/nanopb/nanopb), Google's libprotobuf),
+when you need protobuf features PPB doesn't decode (groups,
+extensions, runtime descriptors, reflection), or when MSVC support
+matters.  Large schemas are also an issue: compile time and memory
+grow superlinearly with schema size (see the compile-cost numbers in
+[generator/README.md](generator/README.md)).  See `README.md` for the
+decode-side comparison and encoding recommendations.
 
-If `.proto` files are your source of truth but you want this wrapper
-anyway, see [generator/README.md](generator/README.md): `protoc-gen-ppb`
-is a `protoc` plugin that generates the `ppb::schema` declarations shown
-below directly from `.proto` files.
+When `.proto` files are your source of truth, you don't have to write
+the schemas shown below by hand: `protoc-gen-ppb` is a `protoc` plugin
+that generates them directly from `.proto` files (see
+[Generating schemas from `.proto` files](#generating-schemas-from-proto-files)),
+and the generated pipeline is validated against libprotobuf's own
+parser by the conformance and differential suites in `differential/`.
 
 The wrapper itself never calls `operator new`: the reader's per-field
 state is a `std::array<ppb_field, N>`, handler tuples live on the
@@ -57,14 +60,22 @@ pre-`reserve()` every container, prefer `std::string_view` over
 (it may allocate; the wrapper takes lambdas by template).
 
 Read the C API docs first (in `ppb.h` and the toplevel `README.md`)
-for the prescan-then-lex model, limits, and error codes.  The wrapper
-performs the same validation `ppb_validate_tags` does at runtime, so
-the C check is not needed.  Pay attention to the "Gotchas, decoding
-quirks, and footguns" section.
+for the prescan-then-lex model, limits, and error codes.  The
+wrapper's compile-time schema checks subsume what `ppb_validate_tags`
+checks at runtime, so the C call is not needed.  Pay attention to
+this file's own
+[Gotchas, decoding quirks, and footguns](#gotchas-decoding-quirks-and-footguns)
+section: it condenses the C core's quirks and lists the ones the
+wrapper and the schema generator add on top.
 
 The C library is formally verified and fuzzed; the C++ wrapper has
 unit tests and a fuzz target.  The wrapper's dispatching logic sits
-above the verified C boundary, so any bug there is outside the proofs.
+above the verified C boundary, so any bug there is outside the
+proofs.  Empirically, the wrapper combined with generated
+schemas passes Google's protobuf conformance suites and matches
+libprotobuf's parser in the differential harnesses under
+`differential/`; deliberate divergences are documented in
+`differential/GAPS.md`.
 
 The C lexer runs in Θ(n log m) for n toplevel fields against an
 m-field schema.  Handler dispatch is a linear walk over the schema,
@@ -121,7 +132,7 @@ using S = ppb::schema<ppb::varint<1>, ppb::len<2>, ppb::i32<3>>;
 
 - At least one field.
 - All fields share the same `Key` type (one `enum class` per message
-  is recommended).  `ppb::unknown<wire>` catch-alls carry no key and
+  is recommended).  `ppb::unknown<wire>` catch-alls have no key and
   are exempt.
 - Fields are listed in strictly ascending encoded-tag order.  When
   the same field number appears under multiple wire types, list them
@@ -154,6 +165,65 @@ using extended = ppb::auto_schema<my_schema, ppb::detect_unknown_fields<>>;
 ```
 
 Duplicate `(field_number, wire_type)` pairs are still rejected.
+
+Generating schemas from `.proto` files
+--------------------------------------
+
+When `.proto` files are the source of truth, `protoc-gen-ppb`
+generates the declarations above (requires `protoc` and
+[`uv`](https://docs.astral.sh/uv/)):
+
+```sh
+protoc --plugin=protoc-gen-ppb=generator/protoc_gen_ppb.py \
+       --proto_path=protos --ppb_out=gen my.proto
+```
+
+This writes one header per input file (`gen/my.ppb.hpp`); compile
+with `-Igen` and PPB's `include/` on the include path.  Each message
+`Foo` in package `pkg` becomes a namespace `ppb_gen::pkg::Foo`
+holding:
+
+- `F`, the field-key `enum class`: one enumerator per field, named
+  after the field and valued with its field number;
+- `schema` and `merge_schema`, `ppb::auto_schema` aliases over the
+  message's descriptors (`merge_schema` is what a *singular* message
+  field references, so repeated occurrences of one submessage merge
+  like protobuf; see **Embedded sub-messages**);
+- `max_depth`, the message's submessage nesting depth, ready to pass
+  to `ppb::limit::max_depth`.
+
+Proto enums become scoped C++ enums, and every generated descriptor
+is annotated with a comment showing the matching handler shape.  The
+generated names plug into the same API as a hand-written schema:
+
+```cpp
+#include "my.ppb.hpp"
+
+namespace Foo = ppb_gen::pkg::Foo;
+
+ppb_error parse_foo(std::span<const std::byte> bytes)
+{
+    int32_t x = 0;
+
+    ppb::reader<Foo::schema> r(bytes);
+    return r.parse(
+        ppb::limit::max_depth(Foo::max_depth),
+        ppb::store<Foo::F::x>(&x),
+        ppb::on_submessage<Foo::F::sub, ppb_gen::pkg::Bar::merge_schema>(
+            /* Bar's handlers */));
+}
+```
+
+`--ppb_opt=mode=none|lean|full` selects the wire policy: `lean` (the
+default) rejects repeated scalars that arrive in their non-canonical
+encoding, `none` accepts both encodings, and `full` additionally
+registers `ppb::detect_unknown_fields<>`.  Several proto features are
+rejected unless explicitly opted into lossy decoding (oneof, message
+cycles, proto2 groups and extensions, most well-known types), and
+three proto2 behaviors are deliberately not reproduced; see the
+generator entries in **Gotchas, decoding quirks, and footguns** and
+[generator/README.md](generator/README.md) for the full option table,
+limitations, and compile-cost numbers.
 
 Field types
 -----------
@@ -191,7 +261,9 @@ a `static_assert` on the `ppb::detail::fixed_underlying_enum` concept.
 
 `utf8string<K>` passes the handler a `std::string_view` over the
 payload bytes.  Protobuf requires UTF-8, but the wrapper does **not**
-validate the encoding; callers who care must check themselves.
+validate the encoding; callers who care must check themselves.  See
+**Gotchas, decoding quirks, and footguns** for how handler-side
+validation interacts with `last_write_wins` dispatch.
 
 `bytes<K, Element>` requires `alignof(Element) == 1`.  Payloads whose
 length is not a multiple of `sizeof(Element)` set the reader's error
@@ -234,12 +306,14 @@ reader (manual inner-reader form).
   Aliases for the matching scalar with `field_semantics::repeated`;
   the handler fires once per occurrence.
 
-To accept either encoding for the same field number, declare both:
+To accept either encoding for the same field number, declare both,
+with `always_lexn` semantics for the encoding you expect to see the
+least (refer to the generator's output in `generator/testdata/golden/`):
 
 ```cpp
 using S = ppb::auto_schema<
     ppb::packed_int32  <F::indices>,
-    ppb::unpacked_int32<F::indices>>;
+    ppb::unpacked_int32<F::indices, ppb::field_semantics::always_lexn>>;
 ```
 
 A single `ppb::push_back<F::indices>(&out)` handles both: the wrapper
@@ -265,19 +339,34 @@ that controls dispatch when the same field appears multiple times:
 |-----------------------|----------|
 | `repeated`            | Dispatch every occurrence. |
 | `singular`            | Last-write-wins when the squashed values are bit-identical (varint/i32/i64); otherwise per-occurrence.  LEN payloads aren't compared, so any LEN repeat is per-occurrence. |
-| `last_write_wins`     | Only the last occurrence is dispatched.  Default for typed scalars; matches proto2 optional scalar semantics. |
+| `last_write_wins`     | At minimum, the last occurrence is dispatched (and the last dispatch always delivers the last wire value).  Default for typed scalars; with assignment-style handlers this matches proto2 optional scalar semantics. |
 | `always_lexn`         | Per-occurrence dispatch even with a single occurrence (preserves wire order).  Default for raw `varint`/`i64`/`len`/`i32`. |
 | `proto3_zero_default` | Like `last_write_wins`, plus: absent fields dispatch with their zero value (or empty span) when the schema takes the prescan fast path.  See below. |
 | `error`               | Any occurrence during `parse()` is an error (see "Error reporting"). |
 
 Packed fields are always `repeated`.
 
+Each field's semantics sets the *minimum* dispatch for that field,
+and whether the field pushes `parse()` off the prescan fast path onto
+a wire-order `ppb_lexn` pass.  That path decision is global to the
+`parse()` call: once any handled field forces the lexn pass (e.g., a
+`repeated` field with several occurrences, or an `always_lexn` field
+that occurs at all), *every* matched field dispatches once per
+occurrence, in wire order, including `last_write_wins` and
+`singular` fields that would have dispatched once on the fast path.
+Write handlers so they stay correct under per-occurrence dispatch;
+plain assignment (what `ppb::store<>` does) is the canonical
+example.  What every path guarantees: `repeated` and `always_lexn`
+handlers see every occurrence, a field's final dispatch delivers
+its last wire value, `error` fields always fail the parse, and
+`proto3_zero_default` synthesis happens only on the fast path.
+
 Absent-field synthesis under `proto3_zero_default` only fires on the
 prescan fast path, and only when `parse()` actually reaches the
 dispatch step.  If any other field in the schema forces a lexn pass
 (e.g. a `repeated` field), absent `proto3_zero_default` fields are
 *not* dispatched.  An empty input (or any other early-exit from
-`parse()` -- prescan returning zero bytes, `init` returning non-OK,
+`parse()`: prescan returning zero bytes, `init` returning non-OK,
 a `field_semantics::error` field on the wire) skips dispatch
 entirely, so zero defaults don't fire there either.  Handling a zero
 default must therefore yield the same result as not handling the
@@ -322,7 +411,7 @@ using S = ppb::auto_schema<MyFields..., ppb::detect_unknown_fields<>>;
 using Strict = ppb::auto_schema<MyFields..., ppb::detect_unknown_fields<field_semantics::error>>;
 ```
 
-`unknown<wire>` carries no `Key`, so it composes with any user key
+`unknown<wire>` has no `Key`, so it composes with any user key
 type.  Unknown-field activity surfaces in two ways once registered:
 
 - `reader::unknown_field()` returns the encoded tag
@@ -389,12 +478,15 @@ advances past the consumed bytes on return.
 - A `field_semantics::error` field on the wire makes `parse()`
   return `PPB_ERROR_CORRUPT_TAG`, sets `error_field()`, and skips
   `init` and the handlers.
-- Empty input (or prescan reporting zero bytes) returns `PPB_OK`
-  without invoking `init` or any handler; even `proto3_zero_default`
-  fields don't fire their handlers.
+- Empty input (or prescan reporting zero bytes) is a valid, empty
+  message: `init` still runs (so a present-but-empty submessage is
+  materialized), but no field handlers fire and absent
+  `proto3_zero_default` fields don't dispatch.
 - Handler errors fold into the sticky error first-write-wins, but
   every handler in the current batch still runs: side effects from
-  other handlers in the batch are not rolled back.
+  other handlers in the batch are not rolled back.  The input span
+  still advances past the bytes the call consumed; only a non-OK
+  `init` leaves it unadvanced.
 - Handler call order across a batch is **not specified**.  If two
   handlers' side effects depend on each other's, merge them into a
   single handler rather than relying on wire order, schema order,
@@ -425,13 +517,37 @@ sub-message.  Declare the outer field as `ppb::message<K, InnerSchema>`
 and pass the inner handlers to `ppb::on_submessage<K, InnerSchema>(...)`.
 The wrapper builds the inner reader and parses the payload.
 
+**Merge vs. replace for singular message fields.**  Protobuf merges
+repeated occurrences of a singular message field into one message,
+field by field (like `MergeFrom`).  `ppb::message<K, S>` defaults to
+`field_semantics::singular` to make that expressible: when the field
+repeats, every occurrence dispatches in wire order, and
+`on_submessage` runs its `init` callback and inner handlers once
+*per occurrence*, over whatever destination the handlers write to.
+To get a merge, the `init` callback must locate the destination
+without resetting it, and the inner schema should use plain
+last-write-wins scalars rather than the `proto3_*` aliases: a proto3
+zero-default absent from a later occurrence would otherwise dispatch
+zero over a value an earlier occurrence set.  (The generator emits a
+`merge_schema` alias per message for exactly this purpose; see
+[generator/README.md](generator/README.md).)  For replace semantics,
+where the last occurrence wins wholesale, reset the destination in the
+`init` callback instead; that stays correct whether the field
+dispatches once or per occurrence.  Do *not* rely on
+`last_write_wins` alone for replace: it only limits dispatch on the
+prescan fast path, and any other field can force the wire-order pass
+(see **Field semantics**), where every occurrence dispatches.
+
 A malformed inner message whose fields overrun the declared payload
-length is reported as `PPB_ERROR_LIMIT_EXCEEDED` (the payload length
-acts as the inner parse's hard byte limit), not
-`PPB_ERROR_TRUNCATED_DATA`.
+length fails the parse with `PPB_ERROR_LIMIT_EXCEEDED` (the payload
+length acts as the inner parse's hard byte limit) or, when the
+payload ends exactly at the outer input's end, with
+`PPB_ERROR_TRUNCATED_DATA`.  Which of the two is reported depends on
+the submessage's position in the outer message, so treat both as
+"malformed inner message" rather than telling them apart.
 
 `on_submessage<K, S>` is bound to `wire_type::len` and will match
-*any* LEN field at key `K` in the outer schema -- `message<K, S>`,
+*any* LEN field at key `K` in the outer schema: `message<K, S>`,
 `unpacked_message<K, S>`, but also `bytes<K>`, `utf8string<K>`,
 `len<K>`, `unpacked_bytes<K>`, etc.  Only when the outer field is
 `message<K, S2>` or `unpacked_message<K, S2>` does the wrapper
@@ -444,17 +560,24 @@ knowing the bytes are well-formed.
 
 Supply `ppb::limit::max_depth(N)` (N > 0) on the outer call.
 Submessage traversal fails closed with `PPB_ERROR_DEPTH_EXCEEDED`
-otherwise -- and that check fires **at runtime**, when the first
+otherwise, and that check fires **at runtime**, when the first
 embedded field is encountered, not at compile time.  Forgetting
 `max_depth` is silent until a message that actually contains the
 embedded field arrives.
 
-Only the depth budget carries into the inner reader (decremented by
+Only the depth budget propagates to the inner reader (decremented by
 one).  The outer call's `max_fields` and byte cap are **not**
 propagated: every inner parse gets a fresh `max_fields`-unlimited
 limit with a hard byte cap equal to the payload size.  Drop to the
 manual-inner-reader form below if the inner message needs its own
 caps.
+
+Errors from the inner parse fold into the outer sticky error, but
+the inner reader's `unknown_field()` and `error_field()` are
+discarded; register `ppb::on_unknown` handlers among the inner
+handlers when unknown fields inside a submessage must be observable.
+In the init callback, only the inner reader's `meta<>()` is
+meaningful: its `input()` / `size()` do not describe the payload.
 
 ```cpp
 enum class Outer : int { header = 1, items = 2 };
@@ -585,9 +708,10 @@ If you need outer metadata *and* per-occurrence dispatch, call
 - `prescan(limit, handlers...)`: runs `ppb_prescan` and dispatches
   handlers once with the aggregated values.  Returns a `ptrdiff_t`
   byte count (>= 0) or a negative `ppb_error`.  Does *not* advance
-  the input span.  When handlers are passed, absent
-  `proto3_zero_default` fields dispatch with their zero value,
-  matching `parse()`'s fast-path behavior; `lexn()` does not.
+  the input span.  When handlers are passed and the input is
+  non-empty, absent `proto3_zero_default` fields dispatch with their
+  zero value, matching `parse()`'s fast-path behavior; `lexn()`
+  never synthesizes them.
 - `lexn(limit, handlers...)`: runs one `ppb_lexn` batch, dispatches,
   and advances the input span.  Does not interpret `field_semantics`:
   every occurrence dispatches, and `error` semantics are not enforced.
@@ -687,7 +811,7 @@ Specify a concrete `wire` to bind to one bucket.  Mixing per-wire
 Error reporting
 ---------------
 
-The reader carries a single sticky `ppb_error`:
+The reader holds a single sticky `ppb_error`:
 
 - `error()`: current error.  Once non-`PPB_OK`, every subsequent
   `prescan`/`lexn`/`parse`/`dispatch` short-circuits.
@@ -698,7 +822,7 @@ The reader carries a single sticky `ppb_error`:
   (`static_cast<ppb::wire_type>(tag % 8)`).  When several
   error-semantics fields hit on the same scan, which one is reported
   is unspecified.  An `unknown<W, field_semantics::error>` catch-all
-  reports a sentinel `0xFFFFFFF8u | uint32_t(W)` (it has no real
+  reports a sentinel `0xFFFFFFF8u | uint32_t(W)` (it has no actual
   field number); decoded with `tag / 8` it collides with field
   `2**29 - 1`.
 - `unknown_field()`: `optional<uint64_t>` set when a catch-all
@@ -758,13 +882,148 @@ hard/soft nature of the limit.
 `limit::max_depth(N)` with N > 0; the default 0 fails closed with
 `PPB_ERROR_DEPTH_EXCEEDED`.
 
+Gotchas, decoding quirks, and footguns
+--------------------------------------
+
+Quirks stack: generated schemas inherit the wrapper's behavior, and
+the wrapper inherits the C core's.  Each list is meant to be complete
+for its layer (a missing entry is a doc bug).
+
+### Inherited from the C core
+
+Condensed from the toplevel README's section of the same name, which
+has the details:
+
+1. Tags match only in their canonical (minimal) varint encoding; a
+   non-canonically encoded tag becomes an unknown field.  Overlong
+   *value* and *length* varints are accepted (libprotobuf instead
+   rejects tag and length varints longer than 5 encoded bytes, so
+   the two parsers disagree on such inputs).
+2. Varints span up to 10 bytes; bits 1-6 of the 10th byte are
+   silently discarded, and longer varints are rejected.
+3. Length prefixes decode as full 64-bit values: payloads and
+   messages larger than 2 GiB are fine, up to the `PTRDIFF_MAX`
+   input cap (the reader constructor enforces it).
+4. Wire types 3/4 (legacy groups) and 6/7 (reserved) are rejected
+   wherever they appear, even inside fields that would otherwise be
+   skipped as unknown.
+5. Field number 0 is rejected in its canonical encoding only (an
+   overlong zero tag is an unknown field); field numbers above
+   protobuf's 2**29 - 1 maximum lex as unknown fields instead of
+   being rejected, and tag varints longer than 8 encoded bytes are
+   rejected.
+6. sint32 zigzag decoding truncates the encoded value to 32 bits
+   first, matching Google's C++ parser on non-canonical input; the
+   `sint32` descriptors already do this.
+7. No UTF-8 validation, even for `utf8string` (the wire protocol
+   for proto3 says we should expect utf-8 strings, but there's no
+   guarantee).  Add that yourself if needed.
+8. A wire-type mismatch on a known field number is an unknown
+   field, not an error; packed and unpacked encodings of the same
+   field are distinct tags.
+9. Repeated occurrences of a singular message field merge field by
+   field, like `MergeFrom` (see **Embedded sub-messages**).
+10. `oneof` are half implemented; see the generator list below for
+    how oneofs can be handled.
+11. Recovering the wire tag of an unknown field means re-decoding
+    the varint at `field.v.ptr` (see `ppb::on_unknown<>`).
+
+### Wrapper
+
+1. `enumerated<K, Enum>` does not range-check: wire values that
+   don't name any enumerator reach the handler as the corresponding
+   bit pattern.  This is true even for proto2 enums.
+2. The dispatch path is global to a `parse()` call: once any
+   handled field forces the wire-order lexn pass, every matched
+   field dispatches once per occurrence.  Handlers must always
+   be ready for being dispatched once per occurrence on the wire.
+3. `proto3_zero_default` isn't guaranteed to fire; handling a
+   synthesized zero must be equivalent to leavingthe field at its
+   initial value.
+4. Handler order within a batch is unspecified (may be in handler
+   order, but always in wire order when there is enough ambiguity
+   to force a full lexn scan), and a handler error does not stop
+   the other handlers in the current batch.  The input span still
+   advances past what `parse()` consumed; only an `init` error
+   leaves it unadvanced.
+5. `singular` doesn't compare LEN payloads, so any repeated LEN
+   occurrence dispatches per occurrence.
+6. `bytes<K, Element>` dispatches an empty span and sets
+   `PPB_ERROR_TRUNCATED_DATA` when the payload size is not a
+   multiple of `sizeof(Element)`.
+7. Packed varint views decode lazily: a truncated or corrupt
+   element sets the reader's error and exhausts the iterator
+   mid-run.
+8. `on_submessage` fails closed at runtime (not compile time)
+   without `limit::max_depth(N)`; only the depth budget propagates
+   to inner readers, and an inner message that overruns its
+   declared payload reports `PPB_ERROR_LIMIT_EXCEEDED`, or
+   `PPB_ERROR_TRUNCATED_DATA` when the payload ends at the outer
+   input's end.
+9. `on_submessage` binds to *any* LEN field at its key; the inner
+   schema is only checked statically against `message<K, S>` /
+   `unpacked_message<K, S>` fields.  That's an escape hatch for
+   circular schemas.
+10. `on_submessage` folds the inner parse's error into the outer
+    sticky error but discards the inner reader's `unknown_field()`
+    and `error_field()`; register `on_unknown` handlers among the
+    inner handlers to observe unknown fields inside a submessage.
+11. In `on_submessage`'s init callback, only the inner reader's
+    `meta<>()` is meaningful: its `input()` / `size()` do not
+    describe the payload.
+12. The `unknown<W, field_semantics::error>` sentinel reported by
+    `error_field()` collides with field number 2**29 - 1.
+13. The low level interfaces `lexn()` / `lex_all()` do not interpret
+    `field_semantics` or enforce `error` fields, and `lex_all()` leaves
+    the outer `meta<>()` and `unknown_field()` unpopulated.
+14. Handler-side UTF-8 validation interacts with dispatch semantics:
+    under the default `last_write_wins`, the prescan fast path
+    dispatches only the last occurrence of a string field, but a
+    spec-conforming proto3 parser rejects a message when *any*
+    occurrence is invalid, even an overwritten one.  Declare
+    validated strings with `field_semantics::singular` (a repeated
+    LEN occurrence then always dispatches per occurrence) or use the
+    generator's `always_dispatch_strings` flag, which does exactly
+    that.
+
+### Generator
+
+Details, and the flags that control each behavior, are in
+[generator/README.md](generator/README.md):
+
+1. proto2 explicit `default = ...` values are never applied; absent
+   fields do not dispatch.
+2. Closed proto2 enums decode as open: out-of-range values reach
+   the handler instead of being routed to the unknown-field set as
+   the spec requires.
+3. `required` is not enforced.
+4. oneofs are rejected unless `oneof_as_optional`, which decodes
+   members as independent `always_lexn` fields: the last dispatch
+   across members is the winner, and exclusivity is not enforced.
+5. Groups and extensions are rejected, or dropped from the schema
+   with `drop_group_extension_fields`; group bytes on the wire
+   still fail the parse (a C-core rejection).
+6. Six well-known types are supported; fields of any other
+   `google.protobuf` type (classified by name) are rejected, or
+   dropped with `drop_foreign_type_fields`.
+7. Circular message schemas are rejected unless `opaque_cycles`, which
+   turns the cycle's back-edge fields into opaque byte spans that the
+   caller may decode (with a depth cap) itself.
+8. In the default lean mode, a repeated scalar or enum arriving in
+   its non-canonical wire encoding fails the parse
+   (`strict_repeated_encoding`); `mode=none` / `mode=full` accept
+   both encodings.
+9. `map<K, V>` lowers to a repeated entry-message field;
+   duplicate-key resolution (last write wins, per protobuf) is the
+   handler's job.
+10. A message with no fields registers only `ppb::detect_unknown_fields<>`,
+    with a warning at generation time.
+
 Limitations
 -----------
 
 - GCC/Clang only.  The code (C and C++) uses GNU extensions; MSVC is
   not supported.
-- No bounds checking on `enumerated`: wire values that don't name any
-  enumerator reach the handler as the corresponding bit pattern.
 
 Compile-time diagnostics
 ------------------------
