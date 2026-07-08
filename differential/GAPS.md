@@ -123,8 +123,8 @@ proto2's remaining 3 are group-related, and lean's 62 are much more diverse.
   This is observably correct except in conjunction with groups, as explained
   above.
 
-- **Lean strictness.** The lean suite has 62 expected failures vs. full's 0.
-  All 62 break down as:
+- **Lean strictness.** The lean suite has 60 expected failures vs. full's 0.
+  All 60 break down as:
   - **(packing) 14 Required non-default wire encoding failures.** Lean emits both
     wire forms for repeated scalars but marks the non-canonical one
     `field_semantics::error` (packed is canonical in proto3). A repeated field that
@@ -139,10 +139,6 @@ proto2's remaining 3 are group-related, and lean's 62 are much more diverse.
     reason.
   - **(unknown-retention) 2 failures.** Lean has no catch-all unknown-field
     handler, so `UnknownOrdering` and `UnknownVarint` fail.
-  - **(field-number-range) 2 failures.** PPB treats a field number above the
-    2^29-1 maximum as an unknown field rather than rejecting it; lean has no
-    catch-all handler that can bound check, so `BadTag_FieldNumberTooHigh`
-    and `BadTag_FieldNumberSlightlyTooHigh` are silently accepted.
   - **(merge) 2 failures.** Tagged as merge tests, but lean-only for the same
     packing reason: the merged messages contain unpacked repeated scalar
     fields, which lean rejects.
@@ -154,23 +150,25 @@ compare the full-mode reflection sink against libprotobuf on arbitrary and
 corrupted bytes. Their oracle (`fuzz/reflection_differential.hpp`) tolerates
 three divergence categories; everything else traps.
 
-- **Overlong framing varints.** libprotobuf rejects tag and length varints
-  longer than 5 encoded bytes; PPB decodes framing varints like any other (an
-  overlong tag with a nonzero field number becomes an unknown field, an
-  overlong length is decoded normally), so inputs whose framing varints span
-  6-10 bytes parse with PPB and fail with libprotobuf. An overlong encoding of
-  field 0 is the exception: PPB rejects it during prescan, agreeing with
-  libprotobuf. One fuzzer variant (`NO_OVERLONG`) avoids generating such
-  inputs and runs with this tolerance disabled.
+- **Overlong length varints.** libprotobuf rejects tag and length varints
+  longer than 5 encoded bytes. PPB rejects tag varints longer than 5 bytes
+  too (`PPB_ERROR_CORRUPT_TAG` at prescan, along with field 0 and any tag above
+  `UINT32_MAX`), so the two agree on tags *longer than 5 bytes*. They still
+  diverge on *length* varints: PPB decodes an overlong length normally, so an
+  input whose length prefix spans 6-10 bytes parses with PPB and fails with
+  libprotobuf. (The remaining tag disagreement, a 5-byte tag above `UINT32_MAX`
+  that libprotobuf truncates but PPB rejects, is the next item.) One fuzzer
+  variant (`NO_OVERLONG`) avoids generating such inputs and runs with this
+  tolerance disabled.
 - **Non-canonical encoding disagreements.** When both parsers accept the same
   bytes but decode different values, or PPB rejects bytes libprotobuf
   accepts, the divergence is tolerated only when PPB decodes libprotobuf's
   canonical re-serialization back to the reference message; a misdecode of a
   canonically encoded value would corrupt that round-trip and still trap.
-  Known instances: tag varints above 32 bits (libprotobuf truncates before
-  validating, the sink rejects the out-of-range field number) and groups
-  retained in libprotobuf's unknown-field set (PPB rejects wire types 3/4
-  outright).
+  Other disagreement: tag varints above 32 bits (libprotobuf truncates them to
+  32 bits before validating, while the ppb core rejects the out-of-range tag
+  int prescan) and groups retained in libprotobuf's unknown-field set (PPB
+  rejects wire types 3/4 unconditionally).
 - **Reparse survival.** When PPB accepts bytes libprotobuf rejects, the
   result is tolerated only when re-serializing PPB's decoding still fails
   libprotobuf's parse: the malformed structure survived as-is instead of

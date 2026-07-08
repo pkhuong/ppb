@@ -254,20 +254,17 @@ in README_CPP.md.
    lexed.
 
 5. Field number 0 is rejected with `PPB_ERROR_CORRUPT_TAG` in every
-   encoding by `ppb_prescan`: the check masks off the wire-type and
-   continuation bits and inspects the field-number bits, so the
-   canonical `00` and any overlong encoding of it (`80 00`, ...) are
-   rejected alike.  `ppb_lexn` called on its own, without a preceding
-   `ppb_prescan`, still rejects only the canonical single-byte
-   encoding; an overlong field-0 tag that does not end a monotonic
-   batch lexes as an unknown field.  Since prescan is the validator
-   (and the C++ `reader::parse` always prescans first), that residual
-   surfaces only for direct lexn-only callers.  Field numbers *above*
-   protobuf's 2**29 - 1 maximum are not rejected: they lex as unknown
-   fields (and can land in catch-alls) as long as the tag varint fits
-   in 8 encoded bytes; longer tag varints are rejected as corrupt.
-   (libprotobuf instead truncates long tag varints to 32 bits before
-   checking them, so the two parsers disagree on such inputs.)
+   encoding by `ppb_prescan`.  `ppb_lexn`, on the other hand, rejects 
+   only the canonical single-byte encoding: an overlong field-0 tag lexes
+   as an unknown field.  The prescan pass also rejects (`PPB_ERROR_CORRUPT_TAG`)
+   a tag whose value exceeds `UINT32_MAX` (field number *above* protobuf's
+   2**29 - 1 maximum) or whose varint encoding is longer than 5 bytes: a
+   valid canonically encoded tag fits in a uint32_t / 5 bytes.  This is
+   a prescan-only check: a standalone `ppb_lexn` lexes such a tag as an
+   unknown field instead.   libprotobuf rejects tags longer than 5 bytes
+   but *truncates* shorter tags to 32 bits, so it may accept (and misroute)
+   a 5-byte tag whose value exceeds `UINT32_MAX`; PPB never truncates,
+   and either decodes the tag correctly (lexn), or rejects it (prescan).
 
 6. Remember to use `ppb_zag32` when zigzag-decoding sint32 values: it's
    important to truncate the encoded integer to 32 bits before decoding.

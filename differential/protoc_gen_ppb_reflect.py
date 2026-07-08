@@ -336,12 +336,11 @@ def _emit_submessage_handler(
         )
 
     fd = _pb_fd(msg_expr, field.number)
-    # Map entries never retain (libprotobuf drops entry unknowns when it
-    # syncs the repeated representation into the map), but the reference
-    # parser still rejects invalid field numbers there, so we register
-    # validate-only unknown handlers instead.
-    validate_inner = retain_unknown and inner.map_entry
-    needs_input = retain_inner or validate_inner
+    # Map entries never retain: libprotobuf drops entry unknowns when it syncs
+    # the repeated representation into the map.  Invalid field numbers inside an
+    # entry are rejected by the entry's prescan pass (field 0 and any tag
+    # above UINT32_MAX or 5 bytes), so handlers don't need to validate tags.
+    needs_input = retain_inner
 
     if not inner.fields and not needs_input:
         # An empty submessage has no child handlers; just create it to mark the
@@ -382,8 +381,6 @@ def _emit_submessage_handler(
     )
     if retain_inner:
         inner_handlers.extend(_retain_unknown_handlers_deferred(slot, in_slot))
-    elif validate_inner:
-        inner_handlers.extend(_validate_unknown_handlers_deferred(in_slot))
 
     body = _pb_place([init, *inner_handlers], 4)
     return f"::ppb::on_submessage<{key}, {inner_schema}>(\n{body})"
@@ -421,24 +418,6 @@ def _retain_unknown_handlers_deferred(msg_expr, input_var):
             f"[&](const ppb_field &f) -> ppb_error {{ "
             f"return ::ppb_sink::retain_unknown_field<::ppb::wire_type::{w}>"
             f"(f, {msg_expr}, {input_var}); }})"
-        )
-
-    return out
-
-
-def _validate_unknown_handlers_deferred(input_var):
-    """Emit validate-only unknown handlers for inlined map-entry scopes.
-
-    They reject out-of-range field numbers (above 2^29-1).  Field 0, in any
-    encoding, is rejected earlier by ppb's prescan pass, so it never reaches
-    these handlers.
-    """
-    out = []
-    for w in ("varint", "i64", "len", "i32"):
-        out.append(
-            f"::ppb::on_unknown<::ppb::wire_type::{w}>("
-            f"[&](const ppb_field &f) -> ppb_error {{ "
-            f"return ::ppb_sink::validate_unknown_field(f, {input_var}); }})"
         )
 
     return out

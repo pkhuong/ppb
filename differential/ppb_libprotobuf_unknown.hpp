@@ -1,7 +1,6 @@
 /*
  * Support helpers for the protoc-gen-ppb libprotobuf reflection sink:
- * retain unknown fields into a libprotobuf UnknownFieldSet, and reject
- * out-of-range field numbers.
+ * retain unknown fields into a libprotobuf UnknownFieldSet.
  */
 #pragma once
 
@@ -16,16 +15,14 @@
 namespace ppb_sink
 {
 
-/* Maximum valid protobuf field number: 2^29 - 1. */
-inline constexpr uint64_t k_max_field_number = (1U << 29) - 1;
-
 /*
  * Decode the field number from the tag varint at f.v.ptr.
  *
  * f.v.ptr was set by ppb_prescan/ppb_lexn after a successful tag decode.
  * The tag varint at that position has therefore already been validated
  * by ppb.c, and re-decoding the same bytes with ppb_decode_varint cannot
- * fail: the bytes haven't changed.
+ * fail: the bytes haven't changed.  prescan also guarantees the field
+ * number is in [1, 2^29 - 1], so the `int` cast in the caller is safe.
  */
 inline uint64_t
 unknown_field_number(const ppb_field &f, std::span<const std::byte> input)
@@ -41,47 +38,12 @@ unknown_field_number(const ppb_field &f, std::span<const std::byte> input)
     return tag >> 3;
 }
 
-/*
- * Field-number validation without retention, for map-entry scopes:
- * libprotobuf drops unknown fields when it syncs entries into the
- * map, but invalid field numbers must still be rejected.
- */
-inline ppb_error
-validate_unknown_field(const ppb_field &f, std::span<const std::byte> input)
-{
-    uint64_t field_number = unknown_field_number(f, input);
-
-    /*
-     * field-number-range: out-of-range field numbers are rejected.  Field 0
-     * (canonical or overlong) never reaches an unknown handler: ppb rejects
-     * it during the prescan pass that precedes dispatch.
-     */
-    if (field_number > k_max_field_number)
-    {
-        return PPB_ERROR_CORRUPT_TAG;
-    }
-
-    return PPB_OK;
-}
-
 template <ppb::wire_type W>
 ppb_error
 retain_unknown_field(const ppb_field &f, ::google::protobuf::Message *msg, std::span<const std::byte> input)
 {
-    uint64_t field_number = unknown_field_number(f, input);
-
-    /*
-     * field-number-range: out-of-range field numbers are rejected.  Field 0
-     * (canonical or overlong) never reaches an unknown handler: ppb rejects
-     * it during the prescan pass that precedes dispatch.
-     */
-    if (field_number > k_max_field_number)
-    {
-        return PPB_ERROR_CORRUPT_TAG;
-    }
-
+    int fn = static_cast<int>(unknown_field_number(f, input));
     auto *unknown = msg->GetReflection()->MutableUnknownFields(msg);
-    int fn = static_cast<int>(field_number);
 
     if constexpr (W == ppb::wire_type::varint)
     {
