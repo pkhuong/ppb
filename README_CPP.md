@@ -908,11 +908,14 @@ has the details:
    wherever they appear, even inside fields that would otherwise be
    skipped as unknown.
 5. Field number 0 is rejected by `ppb_prescan` (which `reader::parse`
-   runs first) in every encoding, canonical `00` or overlong; a
-   standalone `ppb_lexn` still rejects only the canonical single-byte
-   form.  Field numbers above protobuf's 2**29 - 1 maximum lex as
-   unknown fields instead of being rejected, and tag varints longer
-   than 8 encoded bytes are rejected.
+   runs first) in every encoding, canonical `0x00-0x07` or overlong; a
+   standalone `lexn` rejects only the canonical single-byte form.
+   Prescan likewise rejects a tag whose value exceeds `UINT32_MAX`
+   (field number above the `2**29 - 1` maximum) or whose varint encoding
+   exceeds 5 bytes; a direct call to `lexn` lexes such long or high
+   tags as unknown.  PPB imposes these restrictions in prescan because
+   libprotobuf rejects tags over 5 bytes... but truncates shorter ones
+   to 32 bits after varint decoding!
 6. sint32 zigzag decoding truncates the encoded value to 32 bits
    first, matching Google's C++ parser on non-canonical input; the
    `sint32` descriptors already do this.
