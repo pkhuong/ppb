@@ -616,9 +616,9 @@ exercise_api_sequence(std::span<const std::byte> input)
         switch (op & 7)
         {
         case 0:
-        case 7:
         {
-            const ppb::limit bounds = (op & 7) == 7 ? ppb::limit::soft(arg) : ppb::limit {};
+            /* arg & 1 selects no bounds vs soft(arg >> 1) byte limit. */
+            const ppb::limit bounds = (arg & 1) ? ppb::limit::soft(arg >> 1) : ppb::limit {};
             const op_result res = do_simple_op(r, /*which=*/0, bounds);
 
             /* prescan never advances the input span. */
@@ -703,6 +703,36 @@ exercise_api_sequence(std::span<const std::byte> input)
             if (before_err != PPB_OK)
                 POSTCOND(res.err == before_err);
 
+            break;
+        }
+
+        case 7:
+        {
+            /*
+             * dispatch() re-dispatches handlers against the current
+             * per-field state without touching the input span.  arg & 1
+             * enables run_zero_defaults (absent proto3 fields fire with
+             * their zero value).
+             */
+            op_result res = {};
+            auto tup = make_counting_tuple(&res);
+            const bool run_zds = (arg & 1) != 0;
+
+            (void)r.dispatch_tuple(tup, run_zds);
+            res.err = r.error();
+
+            if (before_err != PPB_OK)
+            {
+                POSTCOND(res.err == before_err);
+
+                for (size_t calls : res.calls)
+                {
+                    POSTCOND(calls == 0);
+                }
+            }
+
+            /* dispatch never advances the input span. */
+            POSTCOND(r.input().data() == before_in.data() && r.input().size() == before_in.size());
             break;
         }
         }

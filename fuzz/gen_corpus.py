@@ -378,15 +378,22 @@ def synthetic_entries():
     yield "syn_cpp_nested_submessage", field_varint(1, 1) + field_len(2, _cpp_mid)
 
     # api_sequence programs: <n_ops & 15> <opcodes...> <wire buffer>.
-    # Opcode low 3 bits: 0/7 prescan, 1 parse, 2 lexn, 3 lex_all,
+    # Opcode low 3 bits: 0 prescan (arg&1 selects no bounds vs soft(arg)),
+    # 7 dispatch (arg&1 → run_zero_defaults), 1 parse, 2 lexn, 3 lex_all,
     # 4 reset_fields (+ fresh-reader differential), 5 copy differential,
     # 6 parse under limit::hard(opcode >> 3).
     _cpp_seq_buf = field_varint(1, 150) + field_len(5, b"hi") + field_varint(9, 1)
     yield "syn_cpp_seq_parse_reset_parse", bytes([3, 1, 4, 1]) + _cpp_seq_buf
     yield "syn_cpp_seq_misuse_reparse", bytes([4, 0, 2, 1, 1]) + _cpp_seq_buf
     yield "syn_cpp_seq_copy_and_limits", (
-        bytes([6, 5, 5 | (1 << 3), 6 | (2 << 3), 4 | (1 << 3), 3, 7 | (3 << 3)]) + _cpp_seq_buf
+        bytes([6, 5, 5 | (1 << 3), 6 | (2 << 3), 4 | (1 << 3), 3, 0 | (3 << 3)]) + _cpp_seq_buf
     )
+    # dispatch opcode exercises: 7 = dispatch, 7|(1<<3) = dispatch with zero-defaults
+    yield "syn_cpp_seq_dispatch_after_parse", bytes([3, 0, 1, 7]) + _cpp_seq_buf
+    yield "syn_cpp_seq_dispatch_after_lexn", bytes([3, 0, 2, 7]) + _cpp_seq_buf
+    yield "syn_cpp_seq_dispatch_zds", bytes([1, 7 | (1 << 3)]) + _cpp_seq_buf
+    yield "syn_cpp_seq_dispatch_fresh", bytes([1, 7]) + _cpp_seq_buf
+    yield "syn_cpp_seq_dispatch_mixed", bytes([4, 0, 1, 7, 7 | (1 << 3)]) + _cpp_seq_buf
 
     # Overlong framing varints: a varint-length tag or LEN length padded with
     # extra continuation bytes.
