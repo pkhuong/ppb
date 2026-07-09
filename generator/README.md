@@ -10,8 +10,7 @@ itself; see [Conformance and differential testing](#conformance-and-differential
 ## Requirements
 
 - `protoc`
-- [`uv`](https://docs.astral.sh/uv/) (manages the Python deps; **always run Python
-  here through `uv`**, never a bare `python3`)
+- [`uv`](https://docs.astral.sh/uv/)
 
 The plugin is a single self-contained script, `protoc_gen_ppb.py`, with a uv-script
 shebang and PEP 723 inline dependency metadata, so `protoc` can exec it directly.
@@ -181,12 +180,10 @@ fields inside the empty message only when you must inspect its contents.
 - `int32/uint32/sint*/bool/...`: the matching `ppb` scalar; proto3 implicit-presence
 singular scalars use the `proto3_*` (zero-default) aliases, while proto2 fields,
 proto3 explicit `optional`, and message fields use last-write-wins. Proto2
-explicit `default = ...` values are never applied (see
-[Proto2 semantics](#proto2-semantics)).
+explicit `default = ...` values are never applied (see [Proto2 semantics](#proto2-semantics)).
 - `enum`: `ppb::enumerated<K, Enum>` over a generated scoped `enum class`
 (`proto3_enumerated` for proto3 implicit presence). Decoding is always
-open-enum, even for closed proto2 enums (see
-[Proto2 semantics](#proto2-semantics)).
+open-enum, even for closed proto2 enums (see [Proto2 semantics](#proto2-semantics)).
 - `string`/`bytes`: `utf8string`/`bytes` (with `proto3_*` variants for proto3 implicit presence).
 - `message`: `ppb::message<K, Inner::merge_schema, singular>` for
 a singular field, `ppb::unpacked_message<K, Inner::schema>` for a repeated one.
@@ -203,20 +200,19 @@ Repeated scalars/enums emit both wire forms per the `mode` rule above; repeated
 
 ### Proto2 semantics
 
-Three proto2 behaviors are deliberately not reproduced. The generator prints a
-warning per affected field and otherwise decodes it like its proto3
-counterpart:
+Three proto2 behaviors are deliberately not reproduced. The generator
+prints a warning per affected field and otherwise decodes it like its
+proto3 counterpart:
 
-- **Explicit defaults are not applied.** A field's `default = ...` value
-  never reaches the handler: an absent field doesn't dispatch, with or
-  without a declared default. Apply defaults yourself, e.g. by initializing
-  destination values before `parse()`; the warning reports each declared
-  default value.
+- **Explicit defaults are not applied.** Handlers are oblivious to a field's
+  `default = ...` value: an absent field doesn't dispatch, with or without a
+  declared default. Apply defaults yourself, e.g. by initializing destination
+  values before `parse()`; the warning reports each declared default value.
 - **Closed enums decode as open.** The generated descriptor dispatches the
-  raw wire value, so an out-of-range value on a closed (proto2) enum reaches
+  raw wire value, so an out-of-range value on a closed (proto2) enum enters
   the handler as its bit pattern instead of being routed to the unknown-field
-  set as the spec requires. Range-check in the handler if you need closed
-  semantics. Closedness follows the enum's defining file, so this also
+  set as the proto2 spec requires. Range-check in the handler if you need
+  closed semantics. Closedness follows the enum's defining file, so this also
   applies to proto3 messages that reference a proto2 enum.
 - **`required` is not enforced.** Required fields decode like optional ones;
   presence checking is left to the caller.
@@ -260,29 +256,27 @@ compiler time and memory (measured with g++ 16 at `-O1`):
 
 Generated schemas are validated empirically, end to end (generator, C++
 wrapper, C core), against libprotobuf.  The [differential/](../differential/README.md)
-tree builds a reflection sink on top of this generator's output (decoded
-fields are written into libprotobuf `Message`s via reflection) and compares
-the result with the libprotobuf parser:
+subdirecroty builds a reflection sink on top of this generator's output
+(decoded fields are written into libprotobuf `Message`s via reflection) and
+compares the result with the libprotobuf parser:
 
-- **Google's protobuf conformance suites** run against a version-locked
-  libprotobuf in three configurations, with zero unexpected failures: proto3
-  full mode (zero expected failures), proto2 (three expected failures, all
-  uses of the group-based `MessageSet` wire format, which PPB rejects by
-  design), and proto3 lean mode (expected rejections that follow from lean's
-  strict-encoding policy).  Every expected failure is tagged in the
-  `differential/failure_list_*.txt` files and explained in
-  [differential/GAPS.md](../differential/GAPS.md).  The suites cover binary
-  protobuf only; JSON and text-format requests are skipped.
-- **Reflection differentials** decode fixed, pseudorandom, and
-  fuzzer-generated inputs through both parsers and compare the resulting
-  messages.  The deterministic subset (fixed and pseudorandom differentials
-  plus fuzz-corpus replays) runs in CI via `make differential-ci` at the
-  repo root.
+- **Google's protobuf conformance suites** run against libprotobuf in four
+  configurations, with zero unexpected failures: proto3 full mode (zero expected
+  failures), proto3 none mode (two expected failures, the pair that needs
+  unknown-field retention, which `none` omits), proto2 (three expected failures,
+  all uses of the group-based `MessageSet` wire format, which PPB rejects),
+  and proto3 lean mode (expected rejections that follow from lean's strict-encoding
+  policy).  Every expected failure is tagged in the `differential/failure_list_*.txt`
+  files and explained in [differential/GAPS.md](../differential/GAPS.md).  The
+  suites cover binary protobuf only; JSON and text-format requests are skipped.
+- **Reflection differentials** decode fixed, pseudorandom, and fuzzer-generated
+inputs through both parsers and compare the resulting messages.  The deterministic
+  subset (fixed and pseudorandom differentials plus fuzz-corpus replays) runs in
+  CI via `make differential-ci` at the repo root.
 - **Sink fuzzers** (a libprotobuf-mutator structured fuzzer and a byte-level
   corruption fuzzer) are time-bounded and never run in CI.
   `make -C differential fuzz-sink` runs natively, without a container;
-  `fuzz-structured` runs in the same container image as the conformance
-  suites.
+  `fuzz-structured` runs in the same container image as the conformance suites.
 
 `make -C differential conformance-docker` runs the three conformance suites
 in the differential container image; [differential/README.md](../differential/README.md)

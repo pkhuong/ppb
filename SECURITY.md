@@ -122,7 +122,12 @@ pass with zero unexpected failures (the proto3 suite with zero
 expected failures), and the differential harnesses in `differential/`
 check PPB's decodings against libprotobuf's parser on fixed,
 pseudorandom, and fuzzer-generated inputs.  Deliberate divergences
-are documented in `differential/GAPS.md`.
+are documented in `differential/GAPS.md`, and the case-by-case
+accept/reject/value divergence table (with the stricter side and where
+each row is checked) is in
+[README.md](README.md#correct-on-accepted-input); it mirrors the
+machine-checked whitelist in the header comment of
+`differential/fuzz/fuzz_sink_bytes.cc`.
 
 ## Caller responsibilities
 

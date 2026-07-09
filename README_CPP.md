@@ -32,7 +32,7 @@ When `.proto` files are your source of truth, you don't have to write
 the schemas shown below by hand: `protoc-gen-ppb` is a `protoc` plugin
 that generates them directly from `.proto` files (see
 [Generating schemas from `.proto` files](#generating-schemas-from-proto-files)),
-and the generated pipeline is validated against libprotobuf's own
+and the generated pipeline is validated against libprotobuf's
 parser by the conformance and differential suites in `differential/`.
 
 The wrapper itself never calls `operator new`: the reader's per-field
@@ -63,19 +63,17 @@ Read the C API docs first (in `ppb.h` and the toplevel `README.md`)
 for the prescan-then-lex model, limits, and error codes.  The
 wrapper's compile-time schema checks subsume what `ppb_validate_tags`
 checks at runtime, so the C call is not needed.  Pay attention to
-this file's own
-[Gotchas, decoding quirks, and footguns](#gotchas-decoding-quirks-and-footguns)
+this file's [Gotchas, decoding quirks, and footguns](#gotchas-decoding-quirks-and-footguns)
 section: it condenses the C core's quirks and lists the ones the
 wrapper and the schema generator add on top.
 
 The C library is formally verified and fuzzed; the C++ wrapper has
 unit tests and a fuzz target.  The wrapper's dispatching logic sits
-above the verified C boundary, so any bug there is outside the
-proofs.  Empirically, the wrapper combined with generated
-schemas passes Google's protobuf conformance suites and matches
-libprotobuf's parser in the differential harnesses under
-`differential/`; deliberate divergences are documented in
-`differential/GAPS.md`.
+above the verified C boundary, so any bug there is outside the proofs.
+Empirically, the wrapper combined with generated schemas passes
+Google's protobuf conformance suites and matches libprotobuf's parser
+in the differential harnesses under `differential/`; deliberate
+divergences are documented in `differential/GAPS.md`.
 
 The C lexer runs in Θ(n log m) for n toplevel fields against an
 m-field schema.  Handler dispatch is a linear walk over the schema,
@@ -509,6 +507,27 @@ the main use case; `ppb_field_meta` exposes these aggregates:
 - `total_bytes`, `min_nonzero_bytes`, `max_bytes`: payload-size
   aggregates (for all wire types).
 
+#### Sizing containers from prescan metadata
+
+Right-sizing every container from `meta<Key>()` is the main reason
+to run `parse()` with an `init` callback, but not every statistic is
+exact for every field kind.  Some give an exact element count; others
+only bound it, so a `reserve()` from them avoids most reallocations
+without eliminating them.  The mapping:
+
+| Field kind | Size a container to | Statistic | Exact or bound |
+|---|---|---|---|
+| Unpacked repeated scalar / enum / message (`unpacked_*`) | element count | `meta<Key>().num_occurrences` | exact: one occurrence per element |
+| Packed fixed-width (`packed_fixed32`, `packed_f64`, ...) | element count | `meta<Key>().total_bytes / sizeof(le_packed<T>)` | exact: fixed-width elements tile the payload evenly |
+| Packed varint (`packed_int32`, `packed_sint64`, ...) | element count | `meta<Key>().total_bytes` | upper bound only: each element is 1 to 10 wire bytes, so `total_bytes` over-reserves |
+| Single LEN payload (`utf8string`, `bytes`, `message`) | buffer for the largest occurrence | `meta<Key>().max_bytes` | exact: the size of the largest single payload |
+| All LEN payloads concatenated (`utf8string`, `bytes`) | buffer for every occurrence | `meta<Key>().total_bytes` | exact: sum of every payload's size |
+
+The one subtlety: `num_occurrences` counts occurrences, not elements,
+so a single packed occurrence can hold many.  Only packed *varint*
+element counts need decoding to recover, which is why their
+`total_bytes` is an upper bound rather than exact.
+
 ### Embedded sub-messages
 
 Embedded messages are LEN fields whose payload is a serialized
@@ -787,6 +806,34 @@ ppb::emplace_back<Key>(&container)   // append via emplace_back
 
 The destination type is deduced from the pointer; the pointee must
 outlive the `parse()`/`prescan`/`lexn()`/`dispatch()` call.
+
+**Do not** point `store<Key>(&dst)` at storage that a later `init`
+callback will create.  `store` captures the destination *address* when
+the handler is constructed, i.e. before `parse()` runs anything, so
+the address is fixed for the whole call.  Inside `on_submessage`,
+this bites the natural first attempt:
+
+```cpp
+Item *cur = nullptr;
+r.parse(
+    ppb::on_submessage<Outer::items, InnerSchema>(
+        [&](const auto &) -> ppb_error { cur = &out.emplace_back(); return PPB_OK; },
+        ppb::store<Inner::id>(&cur->id)));   // WRONG: &cur->id read now, when cur == nullptr
+```
+
+`&cur->id` is evaluated while `cur` is still null (or points at a stale
+element from a previous occurrence), so the store dereferences an
+invalid pointer.  Only UBSan reliably catches it.  Capture the
+destination *indirectly* with a lambda instead, so the address is
+re-read each time the handler fires:
+
+```cpp
+    ppb::on<Inner::id>([&](uint32_t v) -> ppb_error { cur->id = v; return PPB_OK; })
+```
+
+This is the pattern used in the **Embedded sub-messages** example
+above; reach for `store<Key>(&dst)` only when `&dst` is already valid
+and stable before `parse()` is called.
 
 When the matched field is a packed view
 (`ppb::packed_*` or a `std::span<const le_packed<T>>`), `push_back` /

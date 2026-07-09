@@ -7,10 +7,30 @@ PPB: Pico Protobuf
 </a>
 
 PPB is a C11 lexer for binary protobuf data, built for decoding
-untrusted bytes under caller-controlled resource budgets.  A
-header-only C++20 wrapper, a `protoc` schema generator, and a
-libprotobuf differential/conformance suite layer a `.proto`-driven
-workflow on top of the same guarantees.
+untrusted bytes under caller-controlled resource budgets.  Decoding
+is allocation-free, in place, and fully iterative: numeric fields
+decode to 64-bit values, and everything else (strings, bytes, submessages,
+packed repeated fields) comes out as subslices of the read-only input
+buffer.  Any byte sequence is safe to decode, regardless of the schema;
+malformed input results in a clean error, never undefined behavior.
+A header-only C++20 wrapper makes the C core easier to use, at the
+expense of some hidden (but bounded) recursion, and a lot of compile-time
+metaprogramming noise. A `protoc` schema generator for the C++ wrapper
+further makes it easy to synchronise the PPB schema with authoritative
+.proto files.  Neither the C core nor the C++ wrapper uses non-local
+exits (`longjmp`) or exceptions.
+
+The layered design goes from a hardened but annoying to use C core, to
+a friendlier C++ wrapper, to a `protoc` generator plugin for which we
+can meaningfully check conformance.  The C core's memory safety,
+termination, and progress are statically verified with Frama-C's WP
+and Eva plugins, without any semantic requirement on configuration for
+safety (higher level postconditions do rely on the `ppb_encoded_tag`
+array making sense); the C and C++ APIs are also fuzzed under
+sanitizers, including with schemas emitted by the `protoc` plugin;
+finally, the result of decoding with generated schemas is validated
+against google's libprotobuf parser by differential fuzzers and the
+conformance suite.
 
 When to use PPB
 ---------------
@@ -31,14 +51,16 @@ reflection, streaming input (the entire message must fit in one
 contiguous read-only buffer), and MSVC support (PPB requires gcc or
 clang).
 
-**You get** a decoder that never allocates and never recurses (your
-code is in charge of allocation and recursion); exact occurrence counts
-and payload-byte totals before any value is dispatched, so every
-container can be sized upfront; a few hundred bytes of stack, and
+**You get** a decoder that [never allocates](AUDITING.md#no-allocation-no-dependency-except-assert)
+and never recurses (your code is in charge of allocation and
+recursion); exact occurrence counts and payload-byte totals before any
+value is dispatched, so every container can be sized upfront;
+[a few hundred bytes of stack](AUDITING.md#resource-bounds), and
 runtime proportional to the toplevel field count rather than payload
 bytes; a C core whose memory safety, termination, and progress
-guarantees are formally verified on top of unit tests and fuzzing;
-and decoded results validated against google's libprotobuf parser.
+guarantees are [formally verified](AUDITING.md#frama-c-coverage) on top
+of unit tests and fuzzing; and decoded results [validated against google's libprotobuf parser](AUDITING.md#generated-schemas-vs-libprotobuf).
+Each of these claims has a re-verification recipe in [AUDITING.md](AUDITING.md).
 
 When the trade seems questionable, use nanopb or libprotobuf; PPB is
 deliberately a small lexer, not a full protobuf implementation.
@@ -53,15 +75,54 @@ Minimizing allocations is up to your handlers: pre-`reserve()`
 `std::vector`s, prefer `std::string_view` over `std::string`, etc.,
 and you'll minimize the impact of protobuf parsing on the heap.
 
+In-place decoding and corrupt inputs
+------------------------------------
+
+PPB never writes through the input buffer: the encoded bytes may live
+in read-only memory (a `PROT_READ` mapping, a flashed section, a
+`const` array), and decoded `bytes`, `string`, submessage, and packed
+values are subslices of that same buffer, valid for as long as the
+buffer is.  The decoder itself doesn't allocate any heap, uses
+a few hundred bytes of stack, and never descends into submessages on
+its own (the C++ wrapper recurses only within an explicit depth
+budget, zero by default), so there's no hidden stack utilisation.
+
+The prescan statistics also let code check the input's order of
+magnitude before preallocating storage at the correct capacity.
+
+Corrupt input is always handled safely and never silently
+reinterpreted; for example, truncated inputs, and corrupt length
+fields that exceed the input buffer's size all result in explicit
+errors codes.  Except for niche [gotchas](#gotchas-decoding-quirks-and-footguns),
+inputs acepted by both PPB and libprotobuf decode to identical values
+(checked with differential testing).  The main differences are:
+
+1. PPB rejects legacy groups
+2. PPB rejects oversized tags that libprotobuf tolerates or truncates
+3. PPB accepts overlong length varints that libprotobuf caps at five bytes
+4. PPB leaves UTF-8 validation of `string` fields to the caller.
+
+N.B., it's easy for corrupt protobuf bytes to still parse fine.  To
+detect corruption rather than merely survive it, you must add your own
+checksum.
+
 Guarantees
 ----------
 
-For the C core, the maximum stack footprint is < 400B on gcc 12/x86-64.
-Correctness of the lexing is tested: unit tests, golden tests against
-protoscope, and the libprotobuf differential and conformance suites.
-Safety (progress guarantees and lack of undefined behavior or
-out-of-bound accesses) is additionally fuzzed and verified with
-[Frama-C's WP](https://www.frama-c.com/fc-plugins/wp.html) plugin.
+PPB makes two kinds of claims, each backed by different evidence.
+
+When it comes to **safety**, PPB is safe (no memory corruption, no
+undefined behavior, no unbounded recursion or infinite loop) on any
+input.  The evidence is a combination of static analysis for the C
+core, and fuzzing in combination with sanitizers for everything.
+
+PPB also aims to accept all canonically encoded binary protobuf
+inputs, and to agree with google's libprotobuf for every input they
+both accept.  This is tested with google's conformance testing, and
+with a fuzzer that compares the result of C++ PPB parsers with
+libprotobuf's.
+
+### Safe on any input
 
 The wire bytes are untrusted: any input buffer is safe to lex.  The
 other inputs are trusted, with two tiers of preconditions.  Correct
@@ -71,16 +132,87 @@ but even invalid trusted inputs (an unsorted tag array,
 non-zero-initialized `fields[]`, etc.) cause *at worst* surprising
 results or, in builds with assertions enabled, assertion failures;
 never memory unsafety, undefined behavior, non-termination, or
-successful return without progress (for `lexn`).  WP discharges
-memory safety, termination, and progress regardless of the contents
-of input buffers and arrays (trusted or otherwise).
+successful return without progress (for `lexn`).
+[SECURITY.md](SECURITY.md) states the threat model and the full
+two-tier breakdown of trusted-input preconditions.
 
-[SECURITY.md](SECURITY.md) states the threat model, the full
-two-tier breakdown of trusted-input preconditions, and what's out of
-scope.  [AUDITING.md](AUDITING.md) pairs each claim (including the
-statically proven payload bounds and the stronger placement
-properties checked dynamically) with a recipe a skeptical reader can
-run independently.
+The evidence:
+
+- [Frama-C's WP](https://www.frama-c.com/fc-plugins/wp.html)
+  discharges memory safety, termination, and progress for the C
+  core, regardless of the contents of input buffers and arrays
+  (trusted or otherwise); Eva additionally checks for runtime errors
+  on a bounded harness.  See the
+  [proof coverage](AUDITING.md#frama-c-coverage) and the
+  [admit ledger](AUDITING.md#admit-ledger) for the assumptions the
+  provers accept without discharge.
+- The C and C++ APIs are [fuzzed](fuzz/) under ASan, UBSan, MSan,
+  and TySan, including a harness that feeds invalid trusted inputs
+  (unvalidated tag arrays) to the public API.
+- The C core [never allocates](AUDITING.md#no-allocation-no-dependency-except-assert),
+  has [no mutable global state](AUDITING.md#no-mutable-global-state),
+  and needs [< 400 bytes of stack](AUDITING.md#resource-bounds),
+  measured on gcc 12/x86-64.
+
+### Correct on accepted input
+
+The evidence, strongest first:
+
+- [Differential fuzzers](AUDITING.md#generated-schemas-vs-libprotobuf)
+  decode the same bytes with PPB (through schemas emitted by the
+  production generator) and with libprotobuf, then compare
+  accept/reject decisions and decoded messages field by field.
+- The [conformance suite](differential/) runs google's
+  `conformance_test_runner` against a PPB-backed testee.
+- Golden tests check the lexer against protoscope output, and the
+  unit tests are hardened by mutation testing (`mutants.py`;
+  surviving mutants are annotated in the source, with justifications).
+
+Where the two parsers disagree on whether an input is acceptable,
+the divergence should be well understood and enumerated below; the
+differential fuzzers trap on any difference outside this list.
+
+| Wire input | PPB | libprotobuf | Stricter side | Where checked |
+|---|---|---|---|---|
+| invalid UTF-8 in a `string` field | accepted; validation is left to the caller | rejected (proto3) | libprotobuf | `differential/fuzz/fuzz_sink_bytes.cc` |
+| legacy groups (wire types 3 / 4) | rejected anywhere in the message | well-formed groups parse as unknown fields | PPB | `testdata/invalid/group-start`, `group-end`; differential whitelist |
+| tag varint above `UINT32_MAX`, or longer than 5 bytes | rejected by prescan | truncated to 32 bits (5 bytes or fewer) or rejected (longer) | PPB | `tests/test_ppb.c::test_prescan_tag_too_long_or_large`; `testdata/invalid/tag-5b-far`; differential whitelist |
+| non-canonically encoded tag | treated as an unknown field | matched after decoding | neither (routing differs) | `tests/test_ppb.c` prescan / lexn matching tests |
+| length varint of 6 to 10 bytes | decoded | rejected | libprotobuf | `tests/test_ppb.c::test_decode_varint_10byte` |
+| length-prefixed payload over 2 GiB | decoded (input is capped at `PTRDIFF_MAX`) | rejected (2 GiB message cap) | libprotobuf | documented invariant; not exercised directly |
+
+This table mirrors the whitelist in the header comment of
+`differential/fuzz/fuzz_sink_bytes.cc`, which is the machine-checked
+source of truth: that fuzzer feeds arbitrary bytes to both parsers and
+traps on any accept/reject or value difference outside these rows.
+
+The full list is in [Gotchas, decoding quirks, and footguns](#gotchas-decoding-quirks-and-footguns).
+
+Of these rows, only the UTF-8 one shows up often.  Run both parsers on
+realistic, lightly mutated inputs and almost every "PPB accepts,
+libprotobuf rejects" case is a proto3 `string` that fails UTF-8
+validation.  The rest need hand-built wire bytes (overlong tags,
+groups, 6-to-10-byte length varints) that random mutation rarely
+produces.  To set the UTF-8 cases aside, retype every `string` as
+`bytes` in a shadow schema: libprotobuf stops enforcing UTF-8 on
+`bytes`, so the two parsers agree again and any remaining divergence
+is a non-UTF-8 one.
+
+### Evidence by layer
+
+The guarantees are not uniform across the tree: assurance is strongest
+in the C core and weaker for the convenience C++ layer.
+
+| Layer | Safety | Correctness |
+|---|---|---|
+| C core (`src/`, `ppb.h`) | WP + Eva proofs, fuzzing under sanitizers | mutation-hardened unit tests, golden tests, differential fuzzers |
+| C++ wrapper (`ppb.hpp`) | fuzzing under ASan / UBSan / MSan / TySan | unit + compile-time tests, differential fuzzers |
+| generated schemas (`protoc-gen-ppb`) | same as the wrapper | differential fuzzers, conformance suite |
+| your handlers and allocation code | yours | yours |
+
+The last row is  an important point to keep in mind: PPB doesn't do
+as much as other parsers, so there are more ways for user code to do
+the wrong thing.
 
 About PPB
 ---------
@@ -161,6 +293,30 @@ and on big-endian 64-bit s390x (via QEMU).
 
 MSVC is not supported (but patches are welcome).  I'd also consider
 patches for strict C11 compliance, it just wouldn't be useful for me.
+
+### Support envelope
+
+The C core and the C++ wrapper have different requirements.  CI builds
+with the default GCC and clang provided by the CI image rather than
+specific fixed versions, so the practical floor is "a GCC or clang new enough
+to fully implement the standard each layer needs" (the wrapper's
+`consteval`-heavy metaprogramming is the binding constraint).
+
+| Property | C core (`ppb.h`, `ppb.c`) | C++ wrapper (`ppb.hpp`) |
+|---|---|---|
+| Language standard | C11 with GCC extensions (`-std=c11`) | C++20 with GCC extensions (`-std=c++20`); needs complete `consteval` support |
+| Compilers | GCC or clang | GCC or clang |
+| MSVC | not supported | not supported |
+| `-fno-exceptions -fno-rtti` | n/a (no C++) | builds and passes its tests; the wrapper raises no exceptions and uses no RTTI |
+| `-mbmi2` on/off (x86-64) | both build and pass; BMI2 only selects a varint/tag fast path with identical results | inherits the C core's behavior |
+| `-DNDEBUG` | compiles the `assert`s out (the WP proof already covers the assertion-free build); removes the only libc dependency | inherits the C core's behavior |
+
+These rows are experimentally reproducible: rebuild the wrapper tests
+with `EXTRA_FLAGS='-fno-exceptions -fno-rtti'`, toggle `-mbmi2`, and
+add `-DNDEBUG` to confirm the assertion-free build still passes.  See
+[AUDITING.md](AUDITING.md#no-allocation-no-dependency-except-assert)
+for the `nm` check that `-DNDEBUG` eliminates the assertion handler
+dependency.
 
 Quick start
 -----------
@@ -254,7 +410,7 @@ in README_CPP.md.
    lexed.
 
 5. Field number 0 is rejected with `PPB_ERROR_CORRUPT_TAG` in every
-   encoding by `ppb_prescan`.  `ppb_lexn`, on the other hand, rejects 
+   encoding by `ppb_prescan`.  `ppb_lexn`, on the other hand, rejects
    only the canonical single-byte encoding: an overlong field-0 tag lexes
    as an unknown field.  The prescan pass also rejects (`PPB_ERROR_CORRUPT_TAG`)
    a tag whose value exceeds `UINT32_MAX` (field number *above* protobuf's
@@ -266,8 +422,8 @@ in README_CPP.md.
    a 5-byte tag whose value exceeds `UINT32_MAX`; PPB never truncates,
    and either decodes the tag correctly (lexn), or rejects it (prescan).
 
-6. Remember to use `ppb_zag32` when zigzag-decoding sint32 values: it's
-   important to truncate the encoded integer to 32 bits before decoding.
+6. Remember to use `ppb_zag32` when zigzag-decoding sint32 values: you
+   must truncate the encoded integer to 32 bits before decoding.
    This only matters for non-canonical inputs and matches what Google's
    C++ parser does on such inputs.
 
@@ -281,7 +437,7 @@ in README_CPP.md.
    times on the wire, `ppb_prescan` retains only the last payload, but
    a conforming proto3 parser must reject the message when *any*
    occurrence is invalid UTF-8, even one overwritten by a later occurrence.
-   If you want to match that, for a `ppb_lexn` walk (e.g., with `singular`
+   If that's what you want, force a `ppb_lexn` walk (e.g., with `singular`
    field semantics in the C++ wrapper).
 
 8. There's no explicit support for oneof, but you can make it happen
@@ -301,7 +457,7 @@ in README_CPP.md.
    message.  This means proto3 semantics only work for the fields in a
    message at the toplevel.  In the C++ wrapper, `ppb::message<>`
    already defaults to `ppb::field_semantics::singular` for this
-   reason; give these submessages' own fields regular non-proto3
+   reason; give these submessages' direct fields regular non-proto3
    last-write-wins semantics (repeated submessages count as
    toplevel).  See README_CPP.md's "Embedded sub-messages" section
    for the merge-vs-replace details.
@@ -840,6 +996,7 @@ The test suite runs unit tests and comparisons against
     make generator_test # protoc-gen-ppb checks (requires protoc and uv; see generator/)
     make differential-ci                     # libprotobuf differential suite, deterministic subset (see differential/)
     make -C differential conformance-docker  # protobuf conformance suites in a pinned container image
+    make audit          # deterministic non-Docker evidence in one command (see AUDITING.md; analyze-gcc is memory-hungry)
 
 Picoscope-based tests are high value for little effort.  To add a test
 case for a valid protobuf message, generate protobuf bytes (e.g.,
