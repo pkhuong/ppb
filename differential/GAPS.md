@@ -3,8 +3,8 @@
 This file documents every protobuf feature the PPB conformance testee does **not**
 cover, and why. PPB is an allocation-free, non-recursive *lexer* for the protobuf
 binary wire format, not a full implementation, so some conformance behavior is out
-of scope by design, and some is deferred. Each gap below corresponds to conformance
-tests that appear in one or more of the failure lists.
+of scope by design. Each gap below corresponds to conformance tests that appear in
+one or more of the failure lists.
 
 The testee decodes payloads with `protoc-gen-ppb`-generated `ppb::reader`s, writes
 decoded fields into libprotobuf messages via reflection (the "reflection sink"),
@@ -12,7 +12,7 @@ and re-serializes with `Message::SerializeToString`.
 
 ## Scope
 
-Three message types and three `make` targets:
+Three message types and four `make` targets:
 
 - **`TestAllTypesProto3` (full)**: `make conformance`. The testee uses a
   `full`-mode schema (both packed and unpacked tags for repeated scalars) and an
@@ -30,13 +30,19 @@ Three message types and three `make` targets:
   repeated field in its off-canonical encoding is rejected at `parse()`; it also has
   no unknown-field retention. Failures are listed in `failure_list_proto3_lean.txt`.
 
+- **`TestAllTypesProto3` (none)**: `make conformance-none`. The none schema accepts
+  both wire forms for repeated scalars, like full, but has no unknown-field
+  retention, like lean. It is therefore full minus the catch-all handler, and its
+  only expected failures are the two that need unknown-field retention. Failures are
+  listed in `failure_list_proto3_none.txt`.
+
 The testees only support protobuf output: JSON and text-format requests are always skipped.
 
 ## Gaps
 
 ### Unsupported WKT-typed fields (dropped)
 
-Six trivial well-known types now decode: `Any`, `Duration`, `Empty`, `FieldMask`,
+Six trivial well-known types are decoded: `Any`, `Duration`, `Empty`, `FieldMask`,
 `Timestamp`, and the `wrappers.proto` `*Value` types. Their schemas are included
 in `<ppb/wkt.ppb.hpp>`, so a field referencing one resolves like an ordinary
 cross-file message reference and round-trips through the testee. Through the
@@ -53,12 +59,13 @@ decodes them: `Struct`, `Value`, `ListValue`, `NullValue`, `Type`, `Api`,
 `SourceContext`, and the `descriptor.proto` messages. See `ppb-dropped:` comments at
 the top of the generated `test_messages_proto3.ppb.hpp` header.
 
-`Struct`/`Value`/`ListValue` are mutually recursive and would need
-`opaque_cycles`; structural decode for the rest is deferred. A dropped field is
-never structurally decoded, but its bytes still round-trip in the full and proto2
-testees through the unknown-field retention handler. Lean mode has no retention
-and would lose such a payload on re-serialization; no current binary conformance
-test exercises these fields, so none of the failure lists has a WKT entry.
+`Struct`/`Value`/`ListValue` are mutually recursive and would need `opaque_cycles`;
+structural decode for these and the rest is out of scope. Only the six trivial WKTs
+above are supported; the others stay dropped by design. A dropped field is never
+structurally decoded, but its bytes still round-trip in the full and proto2 testees
+through the unknown-field retention handler. Lean mode has no retention and would
+lose such a payload on re-serialization; no current binary conformance test exercises
+these fields, so none of the failure lists has a WKT entry.
 
 ### oneof exclusivity (schema-level only, roundtrips fine)
 
@@ -86,25 +93,27 @@ proto2 enums included (see "Proto2 semantics" in generator/README.md). The
 sink writes enum fields through libprotobuf reflection
 (`SetEnumValue`/`AddEnumValue`), which itself routes out-of-range values on
 closed enums to the unknown-field set, so the testee matches spec behavior
-that a plain `ppb::reader` user does not get. Note that the binary
-conformance corpus only exercises in-range enum values, and the randomized
-differential deliberately draws enum values from the declared set, so neither
-suite would surface the divergence either way.
+that a plain `ppb::reader` user does not get. The binary conformance
+corpus only exercises in-range enum values, and the randomized
+differential draws enum values from the declared set, so neither suite
+surfaces the divergence.
 
 ## Residual divergences
 
-All three suites pass with 0 unexpected failures:
+All four suites pass with 0 unexpected failures:
 
 | Suite                                 | Successes | Skipped | Expected failures |
 |---------------------------------------|-----------|---------|-------------------|
-| Proto3 full (`make conformance`)      | 707       | 2101    | 0                 |
-| Proto2 (`make conformance-proto2`)    | 703       | 2101    | 3                 |
-| Proto3 lean (`make conformance-lean`) | 645       | 2101    | 62                |
+| Proto3 full (`make conformance`)      | 707       | 2110    | 0                 |
+| Proto3 none (`make conformance-none`) | 705       | 2110    | 2                 |
+| Proto2 (`make conformance-proto2`)    | 703       | 2110    | 3                 |
+| Proto3 lean (`make conformance-lean`) | 647       | 2110    | 60                |
 
-Each failure in the three `failure_list_proto3.txt` /
-`failure_list_proto2.txt` / `failure_list_proto3_lean.txt` files is tagged
-with one of the reasons below. The proto3 full suite has no expected failures at all;
-proto2's remaining 3 are group-related, and lean's 62 are much more diverse.
+Each failure in the four `failure_list_proto3.txt` / `failure_list_proto3_none.txt`
+/ `failure_list_proto2.txt` / `failure_list_proto3_lean.txt` files is tagged with
+one of the reasons below. The proto3 full suite has no expected failures; none's 2
+are the pair that need unknown-field retention; proto2's remaining 3 are
+group-related; and lean's 60 are much more diverse.
 
 - **(groups) proto2.** PPB rejects wire types 3/4 (`StartGroup`/`EndGroup`) with
   `CORRUPT_TAG` by design. The proto2 schema is generated with
@@ -122,6 +131,13 @@ proto2's remaining 3 are group-related, and lean's 62 are much more diverse.
   unknown-field retention handler, which writes them to the `UnknownFieldSet`.
   This is observably correct except in conjunction with groups, as explained
   above.
+
+- **None unknown-retention.** The none suite accepts both wire encodings for
+  repeated scalars, exactly like full, so it inherits none of lean's packing or
+  merge failures. It differs from full only in dropping the catch-all
+  unknown-field handler, so its 2 expected failures are the two tests that need
+  unknown-field retention: `UnknownOrdering` and `UnknownVarint`. These are the
+  same 2 the lean suite lists under unknown-retention below.
 
 - **Lean strictness.** The lean suite has 60 expected failures vs. full's 0.
   All 60 break down as:
@@ -167,7 +183,7 @@ three divergence categories; everything else traps.
   canonically encoded value would corrupt that round-trip and still trap.
   Other disagreement: tag varints above 32 bits (libprotobuf truncates them to
   32 bits before validating, while the ppb core rejects the out-of-range tag
-  int prescan) and groups retained in libprotobuf's unknown-field set (PPB
+  in prescan) and groups retained in libprotobuf's unknown-field set (PPB
   rejects wire types 3/4 unconditionally).
 - **Reparse survival.** When PPB accepts bytes libprotobuf rejects, the
   result is tolerated only when re-serializing PPB's decoding still fails

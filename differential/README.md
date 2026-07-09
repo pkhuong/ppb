@@ -28,9 +28,9 @@ when it's absent:
 
 - `make -C differential ci`: the deterministic subset, also runs in CI.
 - `fuzz-sink` / `fuzz-structured`: time-bounded fuzzing; not run in CI.
-- `conformance`, `conformance-proto2`, `conformance-lean`: the protobuf
-  conformance suites.  The testees only support little-endian hosts.
-- `conformance-docker`: the same three suites, self-contained in a
+- `conformance`, `conformance-none`, `conformance-proto2`, `conformance-lean`:
+  the protobuf conformance suites.  The testees only support little-endian hosts.
+- `conformance-docker`: the same four suites, self-contained in a
   container image.
 
 Host runs and in-image runs share `build/`; remember to `make -C differential clean`.

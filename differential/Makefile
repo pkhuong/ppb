@@ -16,7 +16,7 @@ help:
 	@echo "  reflection-diff / reflection-random-diff  round-trip differentials"
 	@echo "  fuzz-sink-replay / structured-replay   deterministic corpus replay"
 	@echo "  fuzz-sink / fuzz-structured            local time-bounded fuzzing"
-	@echo "  conformance{,-proto2,-lean}            protobuf conformance suites"
+	@echo "  conformance{,-proto2,-lean,-none}      protobuf conformance suites"
 	@echo "  conformance-docker                     conformance in a pinned image"
 	@echo "  protobuf-prefix / image                one-time setup"
 
@@ -175,7 +175,7 @@ fuzz-structured: image
 conformance-docker: image
 	$(DOCKER) run --rm --platform=$(DOCKER_PLATFORM) -v "$(abspath $(PPB_ROOT)):/work/ppb:rw,Z" -w /work/ppb \
 	  $(IMAGE_TAG) \
-	  make -C differential conformance conformance-proto2 conformance-lean
+	  make -C differential conformance conformance-proto2 conformance-lean conformance-none
 
 # Runs the proto3/proto2/lean conformance suites against the reflection sink,
 # in a reproducible image.
@@ -201,12 +201,14 @@ CONFORMANCE_CXXFLAGS := -std=c++20 -O2 $(CONF_MCMODEL)
 CONF_GEN := $(BUILD)/conf_gen
 CONF_GEN_PROTO2 := $(BUILD)/conf_gen_proto2
 CONF_GEN_LEAN := $(BUILD)/conf_gen_lean
+CONF_GEN_NONE := $(BUILD)/conf_gen_none
 CONF_INC := -I. -I$(PPB_ROOT)/include
 
 # The --ppb_opt string for each conformance testing suite
 CONF_OPT := mode=full,opaque_cycles,oneof_as_optional,drop_foreign_type_fields,always_dispatch_strings
 CONF_OPT_PROTO2 := mode=full,opaque_cycles,oneof_as_optional,drop_group_extension_fields
 CONF_OPT_LEAN := mode=lean,opaque_cycles,oneof_as_optional,drop_foreign_type_fields,always_dispatch_strings
+CONF_OPT_NONE := mode=none,opaque_cycles,oneof_as_optional,drop_foreign_type_fields,always_dispatch_strings
 
 have_conformance = [ -x "$(PROTOC)" ] && \
 	[ -f $(PROTOBUF_SRC)/google/protobuf/test_messages_proto3.proto ]
@@ -215,7 +217,7 @@ have_conformance = [ -x "$(PROTOC)" ] && \
 protobuf-prefix:
 	sh setup_protobuf.sh $(PROTOBUF_DIR) $(PROTOBUF_PREFIX)
 
-.PHONY: conformance conformance-proto2 conformance-lean
+.PHONY: conformance conformance-proto2 conformance-lean conformance-none
 
 # proto3 full: both wire forms + always-on unknown-field
 # retention; singular strings routed through the UTF-8-validating sink setter
@@ -279,6 +281,28 @@ conformance-lean: $(PPB_ROOT)/build/libppb.a
 	  fi; \
 	else \
 	  echo "conformance-lean: protobuf prefix not built; run 'make -C differential protobuf-prefix' (or 'make conformance-docker'), skipping"; \
+	fi
+
+# proto3 none: both wire forms accepted (like full), but no unknown-field
+# retention (like lean); singular strings routed through the UTF-8-validating
+# sink setter via the production always_dispatch_strings hook.
+conformance-none: $(PPB_ROOT)/build/libppb.a
+	@if $(have_conformance); then \
+	  set -e; mkdir -p $(CONF_GEN_NONE); \
+	  $(PROTOC) $(PROD_PLUGIN) --proto_path=$(PROTOBUF_SRC) --ppb_opt=$(CONF_OPT_NONE) --ppb_out=$(CONF_GEN_NONE) google/protobuf/test_messages_proto3.proto; \
+	  $(PROTOC) $(REFLECT_PLUGIN) --proto_path=$(PROTOBUF_SRC) --ppb_opt=$(CONF_OPT_NONE) --ppb_out=$(CONF_GEN_NONE) google/protobuf/test_messages_proto3.proto; \
+	  $(PROTOC) --proto_path=$(PROTOBUF_SRC) --cpp_out=$(CONF_GEN_NONE) google/protobuf/test_messages_proto3.proto; \
+	  $(PROTOC) --proto_path=$(dir $(CONFORMANCE_PROTO_DIR)) --cpp_out=$(CONF_GEN_NONE) conformance/conformance.proto; \
+	  $(CXX) $(CONFORMANCE_CXXFLAGS) $(CONF_INC) -I$(CONF_GEN_NONE) $(CONF_PB_CFLAGS) -o $(BUILD)/conformance_testee_none \
+	    conformance_testee.cc $(CONF_GEN_NONE)/google/protobuf/test_messages_proto3.pb.cc $(CONF_GEN_NONE)/conformance/conformance.pb.cc \
+	    $(PPB_ROOT)/build/libppb.a $(CONF_PB_LIBS); \
+	  if [ -x "$(CONFORMANCE_RUNNER)" ]; then \
+	    LD_LIBRARY_PATH="$(PROTOBUF_LIBDIR)" $(CONFORMANCE_RUNNER) --enforce_recommended --failure_list failure_list_proto3_none.txt $(BUILD)/conformance_testee_none; \
+	  else \
+	    echo "conformance_testee_none built; set CONFORMANCE_RUNNER=<path> to run the suite"; \
+	  fi; \
+	else \
+	  echo "conformance-none: protobuf prefix not built; run 'make -C differential protobuf-prefix' (or 'make conformance-docker'), skipping"; \
 	fi
 
 # Deterministic subset run in CI (no Docker, no time-bounded fuzzing).
