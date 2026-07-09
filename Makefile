@@ -20,7 +20,7 @@ SHARED_OBJS := $(SHARED_C_OBJS)
 
 PROTOSCOPE ?= protoscope
 
-.PHONY: all clean format unit unit_cpp test regen_test fuzz fuzz-corpus compile_fail analyze-clang analyze-gcc tysan fuzz_cpp fuzz_cpp_msan fuzz_cpp_tysan sweep sweep_cpp sweep-seeds generator_test differential-ci FORCE
+.PHONY: all clean format unit unit_cpp test regen_test fuzz fuzz-corpus compile_fail analyze-clang analyze-gcc audit tysan fuzz_cpp fuzz_cpp_msan fuzz_cpp_tysan sweep sweep_cpp sweep-seeds generator_test differential-ci FORCE
 
 all: build/libppb.a build/libppb.so build/picoscope build/ubench
 
@@ -186,6 +186,21 @@ analyze-clang: clean
 
 analyze-gcc: clean
 	$(MAKE) CC=gcc CXX=g++ EXTRA_FLAGS="-fanalyzer" build/libppb.a build/test_ppb_cpp build/test_ppb_cpp_static
+
+# Aggregates the deterministic, non-Docker evidence in one command:
+# unit + golden, C++ wrapper, corpus sweep, generator, and the
+# libprotobuf differential subset, followed by the two static analyzers.
+# The analyzers each depend on `clean` and wipe build/, so they run as
+# separate sub-makes, last, and in fail-fast order.
+#
+# N.B. analyze-gcc runs `g++ -fanalyzer` over the large C++ test TU and
+# can use many gigabytes of memory; drop it (or cap it with `ulimit -v`)
+# on a memory-limited machine.  generator_test and differential-ci need
+# protoc, uv, and libprotobuf; the rest do not.
+audit:
+	$(MAKE) test unit_cpp sweep generator_test differential-ci
+	$(MAKE) analyze-clang
+	$(MAKE) analyze-gcc
 
 # Clang TypeSanitizer (TBAA / strict-aliasing) build for the C++ wrapper.
 # Looks for type issues in the C++ type safety fanciness.
